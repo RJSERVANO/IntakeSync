@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "AQUATAB",
+    "slug": "AQUATAB",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./app/assets/images/mainlogo.png",
+    "scheme": "app",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {
+        "foregroundImage": "./app/assets/images/mainlogo.png",
+        "backgroundColor": "#1E3A8A"
+      }
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./app/assets/images/mainlogo.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./app/assets/images/mainlogo.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#1E3A8A"
+        }
+      ],
+      "expo-web-browser",
+      "expo-audio"
+    ],
+    "splash": {
+      "image": "./app/assets/images/mainlogo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1E3A8A"
+    },
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
