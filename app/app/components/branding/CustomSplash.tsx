@@ -20,8 +20,8 @@ type Props = {
 const onboardingScreens = [
   {
     key: '1',
-    title: 'Hydration Tracking 💧',
-    description: 'Track your daily water intake effortlessly.',
+    title: 'Beverage Tracking\n💧',
+    description: 'Track your daily beverage intake effortlessly.',
     bgDecor: 'water',
   },
   {
@@ -33,7 +33,7 @@ const onboardingScreens = [
   {
     key: '3',
     title: 'Personalized Dashboard 📊',
-    description: 'Monitor your health progress and goals in one place.',
+    description: 'Monitor your beverage intake and medication adherence in one place.',
     bgDecor: 'dashboard',
   },
 ];
@@ -143,10 +143,10 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
         <ImageBackground source={bg} resizeMode="cover" style={styles.bg}>
           <View style={styles.overlay} />
-          <View style={[styles.center, { justifyContent: 'flex-start', paddingTop: height * -0.12 }]}>
+          <View style={[styles.center, { justifyContent: 'flex-start', paddingTop: height * 0.08 }]}>
             <Image
               source={logo}
-              style={[styles.logo, { width: width * 0.7, height: width * 0.7, marginBottom: -40 }]}
+              style={[styles.logo, { width: width * 0.5, height: width * 0.5, marginBottom: -18, marginTop: height * 0.015 }]}
               resizeMode="contain"
             />
             {/* Gradient app name */}
@@ -162,7 +162,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
                 },
               ]}
             >
-              AQUATAB
+              IntakeSync
             </Animated.Text>
 
             {/* Single tagline */}
@@ -171,7 +171,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
             </Animated.Text>
 
             {/* Animated loading dots */}
-            <Animated.View style={[styles.loadingDotsRow, { opacity: fadeAnim }]}>
+            <Animated.View style={[styles.loadingDotsRow, { opacity: fadeAnim, marginTop: height * 0.06 }]}>
               {[0, 1, 2, 3, 4].map((index) => (
                 <View
                   key={index}
@@ -191,7 +191,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
             </Animated.View>
           </View>
           <View style={styles.footer}>
-            <Text style={styles.footerText}>© {new Date().getFullYear()} AQUATAB</Text>
+            <Text style={styles.footerText}>© {new Date().getFullYear()} IntakeSync</Text>
           </View>
         </ImageBackground>
       </Animated.View>
@@ -259,14 +259,10 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
                   style={{
                     opacity: personOpacity,
                     transform: [{ translateY: personTranslate }],
-                    flexDirection: 'row',
-                    gap: 16,
-                    marginTop: 16,
+                    marginTop: 22,
                   }}
                 >
-                  {/* Placeholder visuals: glass + person silhouette */}
-                  <View style={styles.glassOfWater} />
-                  <View style={styles.personSilhouette} />
+                  <View style={styles.dashboardSpacer} />
                 </Animated.View>
 
                 <Animated.View
@@ -275,11 +271,19 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
                       { scale: getStartedScale.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) },
                     ],
                     opacity: getStartedScale,
-                    marginTop: 18,
+                    marginTop: 20,
                   }}
                 >
                   <TouchableOpacity style={styles.getStartedBtnHigh} onPress={onGetStarted}>
-                    <Text style={styles.getStartedText}>Get Started →</Text>
+                    <View style={styles.getStartedContent}>
+                      <Text style={styles.getStartedText}>Get Started</Text>
+                      <View style={styles.getStartedArrowBadge}>
+                        <View style={styles.getStartedArrowIcon}>
+                          <View style={styles.getStartedArrowShaft} />
+                          <View style={styles.getStartedArrowHead} />
+                        </View>
+                      </View>
+                    </View>
                   </TouchableOpacity>
                 </Animated.View>
                 </View>
@@ -314,29 +318,29 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
   },
   appName: {
-    marginTop: 2,
+    marginTop: -2,
     color: '#FFFFFF',
-    fontSize: 35,
+    fontSize: 33,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
   },
   tagline: {
-    marginTop: 5,
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 16,
-    fontWeight: '500',
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 15,
+    fontWeight: '600',
   },
   loadingDotsRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 20,
+    marginTop: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   loadingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
     backgroundColor: '#FFFFFF',
   },
   progressTrack: {
@@ -366,6 +370,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
   },
   slideContentWrapper: {
+    width: '100%',
+    minHeight: 330,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -375,6 +381,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
     textAlign: 'center',
+    minHeight: 72,
   },
   onboardingDescription: {
     fontSize: 16,
@@ -382,6 +389,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 12,
     lineHeight: 22,
+    minHeight: 48,
+    maxWidth: 290,
   },
   getStartedBtn: {
     backgroundColor: '#fff',
@@ -396,7 +405,7 @@ const styles = StyleSheet.create({
   getStartedText: {
     color: '#1e3a8b',
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   // Decorative shapes for background accents
   decorShapeOne: {
@@ -477,7 +486,9 @@ const styles = StyleSheet.create({
   nextCueRow: {
     flexDirection: 'row',
     gap: 8,
-    marginTop: 32,
+    marginTop: 28,
+    minHeight: 12,
+    alignItems: 'center',
   },
   nextDot: {
     width: 8,
@@ -486,8 +497,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.8)',
   },
   lastScreenBlock: {
-    marginTop: 24,
+    marginTop: 28,
     alignItems: 'center',
+    minHeight: 140,
   },
   lastScreenText: {
     color: '#FFFFFF',
@@ -495,28 +507,61 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  glassOfWater: {
-    width: 80,
-    height: 100,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.35)',
-  },
-  personSilhouette: {
-    width: 80,
-    height: 100,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+  dashboardSpacer: {
+    width: 1,
+    height: 36,
   },
   getStartedBtnHigh: {
+    minWidth: 176,
     backgroundColor: '#fff',
-    paddingHorizontal: 24,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: 25,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  getStartedContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  getStartedArrowBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#E8F0FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  getStartedArrowIcon: {
+    width: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  getStartedArrowShaft: {
+    width: 10,
+    height: 2.5,
+    borderRadius: 2,
+    backgroundColor: '#1e3a8b',
+    position: 'absolute',
+    left: 1,
+  },
+  getStartedArrowHead: {
+    width: 7,
+    height: 7,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderColor: '#1e3a8b',
+    transform: [{ rotate: '45deg' }],
+    position: 'absolute',
+    right: 1,
   },
 });

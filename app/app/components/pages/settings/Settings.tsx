@@ -219,7 +219,7 @@ export default function Settings() {
         {/* App Version */}
         <View style={styles.versionCard}>
           <Image 
-            source={require('../../../assets/images/mainlogo copy.png')} 
+            source={require('../../../../assets/images/mainlogo.png')} 
             style={styles.appLogo}
             resizeMode="contain"
           />

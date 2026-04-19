@@ -1,11 +1,20 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, Dimensions, Modal } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useRouter } from 'expo-router';
-import api from './api';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
-
-const { width, height } = Dimensions.get('window');
+import * as api from './api';
+import { AuthField, AuthSelectField } from './components/auth/AuthField';
+import { AuthLayout } from './components/auth/AuthLayout';
+import { authColors, authStyles, authShadows } from './components/auth/authStyles';
 
 export default function Register() {
   const router = useRouter();
@@ -27,11 +36,9 @@ export default function Register() {
 
   const displayGender = gender
     ? gender.replace(/\b\w/g, (letter) => letter.toUpperCase())
-    : 'Gender (Optional)';
-
-  const displayEmail = email
-    ? email.charAt(0).toUpperCase() + email.slice(1)
     : '';
+
+  const displayEmail = email ? email.charAt(0).toUpperCase() + email.slice(1) : '';
 
   async function onRegister() {
     if (!name || !email || !password || !confirmPassword) {
@@ -52,9 +59,9 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      const res = await api.post('/register', { 
-        name, 
-        email, 
+      const res = await api.post('/register', {
+        name,
+        email,
         password,
         password_confirmation: confirmPassword,
         phone: phone || null,
@@ -62,10 +69,12 @@ export default function Register() {
         gender: gender || null,
         address: address || null,
       });
-      
-      // Check if onboarding is needed
+
       if (!res.onboarding_completed) {
-        router.replace({ pathname: '/onboarding', params: { token: res.token, name: res.user?.name || name } } as any);
+        router.replace({
+          pathname: '/onboarding',
+          params: { token: res.token, name: res.user?.name || name },
+        } as any);
       } else {
         router.replace({ pathname: '/home', params: { token: res.token } } as any);
       }
@@ -87,204 +96,229 @@ export default function Register() {
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Curved Header Background */}
-      <View style={styles.headerContainer}>
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="white" />
-          </TouchableOpacity>
-        </View>
-        
-        {/* Wave/Curve Bottom */}
-        <Svg
-          height={80}
-          width={width}
-          style={styles.wave}
-          viewBox={`0 0 ${width} 80`}
-        >
-          <Path
-            d={`M0,0 L${width},0 L${width},40 Q${width*0.8},60 ${width*0.6},45 Q${width*0.4},30 ${width*0.2},50 Q${width*0.1},65 0,45 Z`}
-            fill="#1E3A8A"
-          />
-        </Svg>
-      </View>
-
-      {/* Main Content Card */}
-      <View style={styles.contentCard}>
-        {/* Title Section */}
-        <View style={styles.titleSection}>
-          <Text style={styles.title}>Sign up</Text>
-          <Text style={styles.subtitle}>Create an account here</Text>
-        </View>
-
-        {/* Form Inputs */}
-        <View style={styles.inputContainer}>
-          <View style={styles.inputWrapper}>
-            <Ionicons name="person-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Name"
+    <>
+      <AuthLayout
+        title="Create Account"
+        subtitle="Create your IntakeSync account."
+        helper="Start with the essentials."
+      >
+        <View style={authStyles.formSection}>
+          <Text style={authStyles.sectionEyebrow}>Required Details</Text>
+          <View style={authStyles.subCard}>
+            <AuthField
+              label="Full Name"
+              iconName="person-outline"
+              placeholder="Enter your full name"
               value={name}
               onChangeText={setName}
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
+              textContentType="name"
             />
-          </View>
 
-          <View style={styles.inputWrapper}>
-            <Ionicons name="mail-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Email Address"
+            <AuthField
+              label="Email"
+              iconName="mail-outline"
+              placeholder="Email address"
               value={displayEmail}
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
+              autoCorrect={false}
+              textContentType="emailAddress"
             />
-          </View>
 
-          <View style={styles.inputWrapper}>
-            <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Password"
+            <AuthField
+              label="Password"
+              iconName="lock-closed-outline"
+              placeholder="Create a password"
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
+              textContentType="newPassword"
+              rightAccessory={
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  style={authStyles.trailingIconButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                    size={20}
+                    color="#8A94A6"
+                  />
+                </TouchableOpacity>
+              }
             />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-              <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#8E8E93" />
-            </TouchableOpacity>
-          </View>
 
-          <View style={styles.inputWrapper}>
-            <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Confirm Password"
+            <AuthField
+              label="Confirm Password"
+              iconName="lock-closed-outline"
+              placeholder="Confirm your password"
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry={!showConfirmPassword}
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
-            />
-            <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={styles.eyeIcon}>
-              <Ionicons name={showConfirmPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#8E8E93" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.inputWrapper}>
-            <Ionicons name="call-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Phone Number (Optional)"
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
-            />
-          </View>
-
-          <TouchableOpacity 
-            style={[styles.inputWrapper, styles.selectInput]}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <Ionicons name="calendar-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <Text style={[styles.input, !dateOfBirth && { color: '#8E8E93' }]}>
-              {dateOfBirth || 'Date of Birth (Optional)'}
-            </Text>
-            <Ionicons name="chevron-down-outline" size={20} color="#8E8E93" />
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.inputWrapper, styles.selectInput]}
-            onPress={() => setShowGenderPicker(true)}
-          >
-            <Ionicons name="person-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <Text style={[styles.input, !gender && { color: '#8E8E93' }]}>
-              {displayGender}
-            </Text>
-            <Ionicons name="chevron-down-outline" size={20} color="#8E8E93" />
-          </TouchableOpacity>
-
-          <View style={styles.inputWrapper}>
-            <Ionicons name="location-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Address (Optional)"
-              value={address}
-              onChangeText={setAddress}
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
+              textContentType="newPassword"
+              rightAccessory={
+                <TouchableOpacity
+                  onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                  style={authStyles.trailingIconButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
+                  }
+                >
+                  <Ionicons
+                    name={showConfirmPassword ? 'eye-outline' : 'eye-off-outline'}
+                    size={20}
+                    color="#8A94A6"
+                  />
+                </TouchableOpacity>
+              }
             />
           </View>
         </View>
 
-        {/* Gender Picker Modal */}
-        <Modal
-          visible={showGenderPicker}
-          transparent={true}
-          animationType="slide"
-          onRequestClose={() => setShowGenderPicker(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Select Gender</Text>
-              <TouchableOpacity 
-                style={[styles.modalOption, styles.modalOptionCard]}
-                onPress={() => {
-                  setGender('male');
-                  setShowGenderPicker(false);
-                }}
-              >
-                <Text style={styles.modalOptionText}>Male</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalOption, styles.modalOptionCard]}
-                onPress={() => {
-                  setGender('female');
-                  setShowGenderPicker(false);
-                }}
-              >
-                <Text style={styles.modalOptionText}>Female</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalOption, styles.modalOptionCard]}
-                onPress={() => {
-                  setGender('other');
-                  setShowGenderPicker(false);
-                }}
-              >
-                <Text style={styles.modalOptionText}>Other</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.modalCancel}
-                onPress={() => setShowGenderPicker(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
+        <View style={authStyles.formSection}>
+          <Text style={authStyles.sectionEyebrow}>More About You</Text>
+          <View style={authStyles.optionalCard}>
+            <AuthField
+              label="Phone Number"
+              iconName="call-outline"
+              placeholder="Phone number"
+              value={phone}
+              onChangeText={setPhone}
+              keyboardType="phone-pad"
+              optional
+            />
 
-        {/* Date Picker Modal */}
-        <Modal
-          visible={showDatePicker}
-          transparent={true}
-          animationType="slide"
-          onRequestClose={() => setShowDatePicker(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Select Date of Birth</Text>
-              
-              {/* Simple Year/Month/Day Selectors */}
-              <View style={styles.datePickerCard}>
-                <View style={styles.datePickerContainer}>
+            <AuthSelectField
+              label="Date of Birth"
+              iconName="calendar-outline"
+              value={dateOfBirth}
+              placeholder="Choose your birth date"
+              optional
+              onPress={() => setShowDatePicker(true)}
+            />
+
+            <AuthSelectField
+              label="Gender"
+              iconName="person-outline"
+              value={displayGender}
+              placeholder="Select your gender"
+              optional
+              onPress={() => setShowGenderPicker(true)}
+            />
+
+            <AuthField
+              label="Address"
+              iconName="location-outline"
+              placeholder="Address"
+              value={address}
+              onChangeText={setAddress}
+              optional
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity style={styles.termsCard} onPress={() => setAgreeTerms(!agreeTerms)}>
+          <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
+            {agreeTerms ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}
+          </View>
+          <Text style={styles.termsText}>
+            By signing up you agree with our <Text style={styles.termsHighlight}>Terms of Use</Text>
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={authStyles.primaryButton} onPress={onRegister} disabled={loading}>
+          {loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={authStyles.primaryButtonText}>Create Account</Text>
+          )}
+        </TouchableOpacity>
+
+        <View style={authStyles.dividerRow}>
+          <View style={authStyles.dividerLine} />
+          <View style={authStyles.dividerPill}>
+            <Text style={authStyles.dividerText}>OR CONTINUE WITH</Text>
+          </View>
+          <View style={authStyles.dividerLine} />
+        </View>
+
+        <TouchableOpacity style={authStyles.socialButton} onPress={onGoogleLogin}>
+          <View style={authStyles.socialIconWrap}>
+            <Ionicons name="logo-google" size={18} color="#DB4437" />
+          </View>
+          <Text style={authStyles.socialButtonText}>Continue with Google</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={authStyles.socialButton} onPress={onFacebookLogin}>
+          <View style={authStyles.socialIconWrap}>
+            <Ionicons name="logo-facebook" size={18} color="#1877F2" />
+          </View>
+          <Text style={authStyles.socialButtonText}>Continue with Facebook</Text>
+        </TouchableOpacity>
+
+        <View style={styles.footerWrap}>
+          <TouchableOpacity
+            onPress={() => router.push({ pathname: '/login' } as any)}
+            style={styles.footerButton}
+          >
+            <Text style={authStyles.footerText}>
+              Already have an account? <Text style={authStyles.footerTextStrong}>Sign in</Text>
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </AuthLayout>
+
+      <Modal
+        visible={showGenderPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowGenderPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Gender</Text>
+            {['male', 'female', 'other'].map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={styles.modalOption}
+                onPress={() => {
+                  setGender(option);
+                  setShowGenderPicker(false);
+                }}
+              >
+                <Text style={styles.modalOptionText}>
+                  {option.charAt(0).toUpperCase() + option.slice(1)}
+                </Text>
+                {gender === option ? (
+                  <Ionicons name="checkmark-circle" size={20} color={authColors.primary} />
+                ) : null}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowGenderPicker(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showDatePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDatePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Date of Birth</Text>
+            <View style={styles.datePickerCard}>
+              <View style={styles.datePickerContainer}>
                 <View style={styles.dateColumn}>
                   <Text style={styles.dateLabel}>Year</Text>
                   <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map(year => (
+                    {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map((year) => (
                       <TouchableOpacity
                         key={year}
                         style={styles.dateOption}
@@ -294,19 +328,23 @@ export default function Register() {
                           setSelectedDate(newDate);
                         }}
                       >
-                        <Text style={[
-                          styles.dateOptionText,
-                          selectedDate.getFullYear() === year && styles.dateOptionTextSelected
-                        ]}>{year}</Text>
+                        <Text
+                          style={[
+                            styles.dateOptionText,
+                            selectedDate.getFullYear() === year && styles.dateOptionTextSelected,
+                          ]}
+                        >
+                          {year}
+                        </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
-                
+
                 <View style={styles.dateColumn}>
                   <Text style={styles.dateLabel}>Month</Text>
                   <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
                       <TouchableOpacity
                         key={month}
                         style={styles.dateOption}
@@ -316,19 +354,24 @@ export default function Register() {
                           setSelectedDate(newDate);
                         }}
                       >
-                        <Text style={[
-                          styles.dateOptionText,
-                          selectedDate.getMonth() + 1 === month && styles.dateOptionTextSelected
-                        ]}>{month.toString().padStart(2, '0')}</Text>
+                        <Text
+                          style={[
+                            styles.dateOptionText,
+                            selectedDate.getMonth() + 1 === month &&
+                              styles.dateOptionTextSelected,
+                          ]}
+                        >
+                          {month.toString().padStart(2, '0')}
+                        </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
-                
+
                 <View style={styles.dateColumn}>
                   <Text style={styles.dateLabel}>Day</Text>
                   <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
                       <TouchableOpacity
                         key={day}
                         style={styles.dateOption}
@@ -338,422 +381,202 @@ export default function Register() {
                           setSelectedDate(newDate);
                         }}
                       >
-                        <Text style={[
-                          styles.dateOptionText,
-                          selectedDate.getDate() === day && styles.dateOptionTextSelected
-                        ]}>{day.toString().padStart(2, '0')}</Text>
+                        <Text
+                          style={[
+                            styles.dateOptionText,
+                            selectedDate.getDate() === day && styles.dateOptionTextSelected,
+                          ]}
+                        >
+                          {day.toString().padStart(2, '0')}
+                        </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
               </View>
-              </View>
-
-              <TouchableOpacity 
-                style={styles.modalConfirm}
-                onPress={() => {
-                  const year = selectedDate.getFullYear();
-                  const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
-                  const day = String(selectedDate.getDate()).padStart(2, '0');
-                  setDateOfBirth(`${year}-${month}-${day}`);
-                  setShowDatePicker(false);
-                }}
-              >
-                <Text style={styles.modalConfirmText}>Confirm</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={styles.modalCancel}
-                onPress={() => setShowDatePicker(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
             </View>
-          </View>
-        </Modal>
 
-        {/* Terms Checkbox */}
-        <TouchableOpacity style={styles.termsContainer} onPress={() => setAgreeTerms(!agreeTerms)}>
-          <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
-            {agreeTerms && <Ionicons name="checkmark" size={14} color="white" />}
-          </View>
-          <Text style={styles.termsText}>By signing up you agree with our Terms of Use</Text>
-        </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalConfirm}
+              onPress={() => {
+                const year = selectedDate.getFullYear();
+                const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+                const day = String(selectedDate.getDate()).padStart(2, '0');
+                setDateOfBirth(`${year}-${month}-${day}`);
+                setShowDatePicker(false);
+              }}
+            >
+              <Text style={styles.modalConfirmText}>Confirm</Text>
+            </TouchableOpacity>
 
-        {/* Sign Up Button */}
-        <TouchableOpacity style={styles.signUpButton} onPress={onRegister} disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.signUpButtonText}>Sign Up</Text>
-          )}
-        </TouchableOpacity>
-
-        {/* Divider */}
-        <View style={styles.dividerContainer}>
-          <View style={styles.dividerLine} />
-          <View style={styles.dividerCircle}>
-            <Text style={styles.dividerText}>OR</Text>
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowDatePicker(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
           </View>
-          <View style={styles.dividerLine} />
         </View>
-
-        {/* Social Login Buttons */}
-        <TouchableOpacity style={styles.socialButton} onPress={onGoogleLogin}>
-          <Ionicons name="logo-google" size={20} color="#DB4437" style={styles.socialIcon} />
-          <Text style={styles.socialButtonText}>Login with Gmail</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.socialButton} onPress={onFacebookLogin}>
-          <Ionicons name="logo-facebook" size={20} color="#1877F2" style={styles.socialIcon} />
-          <Text style={styles.socialButtonText}>Login with Facebook</Text>
-        </TouchableOpacity>
-
-        {/* Bottom Link */}
-        <TouchableOpacity
-          onPress={() => router.push({ pathname: '/login' } as any)}
-          style={styles.bottomLinkContainer}
-        >
-          <Text style={styles.bottomLinkText}>
-            Already have an account? <Text style={styles.bottomLinkHighlight}>Sign in</Text>
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+      </Modal>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  headerContainer: {
-    position: 'relative',
-  },
-  header: {
-    height: height * 0.25,
-    backgroundColor: '#1E3A8A',
-    position: 'relative',
-    paddingTop: 50,
-    paddingHorizontal: 20,
-  },
-  wave: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  contentCard: {
-    flex: 1,
-    backgroundColor: 'white',
-    marginTop: -60,
-    marginHorizontal: 20,
-    borderRadius: 20,
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  titleSection: {
-    alignItems: 'center',
-    marginBottom: 32,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6B7280',
-    fontWeight: '400',
-  },
-  inputContainer: {
-    marginBottom: 24,
-  },
-  inputWrapper: {
+  termsCard: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    marginBottom: 16,
-    backgroundColor: '#F9FAFB',
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1F2937',
-    fontWeight: '400',
-  },
-  selectInput: {
-    backgroundColor: '#FFFFFF',
-    borderColor: '#D1D5DB',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  eyeIcon: {
-    padding: 4,
-  },
-  medicationSection: {
-    backgroundColor: '#F0F9FF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 24,
-    borderLeftWidth: 4,
-    borderLeftColor: '#1E3A8A',
-  },
-  medicationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  medicationIcon: {
-    marginRight: 12,
-  },
-  medicationText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1E3A8A',
-  },
-  medicationDescription: {
-    fontSize: 14,
-    color: '#6B7280',
-    lineHeight: 20,
-  },
-  termsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingHorizontal: 4,
+    borderColor: '#DFE7F3',
+    borderRadius: 18,
+    backgroundColor: '#F9FBFF',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginBottom: 18,
   },
   checkbox: {
-    width: 20,
-    height: 20,
-    borderWidth: 2,
-    borderColor: '#D1D5DB',
-    borderRadius: 4,
-    marginRight: 12,
-    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#C9D4E6',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    backgroundColor: '#FFFFFF',
   },
   checkboxChecked: {
-    backgroundColor: '#1E3A8A',
-    borderColor: '#1E3A8A',
+    backgroundColor: authColors.primary,
+    borderColor: authColors.primary,
   },
   termsText: {
     flex: 1,
     fontSize: 14,
-    color: '#6B7280',
     lineHeight: 20,
+    color: authColors.textMuted,
   },
-  signUpButton: {
-    backgroundColor: '#1E3A8A',
-    paddingVertical: 16,
-    borderRadius: 12,
+  termsHighlight: {
+    color: authColors.link,
+    fontWeight: '700',
+  },
+  footerWrap: {
+    marginTop: 10,
+  },
+  footerButton: {
     alignItems: 'center',
-    marginBottom: 24,
-    shadowColor: '#1E3A8A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  signUpButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#E5E7EB',
-  },
-  dividerCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'white',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginHorizontal: 16,
-  },
-  dividerText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  socialButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    paddingVertical: 14,
-    marginBottom: 12,
-    backgroundColor: 'white',
-  },
-  socialIcon: {
-    marginRight: 12,
-  },
-  socialButtonText: {
-    fontSize: 16,
-    color: '#374151',
-    fontWeight: '500',
-  },
-  bottomLinkContainer: {
-    alignItems: 'center',
-    marginTop: 20,
-    paddingBottom: 20,
-  },
-  bottomLinkText: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  bottomLinkHighlight: {
-    color: '#1E3A8A',
-    fontWeight: '600',
+    paddingVertical: 10,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.34)',
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    paddingTop: 24,
-    paddingBottom: 28,
-    paddingHorizontal: 22,
-    width: '92%',
+    width: '100%',
     maxWidth: 460,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 12,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E3EAF5',
+    paddingHorizontal: 20,
+    paddingTop: 22,
+    paddingBottom: 20,
+    ...authShadows.card,
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 20,
+    fontSize: 19,
+    fontWeight: '800',
+    color: authColors.text,
     textAlign: 'center',
+    marginBottom: 18,
   },
   modalOption: {
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  modalOptionCard: {
-    backgroundColor: '#F9FAFB',
+    minHeight: 54,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
+    borderColor: '#E3EAF5',
+    backgroundColor: '#FAFCFF',
     paddingHorizontal: 16,
     marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   modalOptionText: {
     fontSize: 16,
-    color: '#1F2937',
-    fontWeight: '500',
+    fontWeight: '600',
+    color: authColors.text,
   },
   modalCancel: {
-    marginTop: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
+    minHeight: 52,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
-    backgroundColor: '#F9FAFB',
+    borderColor: '#E3EAF5',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
   },
   modalCancelText: {
-    fontSize: 16,
-    color: '#1F2937',
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
+    color: authColors.text,
+  },
+  datePickerCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E3EAF5',
+    backgroundColor: '#F9FBFF',
+    padding: 12,
+    marginBottom: 14,
   },
   datePickerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    height: 200,
-    marginBottom: 4,
-  },
-  datePickerCard: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    height: 208,
   },
   dateColumn: {
     flex: 1,
     marginHorizontal: 4,
   },
   dateLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontSize: 13,
+    fontWeight: '700',
+    color: authColors.textSoft,
     textAlign: 'center',
     marginBottom: 8,
+    textTransform: 'uppercase',
   },
   dateScroll: {
-    maxHeight: 180,
+    maxHeight: 184,
   },
   dateOption: {
-    paddingVertical: 10,
+    minHeight: 38,
+    borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   dateOptionText: {
     fontSize: 16,
-    color: '#6B7280',
+    color: authColors.textMuted,
   },
   dateOptionTextSelected: {
-    color: '#1E3A8A',
-    fontWeight: '600',
-    fontSize: 18,
+    color: authColors.primary,
+    fontWeight: '800',
+    fontSize: 17,
   },
   modalConfirm: {
-    backgroundColor: '#1E3A8A',
-    paddingVertical: 14,
-    borderRadius: 12,
+    minHeight: 54,
+    borderRadius: 16,
+    backgroundColor: authColors.primary,
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'center',
+    marginBottom: 10,
+    ...authShadows.button,
   },
   modalConfirmText: {
     fontSize: 16,
-    color: 'white',
-    fontWeight: '600',
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 });

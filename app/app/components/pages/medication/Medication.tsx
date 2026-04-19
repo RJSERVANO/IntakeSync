@@ -1686,7 +1686,7 @@ const styles = StyleSheet.create({
   headerSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerTitle: { fontSize: 28, fontWeight: '700', color: '#1F2937' },
-  headerSubtitle: { fontSize: 16, color: '#6B7280', marginTop: 4 },
+  headerSubtitle: { fontSize: 14, color: '#6B7280', marginTop: 4, lineHeight: 20 },
   exportButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1696,9 +1696,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
     elevation: 2,
   },
   exportButtonText: {
@@ -1715,7 +1715,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between'
   },
   statCard: { 
-    backgroundColor: 'white', 
+    backgroundColor: '#FFFFFF', 
     borderRadius: 16, 
     padding: 16, 
     alignItems: 'center',
@@ -1723,7 +1723,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3
   },
@@ -1736,7 +1736,7 @@ const styles = StyleSheet.create({
   
   // Upcoming Medications
   upcomingCard: { 
-    backgroundColor: 'white', 
+    backgroundColor: '#FFFFFF', 
     borderRadius: 16, 
     padding: 16, 
     marginBottom: 12,
@@ -1744,7 +1744,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3
   },
@@ -1765,7 +1765,7 @@ const styles = StyleSheet.create({
   
   // Medication Cards
   medicationCard: { 
-    backgroundColor: 'white', 
+    backgroundColor: '#FFFFFF', 
     borderRadius: 16, 
     padding: 16, 
     marginBottom: 12,
@@ -1773,7 +1773,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3
   },
@@ -1836,13 +1836,13 @@ const styles = StyleSheet.create({
   
   // Empty History State
   emptyHistoryState: {
-    backgroundColor: 'white',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 40,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3
   },
@@ -1877,18 +1877,18 @@ const styles = StyleSheet.create({
     marginTop: 2 
   },
   historyList: {
-    backgroundColor: 'white',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 16,
+    padding: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 3
   },
   clearText: { color: '#EF4444', fontWeight: '600' },
   historyItem: { 
-    backgroundColor: '#F9FAFB', 
+    backgroundColor: '#FFFFFF', 
     borderRadius: 12, 
     padding: 16, 
     marginBottom: 12,
@@ -1896,7 +1896,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderLeftWidth: 4,
-    borderLeftColor: '#1E3A8A'
   },
   historyLeft: { flex: 1 },
   historyMed: { fontSize: 16, fontWeight: '600', color: '#1F2937' },

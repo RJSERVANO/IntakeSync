@@ -510,7 +510,6 @@ export default function Home() {
               </View>
             )}
           </View>
-          
           <View>
             <View style={styles.searchContainer}>
               <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
@@ -1192,7 +1191,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -1429,12 +1428,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 12,
+    marginBottom: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
-    elevation: 4,
+    elevation: 3,
   },
   summaryCardHeader: {
     flexDirection: 'row',

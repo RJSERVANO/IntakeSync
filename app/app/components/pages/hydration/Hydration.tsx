@@ -702,7 +702,6 @@ export default function Hydration() {
             <Text style={styles.progressSubText}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
             <Text style={styles.motivationalText}>{getMotivationalMessage()}</Text>
           </View>
-
           <View style={styles.progressCardRight}>
             <View style={styles.missedCardAlt}>
               <View style={styles.missedIconPlaceholder} />
@@ -1215,24 +1214,25 @@ const styles = StyleSheet.create({
 
   /* alternative missed card style to match pale yellow design */
   missedCardAlt: { backgroundColor: '#FEF7E7', padding: 20, borderRadius: 14, width: 150, alignItems: 'center', justifyContent: 'center', shadowColor:'#000', shadowOpacity:0.02, shadowRadius:6, elevation:2 },
+  missedIconPlaceholder: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#FDE68A', marginBottom: 10 },
   missedLabelAlt: { fontSize: 12, color: '#92400E', marginBottom: 8, fontWeight: '700' },
   missedNumberAlt: { fontSize: 36, fontWeight: '900', color: '#92400E', marginBottom: 6 },
   logMissedButton: { marginTop: 8, backgroundColor: '#F59E0B', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
   logMissedTextAlt: { color: '#FFFFFF', fontWeight: '900', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  cardAlt: { backgroundColor:'white', borderRadius:12, padding:14, marginBottom:16 },
+  cardAlt: { backgroundColor:'#FFFFFF', borderRadius:16, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
   quickAddTitle: { fontSize:16, fontWeight:'700', color:'#0F172A', marginBottom:12 },
   quickRowAlt: { flexDirection:'row', justifyContent:'space-between', marginBottom:8 },
   quickCard: { flex: 1, marginRight: 8, paddingVertical: 14, borderRadius: 12, alignItems:'center' },
   quickCardValue: { color: 'white', fontWeight: '800', fontSize: 18, marginTop: 6 },
-  quickCardUnit: { color: 'white', fontSize: 12, marginTop: 2 },
+  quickCardUnit: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2 },
   customRowAlt: { flexDirection: 'row', marginTop: 12 },
-  inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8 },
-  addBtnAlt: { backgroundColor:'#0F172A', paddingHorizontal:16, justifyContent:'center', borderRadius:8 },
+  inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8, color:'#0F172A' },
+  addBtnAlt: { backgroundColor:'#10B981', paddingHorizontal:16, justifyContent:'center', borderRadius:8 },
   addBtnText: { color:'white', fontWeight:'800' },
 
   // Calendar styles
-  calendarCard: { backgroundColor:'white', borderRadius:16, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:3 },
+  calendarCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
   calendarHeader: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
   navButton: { width:32, height:32, borderRadius:16, backgroundColor:'#F3F4F6', justifyContent:'center', alignItems:'center' },
   calendarTitle: { fontSize:18, fontWeight:'700', color:'#1F2937' },
@@ -1249,7 +1249,7 @@ const styles = StyleSheet.create({
   calendarDayTextToday: { color:'#1D4ED8', fontWeight:'700' },
   calendarDayTextSelected: { color:'white', fontWeight:'700' },
   blueDotIndicator: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#3B82F6', position: 'absolute', bottom: 4, alignSelf: 'center' },
-  selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:16, marginTop:8 },
+  selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:14, marginTop:10 },
   selectedDayTitle: { fontSize:16, fontWeight:'600', color:'#1F2937', marginBottom:12 },
   dayStats: { flexDirection:'row', justifyContent:'space-around', marginBottom: 16 },
   statItem: { alignItems:'center' },
@@ -1288,16 +1288,15 @@ const styles = StyleSheet.create({
   historyText: { color:'#475569' },
   historyAmt: { fontWeight:'700', color:'#0F172A' },
   /* horizontal progress layout */
-  progressCardRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'white', borderRadius: 14, padding: 18, marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 4 },
+  progressCardRow: { backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 10, elevation: 4 },
   progressCardLeft: { flex: 1, paddingRight: 12 },
+  progressCardRight: { width: 150, alignItems: 'flex-end' },
   progressHeadline: { fontSize: 36, fontWeight: '900', color: '#0F172A' },
   progressBarWrapper: { marginTop: 10, height: 8, borderRadius: 8, backgroundColor: 'transparent', overflow: 'hidden' },
   progressBarBg: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#F1F5F9', borderRadius: 8 },
   progressBarFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#60A5FA', borderRadius: 8 },
-  progressSubText: { marginTop: 8, color: '#6B7280', fontSize: 13 },
-  motivationalText: { marginTop: 8, color: '#374151', fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  progressCardRight: { width: 150, alignItems: 'center', justifyContent: 'center' },
-  missedIconPlaceholder: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#FFF4E6', marginBottom: 8 },
+  progressSubText: { marginTop: 10, color: '#6B7280', fontSize: 14, fontWeight:'500' },
+  motivationalText: { marginTop: 8, color: '#374151', fontSize: 13 },
   // Modal styles
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
   modalContent: { backgroundColor: 'white', borderRadius: 20, padding: 24, marginHorizontal: 20, maxWidth: 400, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 10 },
