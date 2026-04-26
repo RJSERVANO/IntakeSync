@@ -58,6 +58,10 @@ export type HydrationCacheInput<THydration = any> = {
   syncedAt?: string;
 };
 
+type HydrationCacheRow = {
+  data_json: string;
+};
+
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 
 function nowIso() {
@@ -89,6 +93,12 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 function getItemId(item: any, fallbackPrefix: string) {
   const id = item?.id ?? item?.local_id ?? item?.localId ?? item?.timestamp;
   return id != null ? String(id) : createLocalId(fallbackPrefix);
+}
+
+async function ensureColumn(db: SQLiteDatabase, table: string, column: string, definition: string) {
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((existing) => existing.name === column)) return;
+  await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 async function migrate(db: SQLiteDatabase) {
@@ -124,6 +134,10 @@ async function migrate(db: SQLiteDatabase) {
       user_key TEXT NOT NULL,
       entry_id TEXT NOT NULL,
       timestamp TEXT,
+      beverage_type TEXT DEFAULT 'water',
+      sugar_level TEXT DEFAULT 'none',
+      caffeine_level TEXT DEFAULT 'none',
+      notes TEXT,
       data_json TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       synced_at TEXT,
@@ -166,6 +180,11 @@ async function migrate(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_sync_queue_user_domain
       ON sync_queue (user_key, domain);
   `);
+
+  await ensureColumn(db, 'hydration_cache', 'beverage_type', "TEXT DEFAULT 'water'");
+  await ensureColumn(db, 'hydration_cache', 'sugar_level', "TEXT DEFAULT 'none'");
+  await ensureColumn(db, 'hydration_cache', 'caffeine_level', "TEXT DEFAULT 'none'");
+  await ensureColumn(db, 'hydration_cache', 'notes', 'TEXT');
 }
 
 export async function getLocalDatabase() {
@@ -293,13 +312,37 @@ export async function saveHydrationCache<THydration = any>({
     ]);
 
     for (const entry of entries) {
+      const hydrationEntry = entry as any;
       const entryId = getItemId(entry, 'hydration');
-      const timestamp = (entry as any)?.timestamp ? String((entry as any).timestamp) : null;
+      const timestamp = hydrationEntry?.timestamp ? String(hydrationEntry.timestamp) : null;
+      const beverageType = hydrationEntry?.beverage_type ?? 'water';
+      const sugarLevel = hydrationEntry?.sugar_level ?? 'none';
+      const caffeineLevel = hydrationEntry?.caffeine_level ?? 'none';
+      const notes = hydrationEntry?.notes ?? null;
+
       await db.runAsync(
         `INSERT OR REPLACE INTO hydration_cache
-          (user_key, entry_id, timestamp, data_json, updated_at, synced_at, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, 0)`,
-        [scopedUser, entryId, timestamp, stringify({ ...(entry as any), id: entryId }), updatedAt, syncedAt],
+          (user_key, entry_id, timestamp, beverage_type, sugar_level, caffeine_level, notes, data_json, updated_at, synced_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        [
+          scopedUser,
+          entryId,
+          timestamp,
+          beverageType,
+          sugarLevel,
+          caffeineLevel,
+          notes,
+          stringify({
+            ...hydrationEntry,
+            id: entryId,
+            beverage_type: beverageType,
+            sugar_level: sugarLevel,
+            caffeine_level: caffeineLevel,
+            notes,
+          }),
+          updatedAt,
+          syncedAt,
+        ],
       );
     }
 
@@ -316,7 +359,7 @@ export async function readHydrationCache<THydration = any>(userKey?: string | nu
   const db = await getLocalDatabase();
   const scopedUser = userScope(userKey);
   const [rows, summaryRow] = await Promise.all([
-    db.getAllAsync<{ data_json: string }>(
+    db.getAllAsync<HydrationCacheRow>(
       `SELECT data_json FROM hydration_cache
        WHERE user_key = ? AND deleted = 0
        ORDER BY timestamp DESC, updated_at DESC`,

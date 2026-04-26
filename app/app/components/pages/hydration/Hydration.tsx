@@ -7,8 +7,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
 import { notificationManager } from '../../../services/notificationManager';
-import { calculateDailyWaterGoal, getDynamicQuickAddPresets, calculateHydrationPace } from '../../../hooks/useHydrationGoal';
-import { useCelebrationAnimation, useWaterGlassAnimation, usePulseAnimation, useBounceAnimation } from '../../../hooks/useHydrationAnimations';
+import { calculateHydrationPace } from '../../../hooks/useHydrationGoal';
+import { useCelebrationAnimation, usePulseAnimation, useBounceAnimation } from '../../../hooks/useHydrationAnimations';
 import * as Notifications from 'expo-notifications';
 
 interface UserDetails {
@@ -18,6 +18,93 @@ interface UserDetails {
   climate?: string;
   exercise_frequency?: string;
   age?: number;
+}
+
+type BeverageType = 'water' | 'sugar_sweetened' | 'caffeinated' | 'other_non_alcoholic';
+type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
+
+const QUICK_WATER_AMOUNTS = [250, 500, 750, 1000];
+
+const DRINK_OPTIONS: {
+  value: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  beverageType: BeverageType;
+  defaultSugar: BeverageLevel;
+  defaultCaffeine: BeverageLevel;
+}[] = [
+  { value: 'water', label: 'Water', icon: 'water', beverageType: 'water', defaultSugar: 'none', defaultCaffeine: 'none' },
+  { value: 'coffee', label: 'Coffee', icon: 'cafe', beverageType: 'caffeinated', defaultSugar: 'none', defaultCaffeine: 'medium' },
+  { value: 'tea', label: 'Tea', icon: 'cafe-outline', beverageType: 'caffeinated', defaultSugar: 'none', defaultCaffeine: 'low' },
+  { value: 'energy_drink', label: 'Energy drink', icon: 'flash', beverageType: 'caffeinated', defaultSugar: 'medium', defaultCaffeine: 'high' },
+  { value: 'soda', label: 'Soda', icon: 'wine', beverageType: 'sugar_sweetened', defaultSugar: 'high', defaultCaffeine: 'none' },
+  { value: 'juice', label: 'Juice', icon: 'nutrition', beverageType: 'sugar_sweetened', defaultSugar: 'medium', defaultCaffeine: 'none' },
+  { value: 'milk_tea', label: 'Milk tea', icon: 'cafe', beverageType: 'sugar_sweetened', defaultSugar: 'medium', defaultCaffeine: 'low' },
+  { value: 'other', label: 'Other', icon: 'options', beverageType: 'other_non_alcoholic', defaultSugar: 'none', defaultCaffeine: 'none' },
+];
+
+const LEVEL_OPTIONS: { value: BeverageLevel; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
+function getLevelLabel(value?: string) {
+  return LEVEL_OPTIONS.find((option) => option.value === value)?.label || 'None';
+}
+
+function getLevelScore(value?: string) {
+  switch (value) {
+    case 'low':
+      return 1;
+    case 'medium':
+      return 2;
+    case 'high':
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+function getAwarenessLevel(score: number): BeverageLevel {
+  if (score > 5) return 'high';
+  if (score > 2) return 'medium';
+  if (score > 0) return 'low';
+  return 'none';
+}
+
+function getBeverageLabel(entry: any) {
+  const note = typeof entry?.notes === 'string' ? entry.notes.trim() : '';
+  if (note) return note;
+  if (entry?.beverage_type === 'caffeinated') return 'Caffeinated beverage';
+  if (entry?.beverage_type === 'sugar_sweetened') return 'Sugar-sweetened drink';
+  if (entry?.beverage_type === 'other_non_alcoholic') return 'Other beverage';
+  return 'Water';
+}
+
+function formatSource(source?: string) {
+  if (source === 'quick') return 'Quick add';
+  if (source === 'custom') return 'Custom';
+  if (source === 'reminder') return 'Reminder';
+  return 'Manual';
+}
+
+function formatLogTitle(entry: any) {
+  const label = getBeverageLabel(entry);
+  const parts = [label];
+  if (entry?.beverage_type === 'caffeinated' && entry?.caffeine_level && entry.caffeine_level !== 'none') {
+    parts.push(`Caffeine: ${getLevelLabel(entry.caffeine_level)}`);
+  }
+  if (entry?.beverage_type === 'sugar_sweetened' && entry?.sugar_level && entry.sugar_level !== 'none') {
+    parts.push(`Sugar: ${getLevelLabel(entry.sugar_level)}`);
+  }
+  if (entry?.beverage_type === 'other_non_alcoholic') {
+    if (entry?.sugar_level && entry.sugar_level !== 'none') parts.push(`Sugar: ${getLevelLabel(entry.sugar_level)}`);
+    if (entry?.caffeine_level && entry.caffeine_level !== 'none') parts.push(`Caffeine: ${getLevelLabel(entry.caffeine_level)}`);
+  }
+  if (entry?.beverage_type === 'water') parts.push(formatSource(entry?.source));
+  return parts.join(' • ');
 }
 
 /**
@@ -95,7 +182,6 @@ export default function Hydration() {
   const [showIdealGoalAlert, setShowIdealGoalAlert] = useState(false);
   const [showInitialGoalModal, setShowInitialGoalModal] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [dynamicPresets, setDynamicPresets] = useState<number[]>([150, 200, 500, 750, 1000, 1500]);
   const [showGoalReachedModal, setShowGoalReachedModal] = useState(false);
   const [goalReachedToday, setGoalReachedToday] = useState(false); // Track if goal was already reached today
   const [showOverhydrationModal, setShowOverhydrationModal] = useState(false);
@@ -103,8 +189,18 @@ export default function Hydration() {
   const [behindAlert, setBehindAlert] = useState<string | null>(null);
   const [showBehindAlert, setShowBehindAlert] = useState(false);
   const [customGoalInput, setCustomGoalInput] = useState('');
+  const [selectedDrink, setSelectedDrink] = useState('water');
+  const [beverageType, setBeverageType] = useState<BeverageType>('water');
+  const [sugarLevel, setSugarLevel] = useState<BeverageLevel>('none');
+  const [caffeineLevel, setCaffeineLevel] = useState<BeverageLevel>('none');
+  const [beverageNotes, setBeverageNotes] = useState('');
+  const [customBeverageName, setCustomBeverageName] = useState('');
   const [initialGoalStep, setInitialGoalStep] = useState<'choice' | 'custom'>('choice');
   const [deletedTimestamps, setDeletedTimestamps] = useState<Set<string>>(new Set()); // Track deleted entry timestamps
+  const [hasScrolled, setHasScrolled] = useState(false);
+  const [calendarExpanded, setCalendarExpanded] = useState(false);
+  const [quickWaterFeedback, setQuickWaterFeedback] = useState<number | null>(null);
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null);
 
   const anim = useRef(new Animated.Value(0)).current;
   const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
@@ -202,21 +298,25 @@ export default function Hydration() {
 
   // Calendar functions
   function generateCalendarDays() {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    const firstDay = new Date(year, month, 1);
-    const startDate = new Date(firstDay);
-    startDate.setDate(startDate.getDate() - firstDay.getDay());
+    const startDate = calendarExpanded
+      ? new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)
+      : new Date(currentMonth);
+
+    if (calendarExpanded) {
+      startDate.setDate(startDate.getDate() - startDate.getDay());
+    } else {
+      startDate.setDate(startDate.getDate() - startDate.getDay());
+    }
     
     const days = [];
+    const dayCount = calendarExpanded ? 42 : 7;
     
-    for (let i = 0; i < 42; i++) { // 6 weeks * 7 days
+    for (let i = 0; i < dayCount; i++) {
       const currentDate = new Date(startDate);
       currentDate.setDate(startDate.getDate() + i);
       
       const dateStr = currentDate.toISOString().split('T')[0];
       const dayData = calendarData.find(d => d.date === dateStr);
-      const isCurrentMonth = currentDate.getMonth() === month;
       const isToday = dateStr === new Date().toISOString().split('T')[0];
       const isSelected = dateStr === selectedDate.toISOString().split('T')[0];
       
@@ -225,33 +325,36 @@ export default function Hydration() {
         dateStr,
         amount: dayData?.amount_ml || 0,
         percentage: dayData ? (dayData.amount_ml / goal) * 100 : 0,
-        isCurrentMonth,
         isToday,
-        isSelected
+        isSelected,
+        isCurrentMonth: currentDate.getMonth() === currentMonth.getMonth()
       });
     }
     
     return days;
   }
 
-  function getHydrationLevel(percentage: number) {
-    if (percentage >= 130) return { level: 'over-hydrated', color: '#DC2626', icon: 'alert-circle' };
-    if (percentage >= 110) return { level: 'high', color: '#F97316', icon: 'alert' };
-    if (percentage >= 100) return { level: 'excellent', color: '#10B981', icon: 'checkmark-circle' };
-    if (percentage >= 75) return { level: 'good', color: '#3B82F6', icon: 'checkmark' };
-    if (percentage >= 50) return { level: 'fair', color: '#F59E0B', icon: 'warning' };
-    if (percentage >= 25) return { level: 'poor', color: '#EF4444', icon: 'close-circle' };
-    return { level: 'none', color: '#E5E7EB', icon: 'remove-circle' };
-  }
-
   function navigateMonth(direction: 'prev' | 'next') {
     const newMonth = new Date(currentMonth);
-    if (direction === 'prev') {
-      newMonth.setMonth(newMonth.getMonth() - 1);
+    if (calendarExpanded) {
+      newMonth.setMonth(newMonth.getMonth() + (direction === 'prev' ? -1 : 1));
+    } else if (direction === 'prev') {
+      newMonth.setDate(newMonth.getDate() - 7);
     } else {
-      newMonth.setMonth(newMonth.getMonth() + 1);
+      newMonth.setDate(newMonth.getDate() + 7);
     }
     setCurrentMonth(newMonth);
+  }
+
+  function showInlineNotice(message: string) {
+    setInlineNotice(message);
+    setTimeout(() => setInlineNotice(null), 2400);
+  }
+
+  function quickAddWater(amount: number) {
+    setQuickWaterFeedback(amount);
+    void addAmount(amount, 'quick');
+    setTimeout(() => setQuickWaterFeedback(null), 450);
   }
 
   useEffect(() => {
@@ -281,10 +384,6 @@ export default function Hydration() {
             const finalGoal = res.goal ?? calculatedGoal ?? 2000;
             setGoal(finalGoal);
             setIdealGoal(calculatedGoal);
-            
-            // Generate dynamic presets based on calculated goal
-            const presets = getDynamicQuickAddPresets(finalGoal);
-            setDynamicPresets(presets);
             
             // Filter out deleted entries from server response
             const serverEntries = (res.entries ?? []).filter((e: any) => 
@@ -373,8 +472,26 @@ export default function Hydration() {
   try { await AsyncStorage.setItem('hydration', JSON.stringify(payload)); } catch { }
   }
 
-  async function addAmount(amountMl: number, source = 'quick') {
-    const entry = { amount_ml: amountMl, timestamp: new Date().toISOString(), source };
+  async function addAmount(
+    amountMl: number,
+    source = 'quick',
+    metadata?: {
+      beverage_type?: BeverageType;
+      sugar_level?: BeverageLevel;
+      caffeine_level?: BeverageLevel;
+      notes?: string | null;
+    },
+  ) {
+    const selectedBeverage = metadata?.beverage_type || 'water';
+    const entry = {
+      amount_ml: amountMl,
+      timestamp: new Date().toISOString(),
+      source,
+      beverage_type: selectedBeverage,
+      sugar_level: selectedBeverage === 'water' ? 'none' : metadata?.sugar_level || 'none',
+      caffeine_level: selectedBeverage === 'water' ? 'none' : metadata?.caffeine_level || 'none',
+      notes: metadata?.notes?.trim() || null,
+    };
     const newEntries = [...entries, entry];
     const oldTotal = totalToday();
     const newTotal = oldTotal + amountMl;
@@ -390,7 +507,7 @@ export default function Hydration() {
     const justReachedGoal = newTotal >= goal && oldTotal < goal;
     if (justReachedGoal && !goalReachedShownRef.current) {
       triggerCelebration();
-      setShowGoalReachedModal(true);
+      showInlineNotice('Hydration goal reached');
       goalReachedShownRef.current = true; // Mark as shown this session
       setGoalReachedToday(true); // Also mark for backend tracking
       
@@ -403,7 +520,7 @@ export default function Hydration() {
     const currentPercentage = (newTotal / goal) * 100;
     const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
     if (justExceeded150 && !overhydrationShownRef.current) {
-      setShowOverhydrationModal(true);
+      showInlineNotice('High intake logged. Stay mindful.');
       overhydrationShownRef.current = true; // Mark as shown this session
       setOverhydrationShownToday(true); // Also mark for backend tracking
     }
@@ -424,7 +541,14 @@ export default function Hydration() {
     // optimistic server sync
     if (token) {
       try {
-        await api.post('/hydration', { amount_ml: amountMl, source }, token as string);
+        await api.post('/hydration', {
+          amount_ml: amountMl,
+          source,
+          beverage_type: entry.beverage_type,
+          sugar_level: entry.sugar_level,
+          caffeine_level: entry.caffeine_level,
+          notes: entry.notes,
+        }, token as string);
       } catch (err:any) {
         console.log('Hydration sync error', err);
       }
@@ -436,8 +560,17 @@ export default function Hydration() {
   async function submitCustom() {
     const val = parseInt(amountInput || '0', 10);
     if (!val || val <= 0) return Alert.alert('Invalid', 'Enter a positive amount in ml');
+    const displayName = selectedDrink === 'other' ? customBeverageName.trim() : beverageNotes.trim();
     setAmountInput('');
-    addAmount(val, 'custom');
+    if (selectedDrink === 'other') {
+      setCustomBeverageName('');
+    }
+    addAmount(val, 'custom', {
+      beverage_type: beverageType,
+      sugar_level: beverageType === 'water' ? 'none' : sugarLevel,
+      caffeine_level: beverageType === 'water' ? 'none' : caffeineLevel,
+      notes: displayName || null,
+    });
   }
 
   async function changeGoal() {
@@ -483,10 +616,6 @@ export default function Hydration() {
   async function updateGoal(newGoal: number) {
     setGoal(newGoal);
     await persistLocal({ goal: newGoal, entries });
-    
-    // Update dynamic presets based on new goal
-    const presets = getDynamicQuickAddPresets(newGoal);
-    setDynamicPresets(presets);
     
     if (token) {
       try { 
@@ -605,6 +734,72 @@ export default function Hydration() {
     return (totalToday() / (goal || 1)) * 100; // Allow exceeding 100% for over-hydration tracking
   }
 
+  function todayEntries() {
+    const today = new Date().toDateString();
+    return entries.filter((entry) => entry.timestamp && new Date(entry.timestamp).toDateString() === today);
+  }
+
+  function awarenessFor(field: 'sugar_level' | 'caffeine_level') {
+    const score = todayEntries().reduce((sum, entry) => {
+      const amount = Number(entry.amount_ml || 0);
+      return sum + getLevelScore(entry[field]) * (amount / 250);
+    }, 0);
+    return awarenessFromScore(score);
+  }
+
+  function awarenessFromScore(score: number) {
+    return {
+      score,
+      level: getAwarenessLevel(score),
+      percent: Math.min(100, (score / 5) * 100),
+    };
+  }
+
+  function awarenessForEntries(dayEntries: any[], field: 'sugar_level' | 'caffeine_level') {
+    const score = dayEntries.reduce((sum, entry) => {
+      const amount = Number(entry.amount_ml || 0);
+      return sum + getLevelScore(entry[field]) * (amount / 250);
+    }, 0);
+    return awarenessFromScore(score);
+  }
+
+  function getAwarenessColor(level: BeverageLevel) {
+    if (level === 'high') return '#F97316';
+    if (level === 'medium') return '#2563EB';
+    if (level === 'low') return '#60A5FA';
+    return '#94A3B8';
+  }
+
+  function getDrinkAccent(value: string) {
+    switch (value) {
+      case 'coffee':
+      case 'tea':
+      case 'milk_tea':
+        return '#2563EB';
+      case 'energy_drink':
+        return '#F97316';
+      case 'soda':
+      case 'juice':
+        return '#7C3AED';
+      case 'other':
+        return '#64748B';
+      default:
+        return '#1E3A8A';
+    }
+  }
+
+  function selectDrink(value: string) {
+    const drink = DRINK_OPTIONS.find((option) => option.value === value) || DRINK_OPTIONS[0];
+    setSelectedDrink(drink.value);
+    setBeverageType(drink.beverageType);
+    setSugarLevel(drink.defaultSugar);
+    setCaffeineLevel(drink.defaultCaffeine);
+    setBeverageNotes(drink.value === 'water' || drink.value === 'other' ? '' : drink.label);
+    if (drink.value !== 'other') {
+      setCustomBeverageName('');
+    }
+  }
+
   // Handle setting recommended goal from initial modal
   async function handleSetRecommendedGoal() {
     if (idealGoal) {
@@ -646,49 +841,48 @@ export default function Hydration() {
 
   function getProgressColor() {
     const pct = percent();
-    if (pct >= 100) return '#10B981'; // Green
+    if (pct >= 100) return '#2563EB'; // Primary blue
     if (pct >= 75) return '#3B82F6'; // Blue
     if (pct >= 50) return '#F59E0B'; // Orange
     return '#EF4444'; // Red
-  }
-
-  async function logMissed() {
-    // record a missed reminder
-    const ts = new Date().toISOString();
-    try {
-      // store locally as an entry in missed
-      const localRaw = await AsyncStorage.getItem('hydration');
-      const obj = localRaw ? JSON.parse(localRaw) : { goal, entries, missed: [] };
-      obj.missed = obj.missed || [];
-      obj.missed.push(ts);
-      await AsyncStorage.setItem('hydration', JSON.stringify(obj));
-      if (token) {
-        await api.post('/hydration/missed', { timestamp: ts }, token as string);
-      }
-      
-      // Show missed log notification
-      notificationManager.showMissedLogReminder('hydration');
-    } catch (e) { console.log('missed log error', e); }
   }
 
   if (loading) return <SafeAreaView style={{flex:1,justifyContent:'center'}}><Text>Loading...</Text></SafeAreaView>;
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 160, paddingTop: (insets.top || 12) }]}>
-        <View style={styles.headerRowAlt}>
-          <View>
-            <Text style={styles.title}>Hydration</Text>
-          </View>
-          <View style={styles.goalWrap}>
-            <Text style={styles.goalLabel}>Goal:</Text>
-            <TouchableOpacity onPress={changeGoal} style={styles.goalPill}><Text style={styles.goalText}>{goal} ml</Text></TouchableOpacity>
-          </View>
+      <View style={[styles.stickyHeader, hasScrolled && styles.stickyHeaderScrolled, { paddingTop: Math.max(insets.top, 8) }]}>
+        <View>
+          <Text style={styles.title}>Beverage</Text>
+          <Text style={styles.headerSubtitle}>{fmt(totalToday())} / {fmt(goal)} ml today</Text>
         </View>
+        <TouchableOpacity onPress={changeGoal} style={styles.headerIconButton} activeOpacity={0.8}>
+          <Ionicons name="options-outline" size={20} color="#1E3A8A" />
+        </TouchableOpacity>
+      </View>
+
+      {inlineNotice && (
+        <View pointerEvents="none" style={[styles.inlineNotice, { top: Math.max(insets.top, 8) + 54 }]}>
+          <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
+          <Text style={styles.inlineNoticeText}>{inlineNotice}</Text>
+        </View>
+      )}
+
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: 160, paddingTop: 12 }]}
+        onScroll={(event) => {
+          const scrolled = event.nativeEvent.contentOffset.y > 8;
+          setHasScrolled((previous) => previous === scrolled ? previous : scrolled);
+        }}
+        scrollEventThrottle={16}
+      >
 
         <View style={styles.progressCardRow}>
           <View style={styles.progressCardLeft}>
-            <Text style={styles.progressHeadline}>{Math.round(percent())}%</Text>
+            <View style={styles.progressHeaderLine}>
+              <Text style={styles.progressHeadline}>{Math.round(percent())}%</Text>
+              <Text style={styles.progressSubText}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
+            </View>
             <View style={styles.progressBarWrapper}>
               <View style={styles.progressBarBg} />
               <Animated.View style={[
@@ -699,105 +893,209 @@ export default function Hydration() {
                 }
               ]} />
             </View>
-            <Text style={styles.progressSubText}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
             <Text style={styles.motivationalText}>{getMotivationalMessage()}</Text>
           </View>
-          <View style={styles.progressCardRight}>
-            <View style={styles.missedCardAlt}>
-              <View style={styles.missedIconPlaceholder} />
-              <Text style={styles.missedLabelAlt}>Missed</Text>
-              <Text style={styles.missedNumberAlt}>{missedCount}</Text>
-              <TouchableOpacity onPress={logMissed} style={styles.logMissedButton}>
-                <Text style={styles.logMissedTextAlt}>Log Missed</Text>
-              </TouchableOpacity>
+          <View style={styles.missedPassiveCard}>
+            <View style={styles.missedPassiveIcon}>
+              <Ionicons name="time-outline" size={15} color="#C2410C" />
             </View>
+            <Text style={styles.missedMiniLabel}>Missed Reminders</Text>
+            <Text style={styles.missedMiniNumber}>{missedCount}</Text>
+            <Text style={styles.missedMiniHelper}>Reminders you skipped today</Text>
+          </View>
+        </View>
+
+        {(() => {
+          const caffeineAwareness = awarenessFor('caffeine_level');
+          const sugarAwareness = awarenessFor('sugar_level');
+          const caffeineColor = getAwarenessColor(caffeineAwareness.level);
+          const sugarColor = getAwarenessColor(sugarAwareness.level);
+
+          return (
+            <View style={styles.awarenessGrid}>
+              <View style={styles.awarenessCard}>
+                <View style={styles.awarenessHeader}>
+                  <View style={[styles.awarenessIcon, { backgroundColor: caffeineAwareness.level === 'high' ? '#FFF7ED' : '#EFF6FF' }]}>
+                    <Ionicons name="cafe" size={18} color={caffeineColor} />
+                  </View>
+                  <View style={styles.awarenessTitleWrap}>
+                    <Text style={styles.awarenessTitle}>Caffeine Intake</Text>
+                    <Text style={styles.awarenessSubtitle}>{"Today's level: "}{getLevelLabel(caffeineAwareness.level)}</Text>
+                    <Text style={styles.awarenessHelper}>Adjusted by serving size</Text>
+                  </View>
+                </View>
+                <View style={styles.awarenessTrack}>
+                  <View style={[styles.awarenessFill, { width: `${caffeineAwareness.percent}%`, backgroundColor: caffeineColor }]} />
+                </View>
+              </View>
+
+              <View style={styles.awarenessCard}>
+                <View style={styles.awarenessHeader}>
+                  <View style={[styles.awarenessIcon, { backgroundColor: sugarAwareness.level === 'high' ? '#FFF7ED' : '#EFF6FF' }]}>
+                    <Ionicons name="ice-cream" size={18} color={sugarColor} />
+                  </View>
+                  <View style={styles.awarenessTitleWrap}>
+                    <Text style={styles.awarenessTitle}>Sugar Intake</Text>
+                    <Text style={styles.awarenessSubtitle}>{"Today's level: "}{getLevelLabel(sugarAwareness.level)}</Text>
+                    <Text style={styles.awarenessHelper}>Adjusted by serving size</Text>
+                  </View>
+                </View>
+                <View style={styles.awarenessTrack}>
+                  <View style={[styles.awarenessFill, { width: `${sugarAwareness.percent}%`, backgroundColor: sugarColor }]} />
+                </View>
+              </View>
+              <Text style={styles.awarenessFootnote}>{"Level considers today's drinks and serving size."}</Text>
+            </View>
+          );
+        })()}
+
+        <View style={styles.quickWaterCard}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.quickAddTitle}>Quick Add Water</Text>
+            <Text style={styles.sectionHint}>One tap</Text>
+          </View>
+          <View style={styles.quickChipRow}>
+            {QUICK_WATER_AMOUNTS.map((amount) => (
+              <TouchableOpacity
+                key={amount}
+                style={[styles.waterChip, quickWaterFeedback === amount && styles.waterChipPressed]}
+                onPress={() => quickAddWater(amount)}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="water" size={15} color={quickWaterFeedback === amount ? '#FFFFFF' : '#1E3A8A'} />
+                <Text style={[styles.waterChipText, quickWaterFeedback === amount && styles.waterChipTextPressed]}>{amount} ml</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
         <View style={styles.cardAlt}>
-          <Text style={styles.quickAddTitle}>Quick Add</Text>
-          <View style={styles.quickRowAlt}>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#60A5FA'}]} onPress={() => addAmount(dynamicPresets[0],'quick')} activeOpacity={0.85}>
-              <Ionicons name="water" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[0]}</Text>
-              <Text style={styles.quickCardUnit}>ml</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#3B82F6'}]} onPress={() => addAmount(dynamicPresets[1],'quick')} activeOpacity={0.85}>
-              <Ionicons name="water" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[1]}</Text>
-              <Text style={styles.quickCardUnit}>ml</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#1D4ED8'}]} onPress={() => addAmount(dynamicPresets[2],'quick')} activeOpacity={0.85}>
-              <Ionicons name="flask" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[2] >= 1000 ? (dynamicPresets[2] / 1000).toFixed(1) : dynamicPresets[2]}</Text>
-              <Text style={styles.quickCardUnit}>{dynamicPresets[2] >= 1000 ? 'L' : 'ml'}</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.quickRowAlt}>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#10B981'}]} onPress={() => addAmount(dynamicPresets[3],'quick')} activeOpacity={0.85}>
-              <Ionicons name="cafe" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[3]}</Text>
-              <Text style={styles.quickCardUnit}>ml</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#F59E0B'}]} onPress={() => addAmount(dynamicPresets[4],'quick')} activeOpacity={0.85}>
-              <Ionicons name="wine" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[4]}</Text>
-              <Text style={styles.quickCardUnit}>ml</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#EF4444'}]} onPress={() => addAmount(dynamicPresets[5],'quick')} activeOpacity={0.85}>
-              <Ionicons name="beaker" size={18} color="white" />
-              <Text style={styles.quickCardValue}>{dynamicPresets[5] >= 1000 ? (dynamicPresets[5] / 1000).toFixed(1) : dynamicPresets[5]}</Text>
-              <Text style={styles.quickCardUnit}>{dynamicPresets[5] >= 1000 ? 'L' : 'ml'}</Text>
-            </TouchableOpacity>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.quickAddTitle}>Beverage Log</Text>
+            <Text style={styles.sectionHint}>Custom entry</Text>
           </View>
 
-          <View style={styles.customRowAlt}>
-            <TextInput value={amountInput} onChangeText={setAmountInput} placeholder="Enter amount in ml" keyboardType="numeric" style={styles.inputAlt} />
-            <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText}>Add</Text></TouchableOpacity>
+          <View style={styles.categoryPanel}>
+            <View style={styles.drinkGrid}>
+              {DRINK_OPTIONS.map((drink) => {
+                const selected = selectedDrink === drink.value;
+                const accent = getDrinkAccent(drink.value);
+                return (
+                  <TouchableOpacity
+                    key={drink.value}
+                    style={[
+                      styles.drinkChip,
+                      selected ? styles.drinkChipActive : styles.drinkChipInactive,
+                      selected && { borderColor: accent },
+                    ]}
+                    onPress={() => selectDrink(drink.value)}
+                    activeOpacity={0.82}
+                  >
+                    <View style={[styles.drinkIconBubble, { backgroundColor: selected ? accent : '#EFF6FF' }]}>
+                      <Ionicons name={drink.icon} size={selected ? 20 : 17} color={selected ? '#FFFFFF' : accent} />
+                    </View>
+                    <Text style={[styles.drinkChipText, selected && styles.drinkChipTextActive]} numberOfLines={1}>
+                      {drink.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {selectedDrink === 'other' && (
+              <TextInput
+                value={customBeverageName}
+                onChangeText={setCustomBeverageName}
+                placeholder="Custom beverage name"
+                maxLength={80}
+                style={styles.fullInputAlt}
+              />
+            )}
+
+            <Text style={styles.formLabel}>Caffeine level</Text>
+            <View style={styles.levelRow}>
+              {LEVEL_OPTIONS.map((option) => (
+                <TouchableOpacity key={option.value} style={[styles.levelChip, caffeineLevel === option.value && styles.optionChipSelected]} onPress={() => setCaffeineLevel(option.value)} activeOpacity={0.85}>
+                  <Text style={[styles.optionChipText, caffeineLevel === option.value && styles.optionChipTextSelected]}>{option.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.formLabel}>Sugar level</Text>
+            <View style={styles.levelRow}>
+              {LEVEL_OPTIONS.map((option) => (
+                <TouchableOpacity key={option.value} style={[styles.levelChip, sugarLevel === option.value && styles.optionChipSelected]} onPress={() => setSugarLevel(option.value)} activeOpacity={0.85}>
+                  <Text style={[styles.optionChipText, sugarLevel === option.value && styles.optionChipTextSelected]}>{option.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.formLabel}>Amount</Text>
+            <View style={styles.amountRow}>
+              {QUICK_WATER_AMOUNTS.map((amount) => (
+                <TouchableOpacity key={amount} style={[styles.amountChip, amountInput === String(amount) && styles.amountChipActive]} onPress={() => setAmountInput(String(amount))} activeOpacity={0.85}>
+                  <Text style={[styles.amountChipText, amountInput === String(amount) && styles.amountChipTextActive]}>{amount} ml</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.customRowAlt}>
+              <TextInput value={amountInput} onChangeText={setAmountInput} placeholder="Custom ml" keyboardType="numeric" style={styles.inputAlt} />
+              <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText}>Log</Text></TouchableOpacity>
+            </View>
           </View>
         </View>
 
         <View style={styles.calendarCard}>
           <View style={styles.calendarHeader}>
             <TouchableOpacity onPress={() => navigateMonth('prev')} style={styles.navButton}>
-              <Ionicons name="chevron-back" size={20} color="#374151" />
+              <Ionicons name="chevron-back" size={20} color="#1E3A8A" />
             </TouchableOpacity>
-            <Text style={styles.calendarTitle}>
-              {currentMonth.toLocaleDateString('en', { month: 'long', year: 'numeric' })}
-            </Text>
+            <View style={styles.calendarTitleWrap}>
+              <Text style={styles.calendarTitle}>
+                {calendarExpanded
+                  ? currentMonth.toLocaleDateString('en', { month: 'long', year: 'numeric' })
+                  : `Week of ${generateCalendarDays()[0]?.date.toLocaleDateString('en', { month: 'short', day: 'numeric' })}`}
+              </Text>
+              <TouchableOpacity onPress={() => setCalendarExpanded(!calendarExpanded)} style={styles.calendarToggle} activeOpacity={0.8}>
+                <Ionicons name={calendarExpanded ? 'contract-outline' : 'expand-outline'} size={13} color="#2563EB" />
+                <Text style={styles.calendarToggleText}>{calendarExpanded ? 'Week' : 'Month'}</Text>
+              </TouchableOpacity>
+            </View>
             <TouchableOpacity onPress={() => navigateMonth('next')} style={styles.navButton}>
-              <Ionicons name="chevron-forward" size={20} color="#374151" />
+              <Ionicons name="chevron-forward" size={20} color="#1E3A8A" />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.calendarGrid}>
-            {/* Day headers */}
+          {calendarExpanded && (
             <View style={styles.dayHeaders}>
               {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                 <Text key={day} style={styles.dayHeader}>{day}</Text>
               ))}
             </View>
+          )}
 
-            {/* Calendar days */}
-            <View style={styles.calendarDays}>
+          <View style={calendarExpanded ? styles.calendarDays : styles.weekStrip}>
               {generateCalendarDays().map((day, index) => {
-                const hydrationLevel = getHydrationLevel(day.percentage);
-                
                 return (
                   <TouchableOpacity
                     key={index}
                     style={[
-                      styles.calendarDay,
-                      !day.isCurrentMonth && styles.calendarDayOtherMonth,
+                      calendarExpanded ? styles.calendarDay : styles.weekDay,
+                      calendarExpanded && !day.isCurrentMonth && styles.calendarDayOtherMonth,
                       day.isToday && styles.calendarDayToday,
                       day.isSelected && styles.calendarDaySelected
                     ]}
                     onPress={() => setSelectedDate(day.date)}
                   >
+                    {!calendarExpanded && (
+                      <Text style={[styles.weekDayName, day.isSelected && styles.calendarDayTextSelected]}>
+                        {day.date.toLocaleDateString('en', { weekday: 'short' })}
+                      </Text>
+                    )}
                     <Text style={[
                       styles.calendarDayText,
-                      !day.isCurrentMonth && styles.calendarDayTextOtherMonth,
+                      calendarExpanded && !day.isCurrentMonth && styles.calendarDayTextOtherMonth,
                       day.isToday && styles.calendarDayTextToday,
                       day.isSelected && styles.calendarDayTextSelected
                     ]}>
@@ -810,7 +1108,6 @@ export default function Hydration() {
                   </TouchableOpacity>
                 );
               })}
-            </View>
           </View>
 
           {/* Selected day details */}
@@ -821,46 +1118,46 @@ export default function Hydration() {
               </Text>
               {(() => {
                 const selectedDateStr = selectedDate.toISOString().split('T')[0];
-                const selectedDayData = calendarData.find(d => d.date === selectedDateStr);
-                const amount = selectedDayData?.amount_ml || 0;
-                const percentage = (amount / goal) * 100;
-                const level = getHydrationLevel(percentage);
-                
-                // Get actual entries for selected date
                 const dateEntries = entries.filter(e => 
                   e.timestamp && e.timestamp.slice(0,10) === selectedDateStr
                 );
+                const amount = dateEntries.reduce((sum, entry) => sum + (entry.amount_ml || 0), 0);
+                const selectedCaffeine = awarenessForEntries(dateEntries, 'caffeine_level');
+                const selectedSugar = awarenessForEntries(dateEntries, 'sugar_level');
                 
                 return (
                   <>
-                    <View style={styles.dayStats}>
-                      <View style={styles.statItem}>
+                    <View style={styles.daySummaryGrid}>
+                      <View style={styles.daySummaryItem}>
+                        <Ionicons name="water" size={18} color="#2563EB" />
                         <Text style={styles.statValue}>{amount}ml</Text>
-                        <Text style={styles.statLabel}>Consumed</Text>
+                        <Text style={styles.statLabel}>Water</Text>
                       </View>
-                      <View style={styles.statItem}>
-                        <Text style={styles.statValue}>{Math.round(percentage)}%</Text>
-                        <Text style={styles.statLabel}>of Goal</Text>
+                      <View style={styles.daySummaryItem}>
+                        <Ionicons name="cafe" size={18} color="#2563EB" />
+                        <Text style={styles.statValue}>{getLevelLabel(selectedCaffeine.level)}</Text>
+                        <Text style={styles.statLabel}>Caffeine</Text>
                       </View>
-                      <View style={styles.statItem}>
-                        <Ionicons name={level.icon as any} size={20} color={level.color} />
-                        <Text style={[styles.statLabel, { color: level.color }]}>{level.level}</Text>
+                      <View style={styles.daySummaryItem}>
+                        <Ionicons name="ice-cream" size={18} color="#2563EB" />
+                        <Text style={styles.statValue}>{getLevelLabel(selectedSugar.level)}</Text>
+                        <Text style={styles.statLabel}>Sugar</Text>
                       </View>
                     </View>
                     
                     {/* Show actual logs for selected date */}
                     {dateEntries.length > 0 && (
                       <View style={styles.dateLogsContainer}>
-                        <Text style={styles.dateLogsTitle}>Hydration Logs:</Text>
+                        <Text style={styles.dateLogsTitle}>Beverage Logs:</Text>
                         {dateEntries.map((entry, idx) => (
                           <View key={idx} style={styles.dateLogRow}>
                             <View style={styles.dateLogInfo}>
                               <Text style={styles.dateLogTime}>
                                 {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </Text>
-                              <Text style={styles.dateLogAmount}>{fmt(entry.amount_ml)} ml</Text>
+                              <Text style={styles.dateLogSource} numberOfLines={2}>{formatLogTitle(entry)}</Text>
                             </View>
-                            <Text style={styles.dateLogSource}>({entry.source})</Text>
+                            <Text style={styles.dateLogAmount}>{fmt(entry.amount_ml)} ml</Text>
                           </View>
                         ))}
                       </View>
@@ -883,26 +1180,28 @@ export default function Hydration() {
               const actualIndex = entries.findIndex(entry => 
                 entry.timestamp === e.timestamp && entry.amount_ml === e.amount_ml
               );
-              
               return (
                 <View key={idx} style={[styles.historyRowAlt, idx % 2 === 0 ? styles.rowAltEven : styles.rowAltOdd]}>
                   <View style={styles.historyRowContent}>
                     <View style={styles.historyRowLeft}>
-                      <Text style={styles.historyText}>💧 {new Date(e.timestamp).toLocaleTimeString()} • {e.source}</Text>
-                      <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
+                      <Text style={styles.historyText} numberOfLines={2}>{formatLogTitle(e)}</Text>
+                      <Text style={styles.historyMeta}>{new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
                     </View>
-                    <TouchableOpacity 
-                      onPress={() => {
-                        if (actualIndex !== -1) {
-                          deleteEntry(actualIndex);
-                        } else {
-                          console.log('Entry not found in array');
-                        }
-                      }}
-                      style={styles.deleteButton}
-                    >
-                      <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                    </TouchableOpacity>
+                    <View style={styles.historyRight}>
+                      <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          if (actualIndex !== -1) {
+                            deleteEntry(actualIndex);
+                          } else {
+                            console.log('Entry not found in array');
+                          }
+                        }}
+                        style={styles.deleteButton}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
               );
@@ -967,7 +1266,7 @@ export default function Hydration() {
               <Ionicons name="trophy" size={60} color="#F59E0B" style={{ marginBottom: 16 }} />
               <Text style={styles.celebrationTitle}>🎉 Hydration Goal Reached!</Text>
               <Text style={styles.celebrationMessage}>
-                Great job keeping your body fueled! You've reached your daily hydration goal of {goal}ml.
+                Great job keeping your body fueled! You have reached your daily hydration goal of {goal}ml.
               </Text>
               <View style={styles.celebrationStats}>
                 <View style={styles.statBox}>
@@ -1002,7 +1301,7 @@ export default function Hydration() {
             <Ionicons name="warning" size={60} color="#EF4444" style={{ marginBottom: 16 }} />
             <Text style={styles.overhydrationTitle}>⚠️ Whoa there!</Text>
             <Text style={styles.overhydrationMessage}>
-              You've exceeded 150% of your goal. Drinking too much water can dilute electrolytes. Listen to your body.
+              You have exceeded 150% of your goal. Drinking too much water can dilute electrolytes. Listen to your body.
             </Text>
             <View style={styles.celebrationStats}>
               <View style={styles.statBox}>
@@ -1064,7 +1363,7 @@ export default function Hydration() {
                 </View>
                 <Text style={styles.modalTitle}>Set Your Hydration Goal</Text>
                 <Text style={styles.modalMessage}>
-                  Let's get started by setting your daily water intake goal.
+                  Let us get started by setting your daily water intake goal.
                 </Text>
                 
                 {idealGoal && (
@@ -1157,7 +1456,7 @@ const styles = StyleSheet.create({
   content: { padding:20 },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
   headerRow: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 },
-  title: { fontSize:24, fontWeight:'700', color:'#0F172A' },
+  title: { fontSize:22, fontWeight:'800', color:'#0F172A' },
   editGoal: { color:'#2563EB', fontWeight:'600' },
   card: { backgroundColor:'white', borderRadius:12, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, elevation:2 },
   cardTitle: { fontSize:16, fontWeight:'700', color:'#0F172A', marginBottom:8 },
@@ -1173,7 +1472,7 @@ const styles = StyleSheet.create({
   quickTextPrimary: { color:'white', fontWeight:'700' },
   customRow: { flexDirection:'row', marginTop:12 },
   input: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8 },
-  addBtn: { backgroundColor:'#10B981', paddingHorizontal:16, justifyContent:'center', borderRadius:8 },
+  addBtn: { backgroundColor:'#2563EB', paddingHorizontal:16, justifyContent:'center', borderRadius:8 },
   historyCard: { backgroundColor:'white', borderRadius:12, padding:12, marginBottom:16 },
   emptyRecent: { paddingVertical:20 },
   emptyText: { color:'#6B7280' },
@@ -1183,6 +1482,12 @@ const styles = StyleSheet.create({
   missedBtn: { padding:12, borderRadius:8, backgroundColor:'#FEF3C7' },
 
   /* polished UI styles */
+  stickyHeader: { backgroundColor: '#F8FAFC', paddingHorizontal: 20, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: 'transparent', zIndex: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  stickyHeaderScrolled: { backgroundColor: '#FFFFFF', borderBottomColor: '#E2E8F0', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 4 },
+  headerSubtitle: { marginTop: 2, color: '#64748B', fontSize: 12, fontWeight: '700' },
+  headerIconButton: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
+  inlineNotice: { position: 'absolute', left: 20, right: 20, zIndex: 60, backgroundColor: '#2563EB', borderRadius: 999, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 10, elevation: 8 },
+  inlineNoticeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
   headerRowAlt: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:12 },
   goalWrap: { flexDirection: 'row', alignItems: 'center' },
   goalLabel: { color: '#6B7280', marginRight: 8, fontWeight: '600' },
@@ -1209,68 +1514,128 @@ const styles = StyleSheet.create({
   missedCard: { backgroundColor: '#FEF3C7', padding: 10, borderRadius: 10, alignItems: 'center' },
   missedLabel: { fontSize: 12, color: '#92400E' },
   missedNumber: { fontSize: 18, fontWeight: '800', color: '#92400E', marginTop: 6 },
-  logMissedBtn: { marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: 'transparent' },
-  logMissedText: { color: '#92400E', fontWeight: '700' },
 
   /* alternative missed card style to match pale yellow design */
   missedCardAlt: { backgroundColor: '#FEF7E7', padding: 20, borderRadius: 14, width: 150, alignItems: 'center', justifyContent: 'center', shadowColor:'#000', shadowOpacity:0.02, shadowRadius:6, elevation:2 },
   missedIconPlaceholder: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#FDE68A', marginBottom: 10 },
   missedLabelAlt: { fontSize: 12, color: '#92400E', marginBottom: 8, fontWeight: '700' },
   missedNumberAlt: { fontSize: 36, fontWeight: '900', color: '#92400E', marginBottom: 6 },
-  logMissedButton: { marginTop: 8, backgroundColor: '#F59E0B', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
-  logMissedTextAlt: { color: '#FFFFFF', fontWeight: '900', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  cardAlt: { backgroundColor:'#FFFFFF', borderRadius:16, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
-  quickAddTitle: { fontSize:16, fontWeight:'700', color:'#0F172A', marginBottom:12 },
+  cardAlt: { backgroundColor:'#FFFFFF', borderRadius:16, padding:14, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
+  quickAddTitle: { fontSize:16, fontWeight:'800', color:'#0F172A', marginBottom:10 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  sectionHint: { fontSize: 12, color: '#64748B', fontWeight: '700', marginBottom: 10 },
+  awarenessGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  awarenessCard: { flex: 1, minWidth: '47%', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
+  awarenessHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  awarenessIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  awarenessTitleWrap: { flex: 1, minWidth: 0 },
+  awarenessTitle: { fontSize: 13, fontWeight: '800', color: '#0F172A' },
+  awarenessSubtitle: { fontSize: 11, color: '#64748B', marginTop: 2, fontWeight: '600' },
+  awarenessHelper: { fontSize: 10, color: '#94A3B8', marginTop: 1, fontWeight: '700' },
+  awarenessTrack: { height: 8, borderRadius: 8, backgroundColor: '#E2E8F0', overflow: 'hidden' },
+  awarenessFill: { height: 8, borderRadius: 8 },
+  awarenessFootnote: { width: '100%', color: '#64748B', fontSize: 11, fontWeight: '600', marginTop: -2 },
+  quickWaterCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:12, marginBottom:16, shadowColor:'#000', shadowOpacity:0.04, shadowRadius:8, elevation:2 },
   quickRowAlt: { flexDirection:'row', justifyContent:'space-between', marginBottom:8 },
   quickCard: { flex: 1, marginRight: 8, paddingVertical: 14, borderRadius: 12, alignItems:'center' },
   quickCardValue: { color: 'white', fontWeight: '800', fontSize: 18, marginTop: 6 },
   quickCardUnit: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2 },
+  formSectionTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginTop: 18, marginBottom: 10 },
+  formLabel: { fontSize: 11, fontWeight: '800', color: '#475569', marginTop: 12, marginBottom: 7, textTransform: 'uppercase' },
+  segmentRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  segmentButton: { flex: 1, minHeight: 58, borderRadius: 12, borderWidth: 1, borderColor: '#BFDBFE', backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  segmentButtonActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  segmentButtonText: { marginTop: 4, color: '#1E3A8A', fontSize: 11, fontWeight: '800', textAlign: 'center' },
+  segmentButtonTextActive: { color: '#FFFFFF' },
+  categoryPanel: { backgroundColor: '#F8FAFC', borderRadius: 14, padding: 10, borderWidth: 1, borderColor: '#E2E8F0' },
+  drinkGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, overflow: 'visible' },
+  drinkChip: { width: '23%', minHeight: 62, flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 7, paddingHorizontal: 4, borderRadius: 14, borderWidth: 1, borderColor: '#BFDBFE', backgroundColor: '#FFFFFF', overflow: 'visible' },
+  drinkChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB', transform: [{ scale: 1.04 }] },
+  drinkChipInactive: { opacity: 0.86, transform: [{ scale: 0.98 }] },
+  drinkIconBubble: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
+  drinkChipText: { color: '#1E3A8A', fontWeight: '900', fontSize: 10, textAlign: 'center' },
+  drinkChipTextActive: { color: '#FFFFFF' },
+  amountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  amountChip: { flexGrow: 1, minWidth: '22%', alignItems: 'center', paddingVertical: 9, paddingHorizontal: 8, borderRadius: 12, borderWidth: 1, borderColor: '#BAE6FD', backgroundColor: '#F0F9FF' },
+  amountChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  amountChipText: { color: '#1E3A8A', fontWeight: '900', fontSize: 12 },
+  amountChipTextActive: { color: '#FFFFFF' },
+  quickChipRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 7 },
+  waterChip: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 12, paddingVertical: 9, paddingHorizontal: 6 },
+  waterChipPressed: { backgroundColor: '#2563EB', borderColor: '#2563EB', transform: [{ scale: 0.96 }] },
+  waterChipText: { color: '#1E3A8A', fontWeight: '900', marginLeft: 4, fontSize: 12 },
+  waterChipTextPressed: { color: '#FFFFFF' },
+  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  presetChip: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#FFFFFF' },
+  presetChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  presetChipText: { color: '#334155', fontWeight: '800', fontSize: 13 },
+  presetChipTextActive: { color: '#FFFFFF' },
+  optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  optionChip: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', marginBottom: 8 },
+  optionChipSelected: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  optionChipDisabled: { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB', opacity: 0.65 },
+  optionChipText: { color: '#334155', fontSize: 13, fontWeight: '700' },
+  optionChipTextSelected: { color: '#FFFFFF' },
+  optionChipTextDisabled: { color: '#94A3B8' },
+  levelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 2 },
+  levelChip: { minWidth: 70, alignItems: 'center', paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', marginBottom: 8 },
   customRowAlt: { flexDirection: 'row', marginTop: 12 },
   inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8, color:'#0F172A' },
-  addBtnAlt: { backgroundColor:'#10B981', paddingHorizontal:16, justifyContent:'center', borderRadius:8 },
+  fullInputAlt: { backgroundColor:'#FFFFFF', borderRadius:10, borderWidth: 1, borderColor: '#CBD5E1', paddingHorizontal:12, paddingVertical: 11, color:'#0F172A', marginTop: 10 },
+  addBtnAlt: { backgroundColor:'#2563EB', paddingHorizontal:18, justifyContent:'center', borderRadius:10 },
   addBtnText: { color:'white', fontWeight:'800' },
+  notesInputAlt: { minHeight: 72, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, marginTop: 10, color:'#0F172A', textAlignVertical: 'top' },
 
   // Calendar styles
-  calendarCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:16, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
-  calendarHeader: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
-  navButton: { width:32, height:32, borderRadius:16, backgroundColor:'#F3F4F6', justifyContent:'center', alignItems:'center' },
-  calendarTitle: { fontSize:18, fontWeight:'700', color:'#1F2937' },
+  calendarCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:14, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
+  calendarHeader: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:12, gap: 10 },
+  navButton: { width:32, height:32, borderRadius:16, backgroundColor:'#EFF6FF', justifyContent:'center', alignItems:'center' },
+  calendarTitleWrap: { flex: 1, alignItems: 'center' },
+  calendarTitle: { fontSize:15, fontWeight:'900', color:'#1E3A8A' },
+  calendarToggle: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
+  calendarToggleText: { fontSize: 11, color: '#2563EB', fontWeight: '800' },
   calendarGrid: { marginBottom:16 },
+  weekStrip: { flexDirection:'row', gap: 6, marginBottom: 12 },
   dayHeaders: { flexDirection:'row', marginBottom:8 },
   dayHeader: { flex:1, textAlign:'center', fontSize:12, fontWeight:'600', color:'#6B7280', paddingVertical:8 },
   calendarDays: { flexDirection:'row', flexWrap:'wrap' },
-  calendarDay: { width:'14.28%', aspectRatio:1, justifyContent:'flex-start', alignItems:'center', borderRadius:8, marginBottom:4, position:'relative', paddingTop: 4 },
+  calendarDay: { width:'14.28%', aspectRatio:1, justifyContent:'center', alignItems:'center', borderRadius:8, marginBottom:4, position:'relative', paddingTop: 4, borderWidth: 1, borderColor: 'transparent' },
+  weekDay: { flex: 1, minHeight: 64, justifyContent:'center', alignItems:'center', borderRadius:12, position:'relative', backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E5E7EB' },
+  weekDayName: { fontSize: 10, color: '#64748B', fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' },
   calendarDayOtherMonth: { opacity:0.3 },
   calendarDayToday: { backgroundColor:'#EBF8FF', borderWidth:2, borderColor:'#3B82F6' },
-  calendarDaySelected: { backgroundColor:'#1D4ED8' },
+  calendarDaySelected: { backgroundColor:'#2563EB', borderColor: '#2563EB' },
   calendarDayText: { fontSize:14, fontWeight:'500', color:'#374151', marginBottom: 2 },
   calendarDayTextOtherMonth: { color:'#9CA3AF' },
   calendarDayTextToday: { color:'#1D4ED8', fontWeight:'700' },
   calendarDayTextSelected: { color:'white', fontWeight:'700' },
   blueDotIndicator: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#3B82F6', position: 'absolute', bottom: 4, alignSelf: 'center' },
-  selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:14, marginTop:10 },
-  selectedDayTitle: { fontSize:16, fontWeight:'600', color:'#1F2937', marginBottom:12 },
+  selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:12, marginTop:8 },
+  selectedDayTitle: { fontSize:15, fontWeight:'800', color:'#1F2937', marginBottom:10 },
   dayStats: { flexDirection:'row', justifyContent:'space-around', marginBottom: 16 },
+  daySummaryGrid: { flexDirection:'row', gap: 8, marginBottom: 12 },
+  daySummaryItem: { flex: 1, alignItems:'center', backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#DBEAFE', paddingVertical: 10, paddingHorizontal: 6 },
   statItem: { alignItems:'center' },
-  statValue: { fontSize:18, fontWeight:'700', color:'#1F2937', marginBottom:4 },
-  statLabel: { fontSize:12, color:'#6B7280', fontWeight:'500' },
+  statValue: { fontSize:16, fontWeight:'900', color:'#1F2937', marginTop: 4, marginBottom:2 },
+  statLabel: { fontSize:11, color:'#64748B', fontWeight:'800' },
   
   // Date-specific logs styles
   dateLogsContainer: { marginTop: 12, backgroundColor: '#F9FAFB', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E5E7EB' },
   dateLogsTitle: { fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  dateLogRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', marginBottom: 4 },
-  dateLogInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 8 },
-  dateLogTime: { fontSize: 12, color: '#6B7280', fontWeight: '600', minWidth: 55 },
-  dateLogAmount: { fontSize: 14, color: '#0F172A', fontWeight: '700' },
-  dateLogSource: { fontSize: 10, color: '#9CA3AF', fontStyle: 'italic', paddingLeft: 4 },
+  dateLogRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', marginBottom: 4 },
+  dateLogInfo: { flex: 1, minWidth: 0, paddingRight: 10 },
+  dateLogTime: { fontSize: 12, color: '#6B7280', fontWeight: '700', marginBottom: 2 },
+  dateLogAmount: { fontSize: 14, color: '#0F172A', fontWeight: '800', flexShrink: 0 },
+  dateLogSource: { fontSize: 12, color: '#475569', fontWeight: '700' },
   noLogsText: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
   
   // Recent entries with delete functionality
   recentEntriesTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 8 },
-  historyRowContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' },
-  historyRowLeft: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 8 },
-  deleteButton: { padding: 8, borderRadius: 8, backgroundColor: '#FEE2E2' },
+  historyRowContent: { flexDirection: 'row', alignItems: 'center', width: '100%' },
+  historyRowLeft: { flex: 1, minWidth: 0, paddingRight: 12 },
+  historyRight: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  deleteButton: { padding: 8, borderRadius: 8, backgroundColor: '#FEE2E2', flexShrink: 0 },
 
   chartRowAlt: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 12, height: 160, paddingHorizontal: 4 },
   chartBarContainer: { alignItems: 'center', flex: 1, minWidth: 32 },
@@ -1278,25 +1643,33 @@ const styles = StyleSheet.create({
   barAlt: { width: 20, backgroundColor: '#60A5FA', borderRadius: 4, marginBottom: 4 },
   barAmount: { fontSize: 9, color: '#374151', fontWeight: '600', textAlign: 'center', minHeight: 12 },
   barLabel: { fontSize: 10, color: '#6B7280', fontWeight: '500', textAlign: 'center' },
-  todayLabel: { color: '#10B981', fontWeight: '700' },
+  todayLabel: { color: '#2563EB', fontWeight: '700' },
   emptyChartContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 40 },
   emptySubText: { fontSize: 12, color: '#9CA3AF', marginTop: 4, textAlign: 'center' },
 
   historyRowAlt: { flexDirection: 'row', justifyContent:'space-between', paddingVertical:10, paddingHorizontal:8, borderRadius:8 },
   rowAltEven: { backgroundColor: '#FFFFFF' },
   rowAltOdd: { backgroundColor: '#F8FAFC' },
-  historyText: { color:'#475569' },
-  historyAmt: { fontWeight:'700', color:'#0F172A' },
+  historyText: { color:'#334155', fontWeight: '800', lineHeight: 18 },
+  historyMeta: { color:'#94A3B8', fontSize: 12, marginTop: 3, fontWeight: '700' },
+  historyAmt: { fontWeight:'900', color:'#0F172A', minWidth: 54, textAlign: 'right' },
   /* horizontal progress layout */
-  progressCardRow: { backgroundColor: 'white', borderRadius: 16, padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 10, elevation: 4 },
+  progressCardRow: { backgroundColor: 'white', borderRadius: 16, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 3 },
   progressCardLeft: { flex: 1, paddingRight: 12 },
-  progressCardRight: { width: 150, alignItems: 'flex-end' },
-  progressHeadline: { fontSize: 36, fontWeight: '900', color: '#0F172A' },
-  progressBarWrapper: { marginTop: 10, height: 8, borderRadius: 8, backgroundColor: 'transparent', overflow: 'hidden' },
+  progressCardRight: { width: 116, alignItems: 'center', backgroundColor: '#FFF7ED', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 8, borderWidth: 1, borderColor: '#FED7AA' },
+  progressHeaderLine: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  progressHeadline: { fontSize: 30, fontWeight: '900', color: '#0F172A' },
+  progressBarWrapper: { marginTop: 8, height: 7, borderRadius: 8, backgroundColor: 'transparent', overflow: 'hidden' },
   progressBarBg: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#F1F5F9', borderRadius: 8 },
   progressBarFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#60A5FA', borderRadius: 8 },
-  progressSubText: { marginTop: 10, color: '#6B7280', fontSize: 14, fontWeight:'500' },
-  motivationalText: { marginTop: 8, color: '#374151', fontSize: 13 },
+  progressSubText: { color: '#6B7280', fontSize: 13, fontWeight:'700' },
+  motivationalText: { marginTop: 7, color: '#374151', fontSize: 12, fontWeight: '600' },
+  missedPassiveCard: { width: 104, alignItems: 'center', backgroundColor: '#FFF7ED', borderRadius: 12, borderWidth: 1, borderColor: '#FED7AA', paddingVertical: 8, paddingHorizontal: 7 },
+  missedPassiveIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#FFEDD5', alignItems: 'center', justifyContent: 'center', marginBottom: 5 },
+  missedPassiveTextWrap: { flex: 1, minWidth: 0 },
+  missedMiniLabel: { fontSize: 10, color: '#334155', fontWeight: '700', textAlign: 'center' },
+  missedMiniHelper: { fontSize: 9, color: '#64748B', fontWeight: '600', textAlign: 'center', marginTop: 2, lineHeight: 12 },
+  missedMiniNumber: { fontSize: 18, color: '#C2410C', fontWeight: '900', marginTop: 2 },
   // Modal styles
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
   modalContent: { backgroundColor: 'white', borderRadius: 20, padding: 24, marginHorizontal: 20, maxWidth: 400, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 10 },

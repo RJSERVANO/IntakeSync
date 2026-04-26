@@ -27,15 +27,7 @@ export default function Login() {
   const cardTranslate = React.useRef(new Animated.Value(30)).current;
   const cardOpacity = React.useRef(new Animated.Value(0)).current;
 
-  const generatedRedirect = AuthSession.makeRedirectUri({ useProxy: true });
-  const proxyRedirect = 'https://auth.expo.io/@kboydev/app';
-  const redirectUri =
-    generatedRedirect && generatedRedirect.startsWith('exp://')
-      ? proxyRedirect
-      : generatedRedirect;
-  console.log('AuthSession generated redirect:', generatedRedirect);
-  console.log('AuthSession using effective redirectUri:', redirectUri);
-  console.log('AuthSession redirectUri:', redirectUri);
+  const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
   const clientId =
     '237625744653-f08o97b5d90esl7je4pie2hephi1t32e.apps.googleusercontent.com';
   const scopes = ['openid', 'email', 'profile'];

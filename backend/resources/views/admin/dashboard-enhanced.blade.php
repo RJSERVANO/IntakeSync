@@ -10,7 +10,7 @@
         <div class="flex items-center justify-between mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900">Dashboard</h1>
-                <p class="text-slate-500 mt-2">Welcome back! Here's your AQUATAB performance overview.</p>
+                <p class="text-slate-500 mt-2">Welcome back! Here's your IntakeSync performance overview.</p>
             </div>
             <div class="flex gap-3">
                 <button onclick="location.href='{{ route('admin.hydration.index') }}'" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition font-medium text-sm">

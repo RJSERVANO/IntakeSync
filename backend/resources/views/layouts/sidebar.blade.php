@@ -7,7 +7,7 @@
                 A
             </div>
             <div>
-                <h1 class="text-lg font-bold text-white tracking-tight">AQUATAB</h1>
+                <h1 class="text-lg font-bold text-white tracking-tight">IntakeSync</h1>
                 <p class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Admin Panel</p>
             </div>
         </div>
@@ -52,9 +52,9 @@
            {{ request()->is('admin/hydration*') ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}"
             title="Hydration">
             <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3C12 3 6 10 6 14a6 6 0 0012 0c0-4-6-11-6-11z" />
             </svg>
-            <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Hydration</span>
+            <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Beverages</span>
         </a>
 
         <a href="{{ route('admin.medication.index') }}"
@@ -62,7 +62,7 @@
            {{ request()->is('admin/medication*') ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}"
             title="Medication">
             <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z" />
             </svg>
             <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Medication</span>
         </a>
@@ -72,7 +72,7 @@
            {{ request()->is('admin/notifications*') ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}"
             title="Notifications">
             <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0H9m6 0v1a3 3 0 11-6 0v-1" />
             </svg>
             <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Notifications</span>
         </a>
@@ -123,7 +123,7 @@
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white text-lg shadow-lg">A</div>
                                 <div>
-                                    <h2 class="text-lg font-bold text-white tracking-tight">AQUATAB</h2>
+                                    <h2 class="text-lg font-bold text-white tracking-tight">IntakeSync</h2>
                                     <p class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Admin Panel</p>
                                 </div>
                             </div>

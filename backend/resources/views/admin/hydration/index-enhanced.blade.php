@@ -8,8 +8,8 @@
         <!-- Page Header -->
         <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
             <div>
-                <h1 class="text-3xl font-bold text-slate-900">Hydration Management</h1>
-                <p class="text-slate-500 mt-2">Monitor user hydration goals and daily water intake with actionable insights</p>
+                <h1 class="text-3xl font-bold text-slate-900">Beverage Management</h1>
+                <p class="text-slate-500 mt-2">Monitor user beverage goals and daily water intake with actionable insights</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
                 <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">

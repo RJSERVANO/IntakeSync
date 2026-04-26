@@ -13,6 +13,15 @@ use App\Models\User;
 
 class HydrationController
 {
+    protected array $validBeverageTypes = [
+        'water',
+        'sugar_sweetened',
+        'caffeinated',
+        'other_non_alcoholic',
+    ];
+
+    protected array $validLevels = ['none', 'low', 'medium', 'high'];
+
     protected function storagePath($userId)
     {
         return "hydration/{$userId}.json";
@@ -38,6 +47,41 @@ class HydrationController
     {
         $path = $this->storagePath($userId);
         Storage::put($path, json_encode($data, JSON_PRETTY_PRINT));
+    }
+
+    protected function normalizeBeverageType($value)
+    {
+        $type = is_string($value) ? $value : 'water';
+        return in_array($type, $this->validBeverageTypes, true) ? $type : 'water';
+    }
+
+    protected function normalizeLevel($value)
+    {
+        $level = is_string($value) ? strtolower($value) : 'none';
+        return in_array($level, $this->validLevels, true) ? $level : 'none';
+    }
+
+    protected function normalizeNotes($value)
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $notes = trim($value);
+        return $notes === '' ? null : substr($notes, 0, 500);
+    }
+
+    protected function entryResponse($entry)
+    {
+        return [
+            'amount_ml' => (int)$entry->amount_ml,
+            'timestamp' => $entry->created_at,
+            'source' => $entry->source ?? 'manual',
+            'beverage_type' => $entry->beverage_type ?? 'water',
+            'sugar_level' => $entry->sugar_level ?? 'none',
+            'caffeine_level' => $entry->caffeine_level ?? 'none',
+            'notes' => $entry->notes,
+        ];
     }
 
     /**
@@ -140,11 +184,7 @@ class HydrationController
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($e) {
-                    return [
-                        'amount_ml' => (int)$e->amount_ml,
-                        'timestamp' => $e->created_at,
-                        'source' => $e->source ?? 'manual'
-                    ];
+                    return $this->entryResponse($e);
                 })
                 ->toArray();
             $file = $this->readData($user->id);
@@ -182,7 +222,7 @@ class HydrationController
     }
 
     // POST /api/hydration
-    // body: { amount_ml: number, source?: string }
+    // body: { amount_ml: number, source?: string, beverage_type?: string, sugar_level?: string, caffeine_level?: string, notes?: string }
     public function add(Request $request)
     {
         $user = $request->user();
@@ -201,16 +241,40 @@ class HydrationController
         if (!in_array($source, $validSources)) {
             $source = 'manual';
         }
+
+        $beverageType = $this->normalizeBeverageType($request->input('beverage_type', 'water'));
+        $sugarLevel = $this->normalizeLevel($request->input('sugar_level', 'none'));
+        $caffeineLevel = $this->normalizeLevel($request->input('caffeine_level', 'none'));
+        $notes = $this->normalizeNotes($request->input('notes'));
+
+        if ($beverageType === 'water') {
+            $sugarLevel = 'none';
+            $caffeineLevel = 'none';
+        }
+
         if (class_exists(HydrationEntry::class)) {
-            $e = HydrationEntry::create(['user_id' => $user->id, 'amount_ml' => $amount, 'source' => $source, 'created_at' => now()]);
+            $e = HydrationEntry::create([
+                'user_id' => $user->id,
+                'amount_ml' => $amount,
+                'source' => $source,
+                'beverage_type' => $beverageType,
+                'sugar_level' => $sugarLevel,
+                'caffeine_level' => $caffeineLevel,
+                'notes' => $notes,
+                'created_at' => now(),
+            ]);
             Log::debug('Hydration add (db)', ['user' => $user->id, 'entry_id' => $e->id]);
-            return response()->json(['amount_ml' => (int)$e->amount_ml, 'timestamp' => $e->created_at, 'source' => $e->source], 201);
+            return response()->json($this->entryResponse($e), 201);
         }
         $data = $this->readData($user->id);
         $entry = [
             'amount_ml' => $amount,
             'timestamp' => now()->toDateTimeString(),
             'source' => $source,
+            'beverage_type' => $beverageType,
+            'sugar_level' => $sugarLevel,
+            'caffeine_level' => $caffeineLevel,
+            'notes' => $notes,
         ];
         $data['entries'][] = $entry;
         $this->writeData($user->id, $data);
@@ -322,14 +386,17 @@ class HydrationController
                 ->orderBy('created_at', 'desc')
                 ->get();
             foreach ($dbEntries as $e) {
-                $entries[] = [
-                    'amount_ml' => (int)$e->amount_ml,
-                    'timestamp' => $e->created_at,
-                    'source' => $e->source ?? 'manual'
-                ];
+                $entries[] = $this->entryResponse($e);
             }
         } else {
-            $entries = $file['entries'] ?? [];
+            $entries = array_map(function ($entry) {
+                return array_merge([
+                    'beverage_type' => 'water',
+                    'sugar_level' => 'none',
+                    'caffeine_level' => 'none',
+                    'notes' => null,
+                ], $entry);
+            }, $file['entries'] ?? []);
         }
 
         // Group entries by date

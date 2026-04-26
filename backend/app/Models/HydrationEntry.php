@@ -9,7 +9,16 @@ class HydrationEntry extends Model
 {
     use HasFactory;
     protected $table = 'hydration_entries';
-    protected $fillable = ['user_id', 'amount_ml', 'source', 'created_at'];
+    protected $fillable = [
+        'user_id',
+        'amount_ml',
+        'source',
+        'beverage_type',
+        'sugar_level',
+        'caffeine_level',
+        'notes',
+        'created_at',
+    ];
     public $timestamps = false;
 
     public function user()
