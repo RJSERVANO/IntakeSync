@@ -43,7 +43,6 @@
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Name</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Email</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Role</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Subscription</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Joined</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
                         </tr>
@@ -51,9 +50,7 @@
                     <tbody class="divide-y divide-slate-100">
                         @forelse ($users as $user)
                         @php
-                        $activeSubscription = $user->subscriptions()->where('status', 'active')->with('plan')->first();
                         $roleClass = $user->role === 'admin' ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-700';
-                        $subscriptionClass = ($activeSubscription && $activeSubscription->isActive()) ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-700';
                         @endphp
                         <tr class="hover:bg-slate-50 transition-colors">
                             <td class="px-6 py-4 text-sm font-medium text-slate-900">
@@ -65,19 +62,6 @@
                                     <span class="w-2 h-2 rounded-full {{ $user->role === 'admin' ? 'bg-blue-400' : 'bg-slate-400' }}"></span>
                                     {{ ucfirst($user->role) }}
                                 </span>
-                            </td>
-                            <td class="px-6 py-4 text-sm">
-                                @if($activeSubscription && $activeSubscription->isActive())
-                                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700">
-                                    <span class="w-2 h-2 rounded-full bg-green-400"></span>
-                                    {{ $activeSubscription->plan->name }}
-                                </span>
-                                @else
-                                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                                    <span class="w-2 h-2 rounded-full bg-slate-400"></span>
-                                    Free
-                                </span>
-                                @endif
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-600">{{ $user->created_at->format('M j, Y') }}</td>
                             <td class="px-6 py-4 text-sm">

@@ -1,13 +1,11 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import BottomNavigation from './components/navigation/BottomNavigation';
-import PremiumLockModal from './components/PremiumLockModal';
 
 const { width } = Dimensions.get('window');
 
@@ -43,11 +41,6 @@ export default function Home() {
     medicationsTotal: 0
   });
   const [menuVisible, setMenuVisible] = useState(false);
-  const [subscription, setSubscription] = useState<any>(null);
-  const [premiumPopupVisible, setPremiumPopupVisible] = useState(false);
-  const [premiumLockVisible, setPremiumLockVisible] = useState(false);
-  const [premiumCongratsVisible, setPremiumCongratsVisible] = useState(false);
-  const [plusCongratsVisible, setPlusCongratsVisible] = useState(false);
   const [weeklyReportExpanded, setWeeklyReportExpanded] = useState(false);
   const [weeklyReport, setWeeklyReport] = useState<any>(null);
   const [patterns, setPatterns] = useState<any[]>([]);
@@ -58,27 +51,6 @@ export default function Home() {
   const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
   const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
-  const premiumCongratsShownRef = useRef(false);
-  const plusCongratsShownRef = useRef(false);
-
-  // Plan / tier helpers
-  const planSlug = subscription?.plan_slug?.toLowerCase?.();
-  const isPlus = planSlug?.includes('plus');
-  const isPremium = planSlug === 'premium';
-  const isFree = !isPlus && !isPremium;
-
-  const getTierTheme = (slug?: string) => {
-    const normalized = slug?.toLowerCase?.() || '';
-    if (normalized === 'premium') {
-      return { color: '#F59E0B', icon: 'trophy' as const, label: 'Premium' };
-    }
-    if (normalized.includes('plus')) {
-      return { color: '#60A5FA', icon: 'star' as const, label: 'PLUS+' };
-    }
-    return { color: '#9CA3AF', icon: 'ellipse-outline' as const, label: 'Free' };
-  };
-
-  const tierTheme = getTierTheme(subscription?.plan_slug);
   const insightsScore = weeklyReport?.overall_score ?? 0;
 
   // Enable layout animation on Android for smooth collapses
@@ -175,20 +147,6 @@ export default function Home() {
           // For other errors, continue to show UI with default data
         }
         
-        const refreshSubscription = async () => {
-          try {
-            const subscriptionData: any = await Promise.race([
-              api.get('/subscription/current', token as string, 3000),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
-            ]);
-            setSubscription(subscriptionData);
-          } catch (subErr) {
-            console.log('Error loading subscription (non-critical):', subErr);
-            // Keep previous subscription value to avoid locking premium by mistake
-            setSubscription((prev: any) => prev || { plan_slug: 'free', is_active: false });
-          }
-        };
-
         // Load other data in background (non-blocking, won't affect loading state)
         // These run after loading is already set to false
         setTimeout(() => {
@@ -235,9 +193,6 @@ export default function Home() {
             .catch(() => {
               setTimeline([]);
             });
-
-          // Load subscription status (non-blocking, with timeout)
-          refreshSubscription();
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
         console.log('Home load error:', err);
@@ -259,9 +214,9 @@ export default function Home() {
     };
   }, [token, router]);
 
-  // Load Smart Insights when subscription is available (non-blocking)
+  // Load Smart Insights for every logged-in user (non-blocking)
   useEffect(() => {
-    if ((isPremium || isPlus) && token) {
+    if (token) {
       const loadInsights = async () => {
         try {
           // Use Promise.allSettled to prevent one failing from blocking others
@@ -285,52 +240,8 @@ export default function Home() {
         }
       };
       loadInsights();
-    } else {
-      // Clear insights if not premium
-      setWeeklyReport(null);
-      setPatterns([]);
-      setSnoozeSuggestions([]);
     }
-  }, [isPremium, isPlus, token]);
-
-  // One-time premium congratulations popup when user becomes premium (persistent with AsyncStorage)
-  useEffect(() => {
-    const checkAndShowPremiumPopup = async () => {
-      if (isPremium && !premiumCongratsShownRef.current) {
-        try {
-          const hasSeenPopup = await AsyncStorage.getItem('hasSeenPremiumPopup');
-          if (!hasSeenPopup) {
-            premiumCongratsShownRef.current = true;
-            setPremiumCongratsVisible(true);
-            // Mark as seen
-            await AsyncStorage.setItem('hasSeenPremiumPopup', 'true');
-          }
-        } catch (err) {
-          console.log('Error checking premium popup flag:', err);
-        }
-      }
-    };
-    checkAndShowPremiumPopup();
-  }, [isPremium]);
-
-  // One-time PLUS+ congratulations popup when user becomes PLUS (persistent with AsyncStorage)
-  useEffect(() => {
-    const checkAndShowPlusPopup = async () => {
-      if (isPlus && !plusCongratsShownRef.current) {
-        try {
-          const hasSeenPlus = await AsyncStorage.getItem('hasSeenPlusCongrats');
-          if (!hasSeenPlus) {
-            plusCongratsShownRef.current = true;
-            setPlusCongratsVisible(true);
-            await AsyncStorage.setItem('hasSeenPlusCongrats', 'true');
-          }
-        } catch (err) {
-          console.log('Error checking plus popup flag:', err);
-        }
-      }
-    };
-    checkAndShowPlusPopup();
-  }, [isPlus]);
+  }, [token]);
 
   // Real-time hydration data refresh when screen comes into focus
   useFocusEffect(
@@ -339,10 +250,9 @@ export default function Home() {
 
       const refreshHydrationData = async () => {
         try {
-          const [hydrationRes, statsRes, subscriptionRes] = await Promise.all([
+          const [hydrationRes, statsRes] = await Promise.all([
             api.get('/hydration', token as string, 3000).catch(() => null),
             api.get('/medications/stats', token as string, 3000).catch(() => null),
-            api.get('/subscription/current', token as string, 3000).catch(() => null),
           ]);
           
           if (hydrationRes) {
@@ -363,10 +273,6 @@ export default function Home() {
               medicationsTaken,
               medicationsTotal
             }));
-          }
-
-          if (subscriptionRes) {
-            setSubscription(subscriptionRes);
           }
         } catch (err) {
           console.log('Data refresh error', err);
@@ -450,11 +356,7 @@ export default function Home() {
   };
 
   const handleInsightsPress = () => {
-    if (isPremium) {
-      router.push({ pathname: '/insights', params: { token } } as any);
-    } else {
-      setPremiumPopupVisible(true);
-    }
+    router.push({ pathname: '/insights', params: { token } } as any);
   };
 
   const menuItems = [
@@ -497,18 +399,6 @@ export default function Home() {
           <View style={styles.welcomeSection}>
           <View style={styles.welcomeRow}>
             <Text style={styles.welcomeText}>Hi, {displayName}</Text>
-            {isPremium && (
-              <View style={[styles.tierBadge, { backgroundColor: '#FEF3C7', borderColor: tierTheme.color }]}>
-                <Ionicons name={tierTheme.icon} size={16} color={tierTheme.color} style={{ marginRight: 6 }} />
-                <Text style={[styles.tierBadgeText, { color: '#92400E' }]}>{tierTheme.label}</Text>
-              </View>
-            )}
-            {isPlus && !isPremium && (
-              <View style={[styles.tierBadge, { backgroundColor: '#EFF6FF', borderColor: tierTheme.color }]}>
-                <Ionicons name={tierTheme.icon} size={16} color={tierTheme.color} style={{ marginRight: 6 }} />
-                <Text style={[styles.tierBadgeText, { color: '#1E3A8A' }]}>{tierTheme.label}</Text>
-              </View>
-            )}
           </View>
           <View>
             <View style={styles.searchContainer}>
@@ -601,41 +491,8 @@ export default function Home() {
           </View>
           </View>
 
-          {/* Upsell Banner */}
-          {isPlus && (
-            <TouchableOpacity 
-              style={styles.plusBadge}
-              onPress={() => setPremiumPopupVisible(true)}
-            >
-              <View style={styles.premiumBadgeContent}>
-                <Ionicons name="star" size={20} color="#2563EB" />
-                <View style={styles.premiumBadgeText}>
-                  <Text style={[styles.premiumBadgeTitle, { color: '#1E3A8A' }]}>Upgrade to Premium</Text>
-                  <Text style={[styles.premiumBadgeSubtitle, { color: '#1F2937' }]}>Get Smart Insights & AI Analysis</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#2563EB" />
-              </View>
-            </TouchableOpacity>
-          )}
-
-          {isFree && (
-            <TouchableOpacity 
-              style={styles.premiumBadge}
-              onPress={() => setPremiumPopupVisible(true)}
-            >
-              <View style={styles.premiumBadgeContent}>
-                <Ionicons name="star" size={20} color="#F59E0B" />
-                <View style={styles.premiumBadgeText}>
-                  <Text style={styles.premiumBadgeTitle}>Unlock Premium</Text>
-                  <Text style={styles.premiumBadgeSubtitle}>Get unlimited features • ₱149/month</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-              </View>
-            </TouchableOpacity>
-          )}
-
-          {/* Weekly Report Card - Premium Feature */}
-          {isPremium && weeklyReport && (
+          {/* Weekly Report Card */}
+          {weeklyReport && (
             <View style={styles.weeklyReportCard}>
               <TouchableOpacity
                 activeOpacity={0.8}
@@ -681,8 +538,8 @@ export default function Home() {
             </View>
           )}
 
-          {/* Snooze Suggestions - Premium Feature */}
-          {isPremium && snoozeSuggestions.length > 0 && (
+          {/* Snooze Suggestions */}
+          {snoozeSuggestions.length > 0 && (
             <View style={styles.snoozeCard}>
             <View style={styles.snoozeHeader}>
               <Ionicons name="time" size={24} color="#10B981" />
@@ -831,36 +688,15 @@ export default function Home() {
               <View>
                 <Text style={styles.summaryCardTitle}>Smart Insights</Text>
                 <Text style={styles.summaryCardSubtitle}>
-                  {isPremium || isPlus
-                    ? `Weekly Adherence: ${insightsScore}%`
-                    : 'Unlock to see patterns'}
+                  {`Weekly Adherence: ${insightsScore}%`}
                 </Text>
               </View>
-              {(isPremium || isPlus) ? (
-                <Ionicons name="analytics" size={32} color="#F59E0B" />
-              ) : (
-                <Ionicons name="lock-closed" size={32} color="#F59E0B" />
-              )}
+              <Ionicons name="analytics" size={32} color="#F59E0B" />
             </View>
 
-            {(isPremium || isPlus) && weeklyReport && (
+            {weeklyReport && (
               <View style={styles.progressBarContainer}>
                 <View style={[styles.progressBar, { width: `${Math.min(insightsScore, 100)}%`, backgroundColor: '#F59E0B' }]} />
-              </View>
-            )}
-
-            {isPlus && (
-              <View style={styles.insightsTeaserContainer}>
-                <TouchableOpacity 
-                  style={styles.insightsTeaserButton}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    setPremiumPopupVisible(true);
-                  }}
-                >
-                  <Ionicons name="lock-closed" size={14} color="#F59E0B" style={{ marginRight: 6 }} />
-                  <Text style={styles.insightsTeaserButtonText}>Unlock AI Analysis</Text>
-                </TouchableOpacity>
               </View>
             )}
           </TouchableOpacity>
@@ -906,114 +742,6 @@ export default function Home() {
             ))}
           </View>
         </TouchableOpacity>
-      </Modal>
-
-      {/* Premium Popup Modal */}
-      <Modal
-        visible={premiumPopupVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPremiumPopupVisible(false)}
-      >
-        <View style={styles.premiumPopupOverlay}>
-          <View style={styles.premiumPopupContent}>
-            <View style={styles.premiumPopupHeader}>
-              <Ionicons name="star" size={32} color="#F59E0B" />
-              <Text style={styles.premiumPopupTitle}>Unlock Premium Features</Text>
-              <Text style={styles.premiumPopupPrice}>₱149 / month</Text>
-            </View>
-            
-            <View style={styles.premiumFeaturesList}>
-              <View style={styles.premiumFeatureItem}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <Text style={styles.premiumFeatureText}>Unlimited medication tracking</Text>
-              </View>
-              <View style={styles.premiumFeatureItem}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <Text style={styles.premiumFeatureText}>Data export (PDF & CSV)</Text>
-              </View>
-              <View style={styles.premiumFeatureItem}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <Text style={styles.premiumFeatureText}>Smart insights & recommendations</Text>
-              </View>
-              <View style={styles.premiumFeatureItem}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <Text style={styles.premiumFeatureText}>Priority customer support</Text>
-              </View>
-              <View style={styles.premiumFeatureItem}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <Text style={styles.premiumFeatureText}>Advanced scheduling options</Text>
-              </View>
-            </View>
-
-            <View style={styles.premiumPopupActions}>
-              <TouchableOpacity 
-                style={styles.premiumPopupButton}
-                onPress={() => {
-                  setPremiumPopupVisible(false);
-                  router.push({ pathname: '/components/pages/subscription/Subscription', params: { token } } as any);
-                }}
-              >
-                <Text style={styles.premiumPopupButtonText}>View Plans</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.premiumPopupCloseButton}
-                onPress={() => setPremiumPopupVisible(false)}
-              >
-                <Text style={styles.premiumPopupCloseText}>Maybe Later</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-      {/* Premium Congratulations Modal */}
-      <Modal
-        visible={premiumCongratsVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPremiumCongratsVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.premiumCongratsContent}>
-            <Ionicons name="star" size={40} color="#F59E0B" />
-            <Text style={styles.premiumCongratsTitle}>Welcome to Premium!</Text>
-            <Text style={styles.premiumCongratsBody}>
-              You now have full access to all premium features. Enjoy smarter insights, unlimited tracking, and priority support.
-            </Text>
-            <TouchableOpacity style={styles.premiumCongratsButton} onPress={() => setPremiumCongratsVisible(false)}>
-              <Text style={styles.premiumCongratsButtonText}>Awesome</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* PLUS Congratulations Modal */}
-      <Modal
-        visible={plusCongratsVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPlusCongratsVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.plusCongratsContent}>
-            <Ionicons name="star" size={40} color="#2563EB" />
-            <Text style={styles.plusCongratsTitle}>Welcome to PLUS+</Text>
-            <Text style={styles.plusCongratsBody}>
-              Enjoy enhanced reminders, offline access, and extended history. You are one step away from full Premium insights.
-            </Text>
-            <View style={styles.plusFeatureList}>
-              {['Unlimited Reminders', 'Offline Access', 'Extended History'].map((feature) => (
-                <View key={feature} style={styles.plusFeatureItem}>
-                  <Ionicons name="checkmark-circle" size={20} color="#2563EB" />
-                  <Text style={styles.plusFeatureText}>{feature}</Text>
-                </View>
-              ))}
-            </View>
-            <TouchableOpacity style={styles.plusCongratsButton} onPress={() => setPlusCongratsVisible(false)}>
-              <Text style={styles.plusCongratsButtonText}>Got it</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
 
       {/* Goal Completion Modal */}
@@ -1098,14 +826,6 @@ export default function Home() {
           </View>
         </View>
       </Modal>
-
-      {/* Premium Lock Modal */}
-      <PremiumLockModal
-        visible={premiumLockVisible}
-        onClose={() => setPremiumLockVisible(false)}
-        featureName="Smart Insights"
-        token={token as string}
-      />
 
     </SafeAreaView>
   );

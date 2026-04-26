@@ -133,14 +133,6 @@
                             Health
                         </span>
                     </button>
-                    <button onclick="showTab(event, 'subscription')" id="subscription-tab" role="tab" aria-selected="false" class="tab-button px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:border-slate-300 hover:text-slate-900 transition-colors whitespace-nowrap">
-                        <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V7a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                            </svg>
-                            Subscription
-                        </span>
-                    </button>
                     <button onclick="showTab(event, 'activity')" id="activity-tab" role="tab" aria-selected="false" class="tab-button px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:border-slate-300 hover:text-slate-900 transition-colors whitespace-nowrap">
                         <span class="flex items-center gap-2">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -397,6 +389,7 @@
             </div>
 
             <!-- Subscription Tab -->
+            @if(false)
             <div id="subscription-tab-content" class="tab-content hidden p-8">
                 <div class="space-y-6">
                     <h3 class="text-lg font-semibold text-slate-900 mb-6">Subscription Management</h3>
@@ -537,6 +530,7 @@
                     @endif
                 </div>
             </div>
+            @endif
 
             <!-- Activity Log Tab -->
             <div id="activity-tab-content" class="tab-content hidden p-8">

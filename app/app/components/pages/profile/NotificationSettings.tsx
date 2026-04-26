@@ -1,11 +1,10 @@
 /**
  * NotificationSettings.tsx
- * Subscription-aware notification preferences with premium gating.
+ * Notification preferences.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
@@ -17,7 +16,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import api from '../../../api';
 
 const HEALTH_TIPS = [
   {
@@ -58,18 +56,11 @@ const HEALTH_TIPS = [
   },
 ];
 
-interface Subscription {
-  plan_slug: 'free' | 'plus' | 'premium';
-  is_active: boolean;
-}
-
 export default function NotificationSettings() {
   const router = useRouter();
   const { token } = useLocalSearchParams();
-  const authToken = Array.isArray(token) ? token[0] : token;
+  void token;
 
-  const [loading, setLoading] = useState(true);
-  const [subscription, setSubscription] = useState<Subscription | null>(null);
 
   const [masterToggle, setMasterToggle] = useState(true);
   const [medicationReminders, setMedicationReminders] = useState(true);
@@ -81,26 +72,6 @@ export default function NotificationSettings() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
-  useEffect(() => {
-    const fetchSubscription = async () => {
-      try {
-        setLoading(true);
-        const sub = await api.get('/subscription/current', authToken as string, 3000);
-        setSubscription(sub || { plan_slug: 'free', is_active: false });
-      } catch (error) {
-        console.error('Error fetching subscription:', error);
-        setSubscription({ plan_slug: 'free', is_active: false });
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchSubscription();
-  }, [authToken]);
-
-  const isPremium = subscription?.plan_slug === 'premium';
-  const isPlusOrPremium = subscription?.plan_slug === 'plus' || subscription?.plan_slug === 'premium';
-
   const handleMasterToggle = (value: boolean) => {
     setMasterToggle(value);
     if (!value && healthTips) {
@@ -109,39 +80,12 @@ export default function NotificationSettings() {
   };
 
   const handleHealthTipsToggle = (value: boolean) => {
-    if (!isPremium && value) {
-      Alert.alert(
-        'Premium Feature',
-        'Unlock Premium to enable Smart Health Tips with personalized medication and hydration insights.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
     setHealthTips(value);
   };
 
   const handleRingtonePress = () => {
-    if (!isPlusOrPremium) {
-      Alert.alert(
-        'Plus Feature',
-        'Upgrade to Plus or Premium to customize notification sounds with custom ringtones.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
     Alert.alert('Ringtone', 'Custom ringtone picker coming soon!');
   };
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#1E3A8A" />
-          <Text style={styles.loadingText}>Loading settings...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -249,15 +193,9 @@ export default function NotificationSettings() {
                 </View>
                 <View style={styles.settingContent}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={[styles.settingTitle, (!masterToggle || !isPremium) && styles.disabledText]}>Smart Health Tips</Text>
-                    {!isPremium && (
-                      <View style={styles.premiumBadge}>
-                        <Ionicons name="star" size={10} color="#FFFFFF" />
-                        <Text style={styles.premiumBadgeText}>Premium</Text>
-                      </View>
-                    )}
+                    <Text style={[styles.settingTitle, !masterToggle && styles.disabledText]}>Smart Health Tips</Text>
                   </View>
-                  <Text style={[styles.settingDescription, styles.tipsAccentText, (!masterToggle || !isPremium) && styles.disabledText]}>
+                  <Text style={[styles.settingDescription, styles.tipsAccentText, !masterToggle && styles.disabledText]}>
                     Personalized wellness tips based on your meds and hydration
                   </Text>
                 </View>
@@ -337,7 +275,7 @@ export default function NotificationSettings() {
             </View>
 
             <TouchableOpacity
-              style={[styles.settingCard, styles.ringtoneAccentCard, (!masterToggle || !isPlusOrPremium) && styles.disabledCard]}
+              style={[styles.settingCard, styles.ringtoneAccentCard, !masterToggle && styles.disabledCard]}
               onPress={handleRingtonePress}
               disabled={!masterToggle}
             >
@@ -347,30 +285,20 @@ export default function NotificationSettings() {
                 </View>
                 <View style={styles.settingContent}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={[styles.settingTitle, (!masterToggle || !isPlusOrPremium) && styles.disabledText]}>
+                    <Text style={[styles.settingTitle, !masterToggle && styles.disabledText]}>
                       Ringtone
                     </Text>
-                    {!isPlusOrPremium && (
-                      <View style={[styles.premiumBadge, { backgroundColor: '#3B82F6' }]}>
-                        <Ionicons name="star" size={10} color="#FFFFFF" />
-                        <Text style={styles.premiumBadgeText}>Plus</Text>
-                      </View>
-                    )}
                   </View>
-                  <Text style={[styles.settingDescription, styles.ringtoneAccentText, (!masterToggle || !isPlusOrPremium) && styles.disabledText]}>
-                    {isPlusOrPremium ? 'Default tone · tap to change' : 'Upgrade to customize notification sounds'}
+                  <Text style={[styles.settingDescription, styles.ringtoneAccentText, !masterToggle && styles.disabledText]}>
+                    Default tone · tap to change
                   </Text>
                 </View>
-                {isPlusOrPremium ? (
-                  <Ionicons name="chevron-forward" size={20} color={masterToggle ? '#9CA3AF' : '#D1D5DB'} />
-                ) : (
-                  <Ionicons name="lock-closed" size={20} color="#F59E0B" />
-                )}
+                <Ionicons name="chevron-forward" size={20} color={masterToggle ? '#9CA3AF' : '#D1D5DB'} />
               </View>
             </TouchableOpacity>
           </View>
 
-          {healthTips && isPremium && masterToggle && (
+          {healthTips && masterToggle && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Sample Health Tips</Text>
               <Text style={styles.sectionSubtitle}>You'll receive tips like these periodically:</Text>

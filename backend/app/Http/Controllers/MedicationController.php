@@ -34,20 +34,6 @@ class MedicationController extends Controller
             'color' => 'nullable|string|max:7',
         ]);
 
-        // Check subscription limits
-        $plan = $user->currentSubscriptionPlan;
-        if ($plan && $plan->max_medications !== null) {
-            $currentCount = Medication::where('user_id', $user->id)->count();
-            if ($currentCount >= $plan->max_medications) {
-                return response()->json([
-                    'message' => "You've reached the medication limit for your plan ({$plan->max_medications} medications). Upgrade to Premium for unlimited medications.",
-                    'limit_reached' => true,
-                    'current_limit' => $plan->max_medications,
-                    'plan_name' => $plan->name,
-                ], 403);
-            }
-        }
-
         $data['user_id'] = $user->id;
 
         // Set default values
@@ -433,14 +419,6 @@ class MedicationController extends Controller
     {
         $user = $request->user();
 
-        // Check if user has data_export feature
-        if (!$user->canAccessFeature('data_export')) {
-            return response()->json([
-                'message' => 'Data export is only available for Premium subscribers. Please upgrade to export your medication history.',
-                'requires_premium' => true,
-            ], 403);
-        }
-
         $medications = Medication::where('user_id', $user->id)->with('history')->get();
 
         $csvData = [];
@@ -485,14 +463,6 @@ class MedicationController extends Controller
     public function exportPdf(Request $request)
     {
         $user = $request->user();
-
-        // Check if user has data_export feature
-        if (!$user->canAccessFeature('data_export')) {
-            return response()->json([
-                'message' => 'Data export is only available for Premium subscribers. Please upgrade to export your medication history.',
-                'requires_premium' => true,
-            ], 403);
-        }
 
         $medications = Medication::where('user_id', $user->id)->with('history')->get();
 

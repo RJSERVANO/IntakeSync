@@ -38,13 +38,6 @@ export default function Profile() {
       action: () => router.push({ pathname: '/components/pages/profile/PrivacySecurity', params: { token } } as any)
     },
     {
-      id: 5,
-      title: 'Premium Subscription',
-      subtitle: 'Unlock more features',
-      icon: 'star-outline',
-      action: () => router.push({ pathname: '/components/pages/profile/Premium', params: { token } } as any)
-    },
-    {
       id: 6,
       title: 'Settings',
       subtitle: 'App preferences and configurations',
@@ -67,16 +60,6 @@ export default function Profile() {
   const getInitials = (name: string = '') => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
   };
-
-  const getTierTheme = (slug?: string) => {
-    const normalized = slug?.toLowerCase?.() || '';
-    if (normalized === 'premium') return { color: '#F59E0B', borderWidth: 4 };
-    if (normalized.includes('plus')) return { color: '#60A5FA', borderWidth: 4 };
-    return { color: '#E5E7EB', borderWidth: 0 };
-  };
-
-  const planSlug = (user as any)?.subscription?.plan_slug;
-  const tierTheme = getTierTheme(planSlug);
 
   if (loading) {
     return (
@@ -117,7 +100,7 @@ export default function Profile() {
         {/* Profile Header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
-            <View style={[styles.avatar, { borderColor: tierTheme.color, borderWidth: tierTheme.borderWidth }]}>
+            <View style={styles.avatar}>
               <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
             </View>
             <TouchableOpacity style={styles.cameraButton} onPress={() => setEditVisible(true)}>

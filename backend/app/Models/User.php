@@ -140,22 +140,6 @@ class User extends Authenticatable
 
     public function canAccessFeature(string $feature): bool
     {
-        $plan = $this->currentSubscriptionPlan;
-        if (!$plan) {
-            return false; // Default to free plan
-        }
-
-        return match ($feature) {
-            'unlimited_medications' => $plan->max_medications === null,
-            'unlimited_hydration' => $plan->max_hydration_entries === null,
-            'advanced_scheduling' => $plan->advanced_scheduling,
-            'data_export' => $plan->data_export,
-            'priority_support' => $plan->priority_support,
-            'smart_insights' => $plan->smart_insights,
-            'offline_reminders' => $plan->offline_reminders,
-            'personalized_notifications' => $plan->personalized_notifications,
-            'health_stats' => $plan->health_stats,
-            default => false,
-        };
+        return true;
     }
 }

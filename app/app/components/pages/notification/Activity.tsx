@@ -2,7 +2,7 @@
  * Activity Tab - Advanced Analytics & History
  * ==========================================
  * Displays comprehensive medication/notification history with analytics
- * Features: Real stats, PDF export, adherence trends, premium charts
+ * Features: Real stats, PDF export, adherence trends, charts
  * 
  * Note: All notification SETTINGS are now in Profile > Notifications Settings
  */
@@ -25,7 +25,6 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
 import BottomNavigation from '../../navigation/BottomNavigation';
-import PremiumLockModal from '../../PremiumLockModal';
 import api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -106,8 +105,6 @@ export default function Activity() {
   const [stats, setStats] = useState<NotificationStats>({ completed: 0, upcoming: 0, missed: 0 });
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [subscription, setSubscription] = useState<any>(null);
-  const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
   const [adherencePeriod, setAdherencePeriod] = useState<'7' | '30'>('7');
   const [adherenceTrends, setAdherenceTrends] = useState<AdherenceTrend[]>([]);
   const [exporting, setExporting] = useState<boolean>(false);
@@ -313,17 +310,6 @@ export default function Activity() {
     }
   }, [token, normalizeMedicationHistory]);
 
-  // Fetch subscription status
-  const fetchSubscription = useCallback(async () => {
-    if (!token) return;
-    try {
-      const sub = await api.get('/subscription/current', token, 3000);
-      setSubscription(sub || { plan_slug: 'free', is_active: false });
-    } catch {
-      setSubscription({ plan_slug: 'free', is_active: false });
-    }
-  }, [token]);
-
   // Calculate adherence trends
   const calculateAdherenceTrends = useCallback(() => {
     const days = adherencePeriod === '7' ? 7 : 30;
@@ -372,14 +358,13 @@ export default function Activity() {
         await Promise.all([
           fetchNotifications(),
           fetchMedicationHistory(),
-          fetchSubscription(),
           fetchStats(),
         ]);
         setLoading(false);
       };
       
       loadData();
-    }, [fetchNotifications, fetchMedicationHistory, fetchSubscription, fetchStats])
+    }, [fetchNotifications, fetchMedicationHistory, fetchStats])
   );
 
   // Calculate adherence trends when medication history changes
@@ -514,11 +499,10 @@ export default function Activity() {
     await Promise.all([
       fetchNotifications(),
       fetchMedicationHistory(),
-      fetchSubscription(),
       fetchStats(),
     ]);
     setRefreshing(false);
-  }, [fetchNotifications, fetchMedicationHistory, fetchSubscription, fetchStats]);
+  }, [fetchNotifications, fetchMedicationHistory, fetchStats]);
 
   // Export to PDF
   const exportToPDF = useCallback(async () => {
@@ -743,20 +727,9 @@ export default function Activity() {
           </View>
         </View>
 
-        {/* Chart with Premium Lock */}
+        {/* Adherence Chart */}
         <View style={styles.chartContainer}>
-          {subscription?.plan_slug !== 'premium' ? (
-            <TouchableOpacity
-              style={styles.premiumLockOverlay}
-              onPress={() => setShowPremiumModal(true)}
-            >
-              <View style={styles.lockContent}>
-                <Ionicons name="lock-closed" size={40} color="#F59E0B" />
-                <Text style={styles.lockTitle}>Premium Feature</Text>
-                <Text style={styles.lockText}>Unlock detailed adherence analytics</Text>
-              </View>
-            </TouchableOpacity>
-          ) : adherenceTrends.length > 0 ? (
+          {adherenceTrends.length > 0 ? (
             <View style={styles.chart}>
               <View style={styles.chartBars}>
                 {adherenceTrends.map((trend, idx) => (
@@ -941,16 +914,6 @@ export default function Activity() {
         )}
       </ScrollView>
       <BottomNavigation currentRoute="notification" />
-      
-      {/* Premium Lock Modal */}
-      {showPremiumModal && (
-        <PremiumLockModal
-          visible={showPremiumModal}
-          onClose={() => setShowPremiumModal(false)}
-          featureName="Adherence Trends Analytics"
-          token={token}
-        />
-      )}
     </SafeAreaView>
   );
 }
@@ -1056,31 +1019,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     minHeight: 200,
     position: 'relative',
-  },
-  premiumLockOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-  lockContent: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  lockTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#1F2937',
-  },
-  lockText: {
-    fontSize: 14,
-    color: '#6B7280',
   },
   chart: {
     flex: 1,

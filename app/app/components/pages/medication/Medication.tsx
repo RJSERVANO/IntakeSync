@@ -7,7 +7,6 @@ import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
 import { notificationManager } from '../../../services/notificationManager';
-import PremiumLockModal from '../../PremiumLockModal';
 
 type MedicationItem = {
   id: string;
@@ -79,8 +78,6 @@ export default function Medication() {
   const [stats, setStats] = useState<any>(null);
   const [upcoming, setUpcoming] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [subscription, setSubscription] = useState<any>(null);
-  const [premiumLockVisible, setPremiumLockVisible] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showMedicineSuggestions, setShowMedicineSuggestions] = useState(false);
@@ -184,7 +181,7 @@ export default function Medication() {
           setMeds(normalizedMeds);
 
           // Load everything in parallel for better performance
-          const [historyResults, statsData, upcomingData, subscriptionData] = await Promise.allSettled([
+          const [historyResults, statsData, upcomingData] = await Promise.allSettled([
             // Load all medication histories in parallel
             Promise.all((serverMeds || []).map(async (m) => {
               try {
@@ -197,9 +194,7 @@ export default function Medication() {
             // Load stats
             api.get('/medications/stats', token as string),
             // Load upcoming
-            api.get('/medications/upcoming', token as string),
-            // Load subscription
-            api.get('/subscription/current', token as string)
+            api.get('/medications/upcoming', token as string)
           ]);
 
           // Set history from parallel results
@@ -245,11 +240,6 @@ export default function Medication() {
           // Set upcoming
           if (upcomingData.status === 'fulfilled') {
             setUpcoming(upcomingData.value || []);
-          }
-
-          // Set subscription
-          if (subscriptionData.status === 'fulfilled') {
-            setSubscription(subscriptionData.value);
           }
         } else {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
@@ -466,11 +456,7 @@ export default function Medication() {
           await reloadAllData({ [newMed.id]: newMed.color });
         } catch (err: any) {
           console.log('Failed to save to server:', err);
-          if (err?.status === 403 && err?.data?.limit_reached) {
-            Alert.alert('Limit Reached', err?.data?.message || 'Upgrade to add more medications');
-          } else {
-            Alert.alert('Error', 'Failed to save medication. Please try again.');
-          }
+          Alert.alert('Error', err?.data?.message || 'Failed to save medication. Please try again.');
           return;
         }
       } else {
@@ -1016,9 +1002,7 @@ export default function Medication() {
   }
 
   function getPlanHistoryLimit() {
-    if (subscription?.plan_slug === 'premium') return 100;
-    if (subscription?.plan_slug === 'plus') return 30;
-    return 10;
+    return Number.MAX_SAFE_INTEGER;
   }
 
   function isMedicationActive(med: MedicationItem) {
@@ -1132,14 +1116,6 @@ export default function Medication() {
 
   async function handleExport() {
     if (!token) return;
-
-    const hasPremium = subscription?.plan_slug === 'premium' || subscription?.plan?.data_export === true;
-
-    if (!hasPremium) {
-      setPremiumLockVisible(true);
-      return;
-    }
-
     setExportModalVisible(true);
   }
 
@@ -1155,11 +1131,7 @@ export default function Medication() {
       );
     } catch (err: any) {
       console.log('Export error:', err);
-      const requiresPremium = err?.status === 403 && (err?.data?.requires_premium || err?.data?.limit_reached);
-      if (requiresPremium) {
-        setExportModalVisible(false);
-        setPremiumLockVisible(true);
-      } else if (err?.status === 408) {
+      if (err?.status === 408) {
         Alert.alert('Export Timeout', 'The export took too long. Please check your connection and try again.');
       } else {
         const message = err?.data?.message || err?.message || `Failed to export ${format.toUpperCase()} medication history.`;
@@ -1447,23 +1419,6 @@ export default function Medication() {
                 </TouchableOpacity>
               )}
 
-              {!subscription || subscription?.plan_slug === 'free' ? (
-                <TouchableOpacity
-                  style={styles.upgradeHistoryButton}
-                  onPress={() => setPremiumLockVisible(true)}
-                >
-                  <Ionicons name="lock-closed" size={16} color="#1E3A8A" />
-                  <Text style={styles.upgradeHistoryText}>Upgrade to PLUS+ to see 30 entries</Text>
-                </TouchableOpacity>
-              ) : subscription?.plan_slug === 'plus' ? (
-                <TouchableOpacity
-                  style={styles.upgradeHistoryButton}
-                  onPress={() => setPremiumLockVisible(true)}
-                >
-                  <Ionicons name="lock-closed" size={16} color="#1E3A8A" />
-                  <Text style={styles.upgradeHistoryText}>Upgrade to PREMIUM for extended history</Text>
-                </TouchableOpacity>
-              ) : null}
             </>
           )}
         </View>
@@ -2072,7 +2027,7 @@ export default function Medication() {
           <View style={styles.sheetContent}>
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Export Medication History</Text>
-            <Text style={styles.sheetSubtitle}>Choose a format. Premium access is required for data export.</Text>
+            <Text style={styles.sheetSubtitle}>Choose a format for your medication history export.</Text>
             {(['csv', 'pdf'] as const).map((format) => (
               <TouchableOpacity
                 key={format}
@@ -2134,14 +2089,6 @@ export default function Medication() {
           </View>
         </View>
       </Modal>
-
-      {/* Premium Lock Modal */}
-      <PremiumLockModal
-        visible={premiumLockVisible}
-        onClose={() => setPremiumLockVisible(false)}
-        featureName="Data Export"
-        token={token as string}
-      />
 
     </SafeAreaView>
   );

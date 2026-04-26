@@ -3,7 +3,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View, Modal } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import PremiumLockModal from './components/PremiumLockModal';
 import * as api from './api';
 
 interface RecommendationModalProps {
@@ -113,7 +112,6 @@ const getHydrationColor = (percentage: number) => {
 export default function InsightsScreen() {
   const { token } = useLocalSearchParams();
   const router = useRouter();
-  const [isPremium, setIsPremium] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [insightsData, setInsightsData] = useState<InsightsData | null>(null);
   const [showRecommendation, setShowRecommendation] = useState<boolean>(false);
@@ -123,18 +121,11 @@ export default function InsightsScreen() {
     const load = async () => {
       try {
         if (!token) {
-          setIsPremium(false);
           setLoading(false);
           return;
         }
-        
-        const sub = await api.get('/subscription/current', String(token), 3000).catch(() => ({ plan_slug: 'free' }));
-        const premium = sub?.plan_slug === 'premium';
-        setIsPremium(premium);
-        
-        if (premium) {
-          await fetchInsightsData();
-        }
+
+        await fetchInsightsData();
       } finally {
         setLoading(false);
       }
@@ -222,26 +213,6 @@ export default function InsightsScreen() {
           <ActivityIndicator size="large" color="#1E3A8A" />
           <Text style={styles.loadingText}>Loading insights…</Text>
         </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!isPremium) {
-    return (
-      <SafeAreaView edges={['top']} style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Smart Insights</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        <PremiumLockModal
-          visible={true}
-          onClose={() => router.back()}
-          featureName="Smart Insights"
-          token={String(token ?? '')}
-        />
       </SafeAreaView>
     );
   }

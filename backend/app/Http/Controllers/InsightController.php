@@ -19,14 +19,6 @@ class InsightController extends Controller
     {
         $user = $request->user();
         
-        // Check if user has smart_insights feature
-        if (!$user->canAccessFeature('smart_insights')) {
-            return response()->json([
-                'message' => 'Smart insights are only available for Premium subscribers.',
-                'requires_premium' => true,
-            ], 403);
-        }
-
         $startOfWeek = Carbon::now()->startOfWeek();
         $endOfWeek = Carbon::now()->endOfWeek();
 
@@ -105,14 +97,6 @@ class InsightController extends Controller
     {
         $user = $request->user();
         
-        // Check if user has smart_insights feature
-        if (!$user->canAccessFeature('smart_insights')) {
-            return response()->json([
-                'message' => 'Smart insights are only available for Premium subscribers.',
-                'requires_premium' => true,
-            ], 403);
-        }
-
         $patterns = [];
         $thirtyDaysAgo = Carbon::now()->subDays(30);
 
@@ -200,14 +184,6 @@ class InsightController extends Controller
     {
         $user = $request->user();
         
-        // Check if user has smart_insights feature
-        if (!$user->canAccessFeature('smart_insights')) {
-            return response()->json([
-                'message' => 'Smart insights are only available for Premium subscribers.',
-                'requires_premium' => true,
-            ], 403);
-        }
-
         $suggestions = [];
         $sevenDaysAgo = Carbon::now()->subDays(7);
 
@@ -296,4 +272,3 @@ class InsightController extends Controller
         ]);
     }
 }
-

@@ -56,23 +56,6 @@
                     <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Member Since</p>
                     <p class="text-sm font-medium text-slate-600 mt-2">{{ $user->created_at->format('M j, Y') }}</p>
                 </div>
-                <div>
-                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Subscription</p>
-                    <div class="mt-2">
-                        @if($currentSubscription && $currentSubscription->isActive())
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700">
-                            <span class="w-2 h-2 rounded-full bg-green-400"></span>
-                            {{ $currentSubscription->plan->name }}
-                        </span>
-                        <p class="text-xs text-slate-500 mt-1">Exp. {{ $currentSubscription->ends_at->format('M j, Y') }}</p>
-                        @else
-                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                            <span class="w-2 h-2 rounded-full bg-slate-400"></span>
-                            Free
-                        </span>
-                        @endif
-                    </div>
-                </div>
             </div>
         </div>
 
