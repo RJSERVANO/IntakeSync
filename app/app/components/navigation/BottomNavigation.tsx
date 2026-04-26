@@ -44,7 +44,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     },
     { 
       key: 'medication', 
-      icon: 'medkit', // UPDATED: Changed to 'medkit' (Medical Bag)
+      icon: 'fitness',
       label: 'Medication',
       route: '/components/pages/medication/Medication'
     },
@@ -78,7 +78,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
 
   return (
     // allow touches to pass through areas not occupied by the nav
-    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 10) }]} pointerEvents="box-none">
+    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 6) }]} pointerEvents="box-none">
       {navigationItems.map((item) => (
         <TouchableOpacity
           key={item.key}
@@ -88,8 +88,8 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
         >
           <Ionicons
             name={item.icon as any}
-            size={activeTab === item.key ? 21 : 20}
-            color={activeTab === item.key ? '#2563EB' : '#64748B'}
+            size={activeTab === item.key ? 20 : 18}
+            color={activeTab === item.key ? '#FFFFFF' : '#CBD5F5'}
           />
           <Text style={[
             styles.navLabel,
@@ -107,45 +107,45 @@ const styles = StyleSheet.create({
   bottomNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingTop: 10,
-    paddingHorizontal: 10,
+    backgroundColor: '#1E3A8A',
+    paddingTop: 6,
+    paddingHorizontal: 8,
     borderTopWidth: 1,
     borderTopColor: '#DBEAFE',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     shadowColor: '#1E3A8A',
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 14,
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 8,
   },
   navItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 54,
-    paddingVertical: 7,
-    paddingHorizontal: 3,
-    borderRadius: 18,
+    minHeight: 38,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+    borderRadius: 12,
   },
   activeNavItem: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#3B82F6',
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   navLabel: {
-    fontSize: 11,
-    color: '#64748B',
-    marginTop: 4,
+    fontSize: 10,
+    color: '#E0E7FF',
+    marginTop: 2,
     fontWeight: '700',
   },
   activeNavLabel: {
-    color: '#2563EB',
+    color: '#FFFFFF',
     fontWeight: '900',
   },
 });
