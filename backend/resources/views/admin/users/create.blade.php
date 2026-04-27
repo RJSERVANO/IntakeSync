@@ -36,7 +36,7 @@
         @endif
 
         <!-- Form Card -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden border-l-4 border-l-slate-300">
             <div class="px-8 py-8">
                 <form method="POST" action="{{ route('admin.users.store') }}" class="space-y-6">
                     @csrf
