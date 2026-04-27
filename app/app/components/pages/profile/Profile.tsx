@@ -1,11 +1,13 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../hooks/useUser';
 import EditProfileModal from './EditProfileModal';
+import AvatarSelector, { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
 
 export default function Profile() {
@@ -13,7 +15,17 @@ export default function Profile() {
   const { token } = useLocalSearchParams();
   const { user, loading, reload, setUser } = useUser(token as string | undefined);
   const [editVisible, setEditVisible] = React.useState(false);
+  const [selectedAvatar, setSelectedAvatar] = React.useState<SelectedAvatar | null>(null);
   const insets = useSafeAreaInsets();
+  const avatarSource = getAvatarSource(selectedAvatar);
+
+  React.useEffect(() => {
+    AsyncStorage.getItem(AVATAR_STORAGE_KEY)
+      .then((raw) => {
+        if (raw) setSelectedAvatar(JSON.parse(raw));
+      })
+      .catch((err) => console.log('Profile avatar load error:', err));
+  }, []);
 
   const profileOptions = [
     {
@@ -101,7 +113,11 @@ export default function Profile() {
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
+              {avatarSource ? (
+                <Image source={avatarSource as any} style={styles.avatarImage} />
+              ) : (
+                <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
+              )}
             </View>
             <TouchableOpacity style={styles.cameraButton} onPress={() => setEditVisible(true)}>
               <Ionicons name="camera" size={16} color="white" />
@@ -109,6 +125,10 @@ export default function Profile() {
           </View>
           <Text style={styles.userName}>{user.name}</Text>
           <Text style={styles.userEmail}>{user.email}</Text>
+        </View>
+
+        <View style={styles.avatarSelectorCard}>
+          <AvatarSelector onChange={setSelectedAvatar} />
         </View>
 
         {/* Quick Info Cards */}
@@ -234,6 +254,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E3A8A',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
   },
   avatarText: {
     color: 'white',
@@ -262,6 +287,18 @@ const styles = StyleSheet.create({
   userEmail: {
     fontSize: 14,
     color: '#6B7280',
+  },
+  avatarSelectorCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   quickInfoContainer: {
     flexDirection: 'row',
