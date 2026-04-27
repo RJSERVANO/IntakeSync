@@ -73,14 +73,16 @@ class AuthController extends Controller
             'id_token' => 'required|string',
         ]);
 
-        $clientIds = $this->googleClientIds();
-        if (empty($clientIds)) {
+        $clientId = config('services.google.client_id');
+        if (!$clientId) {
             return response()->json(['message' => 'Google sign-in is not configured.'], 500);
         }
 
-        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
+        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientId);
         if (!$googleUser) {
-            return response()->json(['message' => 'Google sign-in could not be verified.'], 401);
+            return response()->json([
+                'message' => 'Google sign-in could not be verified. Please try again.',
+            ], 401);
         }
 
         $hasGoogleId = Schema::hasColumn('users', 'google_id');
@@ -143,24 +145,7 @@ class AuthController extends Controller
         return $this->issueToken($user);
     }
 
-    protected function googleClientIds(): array
-    {
-        $ids = [];
-        $primary = config('services.google.client_id');
-        $extra = config('services.google.client_ids');
-
-        if ($primary) {
-            $ids[] = $primary;
-        }
-
-        if ($extra) {
-            $ids = array_merge($ids, array_map('trim', explode(',', $extra)));
-        }
-
-        return array_values(array_filter(array_unique($ids)));
-    }
-
-    protected function verifyGoogleIdToken(string $idToken, array $clientIds): ?array
+    protected function verifyGoogleIdToken(string $idToken, string $clientId): ?array
     {
         try {
             $response = Http::timeout(5)->get('https://oauth2.googleapis.com/tokeninfo', [
@@ -178,7 +163,7 @@ class AuthController extends Controller
         $issuer = $payload['iss'] ?? null;
         $emailVerified = $payload['email_verified'] ?? false;
 
-        if (!in_array($payload['aud'] ?? null, $clientIds, true)) {
+        if (($payload['aud'] ?? null) !== $clientId) {
             return null;
         }
 
@@ -194,7 +179,12 @@ class AuthController extends Controller
             return null;
         }
 
-        return $payload;
+        return [
+            'sub' => $payload['sub'],
+            'email' => $payload['email'],
+            'name' => $payload['name'] ?? null,
+            'picture' => $payload['picture'] ?? null,
+        ];
     }
 
     public function logout(Request $request)

@@ -24,7 +24,6 @@ return [
 
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
-        'client_ids' => env('GOOGLE_CLIENT_IDS'),
     ],
 
     'ses' => [
