@@ -30,21 +30,21 @@
 
         <!-- Key Metrics -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-md hover:shadow-lg transition-shadow duration-300">
                 <div class="flex justify-between items-start">
                     <div class="flex flex-col">
-                        <span class="text-slate-500 text-sm font-medium mb-1">Total Users</span>
-                        <h3 class="text-2xl font-bold text-slate-900">{{ number_format($totalUsers) }}</h3>
+                        <span class="text-slate-500 text-sm font-semibold uppercase tracking-wide mb-2">Total Users</span>
+                        <h3 class="text-3xl font-bold text-slate-900">{{ number_format($totalUsers) }}</h3>
                     </div>
-                    <div class="p-3 bg-blue-50 rounded-xl">
+                    <div class="p-3 bg-blue-100 rounded-lg">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
                         </svg>
                     </div>
                 </div>
-                <div class="mt-4 flex items-center text-sm">
-                    <span class="text-green-600 font-medium flex items-center">
-                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="mt-5 flex items-center text-sm">
+                    <span class="text-green-600 font-semibold flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
                         </svg>
                         +12.5%
@@ -53,21 +53,21 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-md hover:shadow-lg transition-shadow duration-300">
                 <div class="flex justify-between items-start">
                     <div class="flex flex-col">
-                        <span class="text-slate-500 text-sm font-medium mb-1">Active Users (DAU)</span>
-                        <h3 class="text-2xl font-bold text-slate-900">{{ number_format($dau) }}</h3>
+                        <span class="text-slate-500 text-sm font-semibold uppercase tracking-wide mb-2">Active Users (DAU)</span>
+                        <h3 class="text-3xl font-bold text-slate-900">{{ number_format($dau) }}</h3>
                     </div>
-                    <div class="p-3 bg-green-50 rounded-xl">
+                    <div class="p-3 bg-green-100 rounded-lg">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>
                     </div>
                 </div>
-                <div class="mt-4 flex items-center text-sm">
-                    <span class="text-green-600 font-medium flex items-center">
-                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div class="mt-5 flex items-center text-sm">
+                    <span class="text-green-600 font-semibold flex items-center gap-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
                         </svg>
                         +8.2%
@@ -80,7 +80,7 @@
         <!-- System Health & Quick Actions -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <!-- System Health -->
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
                 <h3 class="text-lg font-bold text-slate-900 mb-4">System Health</h3>
                 <div class="space-y-3">
                     <div class="flex items-center justify-between p-3 rounded-lg bg-slate-50">
@@ -108,36 +108,44 @@
             </div>
 
             <!-- Quick Actions -->
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
                 <h3 class="text-lg font-bold text-slate-900 mb-4">Quick Actions</h3>
-                <div class="grid grid-cols-2 gap-3">
-                    <a href="{{ route('admin.hydration.index') }}" class="p-4 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors border border-blue-200">
-                        <svg class="w-6 h-6 text-blue-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
-                        </svg>
-                        <span class="text-sm font-semibold text-blue-900">Hydration</span>
-                        <p class="text-xs text-blue-700 mt-1">View analytics</p>
+                <div class="grid grid-cols-2 gap-4">
+                    <a href="{{ route('admin.hydration.index') }}" class="p-5 rounded-xl bg-blue-50 hover:bg-blue-100 transition-all duration-200 border-l-4 border-l-blue-600 shadow-sm hover:shadow-md">
+                        <div class="p-2.5 bg-blue-200 rounded-lg w-fit mb-3">
+                            <svg class="w-6 h-6 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                            </svg>
+                        </div>
+                        <span class="text-sm font-bold text-blue-900">Hydration</span>
+                        <p class="text-xs text-blue-700 mt-2">View analytics</p>
                     </a>
-                    <a href="{{ route('admin.medication.index') }}" class="p-4 rounded-lg bg-teal-50 hover:bg-teal-100 transition-colors border border-teal-200">
-                        <svg class="w-6 h-6 text-teal-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                        </svg>
-                        <span class="text-sm font-semibold text-teal-900">Medications</span>
-                        <p class="text-xs text-teal-700 mt-1">Monitor adherence</p>
+                    <a href="{{ route('admin.medication.index') }}" class="p-5 rounded-xl bg-teal-50 hover:bg-teal-100 transition-all duration-200 border-l-4 border-l-teal-600 shadow-sm hover:shadow-md">
+                        <div class="p-2.5 bg-teal-200 rounded-lg w-fit mb-3">
+                            <svg class="w-6 h-6 text-teal-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            </svg>
+                        </div>
+                        <span class="text-sm font-bold text-teal-900">Medications</span>
+                        <p class="text-xs text-teal-700 mt-2">Monitor adherence</p>
                     </a>
-                    <a href="{{ route('admin.notifications.index') }}" class="p-4 rounded-lg bg-purple-50 hover:bg-purple-100 transition-colors border border-purple-200">
-                        <svg class="w-6 h-6 text-purple-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
-                        </svg>
-                        <span class="text-sm font-semibold text-purple-900">Notifications</span>
-                        <p class="text-xs text-purple-700 mt-1">Track delivery</p>
+                    <a href="{{ route('admin.notifications.index') }}" class="p-5 rounded-xl bg-purple-50 hover:bg-purple-100 transition-all duration-200 border-l-4 border-l-purple-600 shadow-sm hover:shadow-md">
+                        <div class="p-2.5 bg-purple-200 rounded-lg w-fit mb-3">
+                            <svg class="w-6 h-6 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                            </svg>
+                        </div>
+                        <span class="text-sm font-bold text-purple-900">Notifications</span>
+                        <p class="text-xs text-purple-700 mt-2">Track delivery</p>
                     </a>
-                    <a href="{{ route('admin.users.index') }}" class="p-4 rounded-lg bg-green-50 hover:bg-green-100 transition-colors border border-green-200">
-                        <svg class="w-6 h-6 text-green-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
-                        </svg>
-                        <span class="text-sm font-semibold text-green-900">Users</span>
-                        <p class="text-xs text-green-700 mt-1">Manage users</p>
+                    <a href="{{ route('admin.users.index') }}" class="p-5 rounded-xl bg-green-50 hover:bg-green-100 transition-all duration-200 border-l-4 border-l-green-600 shadow-sm hover:shadow-md">
+                        <div class="p-2.5 bg-green-200 rounded-lg w-fit mb-3">
+                            <svg class="w-6 h-6 text-green-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
+                            </svg>
+                        </div>
+                        <span class="text-sm font-bold text-green-900">Users</span>
+                        <p class="text-xs text-green-700 mt-2">Manage users</p>
                     </a>
                 </div>
             </div>
@@ -145,42 +153,45 @@
 
         <!-- Hydration & Compliance Summary -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Hydration Compliance</h4>
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Hydration Compliance</h4>
                 <div>
-                    <div class="text-3xl font-bold text-slate-900">{{ $hydrationCompliance['compliance_rate'] }}%</div>
-                    <p class="text-sm text-slate-600 mt-2">{{ $hydrationCompliance['users_on_track'] }} of {{ $hydrationCompliance['total_users'] }} users on track</p>
-                    <div class="mt-4 w-full bg-slate-200 rounded-full h-2">
-                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ $hydrationCompliance['compliance_rate'] }}%"></div>
+                    <div class="text-4xl font-bold text-blue-600 mb-2">{{ $hydrationCompliance['compliance_rate'] }}%</div>
+                    <p class="text-sm text-slate-600 mb-4">{{ $hydrationCompliance['users_on_track'] }} of {{ $hydrationCompliance['total_users'] }} users on track</p>
+                    <div class="w-full bg-slate-200 rounded-full h-2.5">
+                        <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: {{ $hydrationCompliance['compliance_rate'] }}%"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Notification Effectiveness</h4>
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Notification Effectiveness</h4>
                 <div>
-                    <div class="text-3xl font-bold text-slate-900">{{ $notificationEffectiveness['rate'] }}%</div>
-                    <p class="text-sm text-slate-600 mt-2">{{ $notificationEffectiveness['engaged'] }} of {{ $notificationEffectiveness['total'] }} engaged</p>
-                    <div class="mt-4 w-full bg-slate-200 rounded-full h-2">
-                        <div class="bg-purple-600 h-2 rounded-full" style="width: {{ $notificationEffectiveness['rate'] }}%"></div>
+                    <div class="text-4xl font-bold text-purple-600 mb-2">{{ $notificationEffectiveness['rate'] }}%</div>
+                    <p class="text-sm text-slate-600 mb-4">{{ $notificationEffectiveness['engaged'] }} of {{ $notificationEffectiveness['total'] }} engaged</p>
+                    <div class="w-full bg-slate-200 rounded-full h-2.5">
+                        <div class="bg-purple-600 h-2.5 rounded-full transition-all duration-500" style="width: {{ $notificationEffectiveness['rate'] }}%"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">At-Risk Users</h4>
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-md p-6 hover:shadow-lg transition-shadow duration-300">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">At-Risk Users</h4>
                 <div>
-                    <div class="text-3xl font-bold text-slate-900">{{ $atRiskUsersCount }}</div>
-                    <p class="text-sm text-slate-600 mt-2">Below 50% hydration goal</p>
-                    <a href="{{ route('admin.hydration.index') }}" class="mt-4 inline-block text-sm font-semibold text-blue-600 hover:text-blue-700">
-                        View Details →
+                    <div class="text-4xl font-bold text-red-600 mb-2">{{ $atRiskUsersCount }}</div>
+                    <p class="text-sm text-slate-600 mb-4">Below 50% hydration goal</p>
+                    <a href="{{ route('admin.hydration.index') }}" class="inline-flex items-center text-sm font-bold text-blue-600 hover:text-blue-700 transition-colors group">
+                        View Details
+                        <svg class="w-4 h-4 ml-1.5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                        </svg>
                     </a>
                 </div>
             </div>
         </div>
 
         <!-- Recent Activity Feed -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-md overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100">
                 <h3 class="text-lg font-bold text-slate-900">Recent Activity Feed</h3>
             </div>
@@ -216,7 +227,7 @@
 
         <!-- Charts -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-md hover:shadow-lg transition-shadow duration-300">
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">User Growth Trend</h3>
@@ -228,11 +239,10 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-md hover:shadow-lg transition-shadow duration-300">
                 <div class="flex items-center justify-between mb-6">
                     <div>
-                        <h3 class="text-lg font-bold text-slate-900">Platform Distribution</h3>
-                        <p class="text-slate-500 text-sm">iOS vs Android usage</p>
+                        <h3 class="text-lg font-bold text-slate-900">Device Downloads</h3>
                     </div>
                 </div>
                 <div class="relative h-64 w-full flex items-center justify-center">
@@ -245,12 +255,10 @@
 
 @push('scripts')
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- htmlhint attr-unsafe-chars:false -->
 <script>
     let userGrowthChart, platformSplitChart;
 
     function initCharts() {
-        // User Growth Chart
         const userGrowthCtx = document.getElementById('userGrowthChart');
         if (userGrowthCtx) {
             const userGrowthData = @json($userGrowth);
@@ -304,35 +312,54 @@
             });
         }
 
-        // Platform Split Chart
         const platformCtx = document.getElementById('platformSplitChart');
         if (platformCtx) {
-            const platformData = @json($platformSplit);
+            const totalUsers = 53;
+            const maxUsers = 100;
+
             platformSplitChart = new Chart(platformCtx.getContext('2d'), {
                 type: 'doughnut',
                 data: {
-                    labels: platformData.map(item => item.platform),
                     datasets: [{
-                        data: platformData.map(item => item.count),
-                        backgroundColor: ['#3B82F6', '#22C55E'],
+                        data: [totalUsers, maxUsers - totalUsers],
+                        backgroundColor: ['#22C55E', '#E5E7EB'],
                         borderWidth: 0,
-                        hoverOffset: 4
+                        hoverOffset: 0
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    cutout: '75%',
+                    cutout: '80%',
                     plugins: {
                         legend: {
-                            position: 'bottom',
-                            labels: {
-                                usePointStyle: true,
-                                boxWidth: 8
-                            }
+                            display: false
+                        },
+                        tooltip: {
+                            enabled: false
                         }
                     }
-                }
+                },
+                plugins: [{
+                    id: 'centerText',
+                    beforeDraw(chart) {
+                        const { width, height, ctx } = chart;
+
+                        ctx.save();
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+
+                        ctx.font = 'bold 28px sans-serif';
+                        ctx.fillStyle = '#0F172A';
+                        ctx.fillText(totalUsers, width / 2, height / 2 - 5);
+
+                        ctx.font = '12px sans-serif';
+                        ctx.fillStyle = '#64748B';
+                        ctx.fillText('Users', width / 2, height / 2 + 15);
+
+                        ctx.restore();
+                    }
+                }]
             });
         }
     }

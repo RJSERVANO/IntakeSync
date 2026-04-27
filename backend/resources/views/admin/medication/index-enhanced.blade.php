@@ -20,67 +20,67 @@
             </div>
         </div>
 
-        <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-teal-50 rounded-xl">
-                        <svg class="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Active Medications</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $activeMedications }}</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-green-50 rounded-xl">
-                        <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Adherence Rate</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $adherenceRate }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">System-wide average</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-red-50 rounded-xl">
-                        <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Missed Doses</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $missedDoses }}</p>
-                    <p class="text-xs text-slate-500 mt-2">this period</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-amber-50 rounded-xl">
-                        <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Critical Users</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $criticalMissedMedications->count() }}</p>
-                    <p class="text-xs text-slate-500 mt-2">repeated offenders</p>
-                </div>
+ <!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-teal-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-teal-50 rounded-xl">
+                <svg class="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                </svg>
             </div>
         </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Active Medications</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $activeMedications }}</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-green-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-green-50 rounded-xl">
+                <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Adherence Rate</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $adherenceRate }}%</p>
+            <p class="text-xs text-slate-500 mt-2">System-wide average</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-red-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-red-50 rounded-xl">
+                <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Missed Doses</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $missedDoses }}</p>
+            <p class="text-xs text-slate-500 mt-2">this period</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-amber-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-amber-50 rounded-xl">
+                <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Critical Users</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $criticalMissedMedications->count() }}</p>
+            <p class="text-xs text-slate-500 mt-2">repeated offenders</p>
+        </div>
+    </div>
+</div>
 
         <!-- Critical Missed Doses Alert -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">

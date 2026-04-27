@@ -23,67 +23,69 @@
             </div>
         </div>
 
-        <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-blue-50 rounded-xl">
-                        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Total Users</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $totalUsers }}</p>
-                </div>
-            </div>
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-green-50 rounded-xl">
-                        <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Avg Daily Intake</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ number_format($avgDailyIntake) }}</p>
-                    <p class="text-xs text-slate-500 mt-2">ml per day</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-amber-50 rounded-xl">
-                        <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Goal Achievement</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $goalAchievement }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">of users on track</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
-                    <div class="p-3 bg-red-50 rounded-xl">
-                        <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4v2m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">At-Risk Users</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $atRiskUsers->count() }}</p>
-                    <p class="text-xs text-slate-500 mt-2">Below 50% goal</p>
-                </div>
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-blue-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-blue-50 rounded-xl">
+                <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                </svg>
             </div>
         </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Total Users</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $totalUsers }}</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-green-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-green-50 rounded-xl">
+                <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Avg Daily Intake</p>
+            <p class="text-3xl font-bold text-slate-900">{{ number_format($avgDailyIntake) }}</p>
+            <p class="text-xs text-slate-500 mt-2">ml per day</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-amber-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-amber-50 rounded-xl">
+                <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Goal Achievement</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $goalAchievement }}%</p>
+            <p class="text-xs text-slate-500 mt-2">of users on track</p>
+        </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:bg-red-50 transition-all duration-200">
+        <div class="flex items-start justify-between mb-4">
+            <div class="p-3 bg-red-50 rounded-xl">
+                <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4v2m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+        </div>
+        <div>
+            <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">At-Risk Users</p>
+            <p class="text-3xl font-bold text-slate-900">{{ $atRiskUsers->count() }}</p>
+            <p class="text-xs text-slate-500 mt-2">Below 50% goal</p>
+        </div>
+    </div>
+
+</div>
 
         <!-- At-Risk Users Table -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
