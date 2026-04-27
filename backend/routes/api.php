@@ -10,11 +10,9 @@ use App\Models\User;
 
 Route::post('register', [AuthController::class, 'register']);
 Route::post('login', [AuthController::class, 'login']);
+Route::post('oauth/google', [AuthController::class, 'google']);
 Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('reset-password', [AuthController::class, 'resetPassword']);
-
-// Public subscription plans endpoint
-Route::get('subscription/plans', [App\Http\Controllers\SubscriptionController::class, 'plans']);
 
 // OTC Medicines endpoints (public)
 Route::get('medicines/search', [OtcMedicineController::class, 'search']);
@@ -51,7 +49,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::get('medications/export/csv', [App\Http\Controllers\MedicationController::class, 'exportCsv']);
     Route::get('medications/export/pdf', [App\Http\Controllers\MedicationController::class, 'exportPdf']);
 
-    // Smart Insights endpoints (Premium)
+    // Smart Insights endpoints
     // Basic insights CRUD
     Route::get('insights', [InsightController::class, 'index']);
     Route::post('insights', [InsightController::class, 'store']);
@@ -83,12 +81,6 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('notifications/{notification}/complete', [App\Http\Controllers\NotificationController::class, 'complete']);
     Route::post('notifications/mark-missed', [App\Http\Controllers\NotificationController::class, 'markMissedNotifications']);
 
-    // Subscription endpoints
-    Route::get('subscription/current', [App\Http\Controllers\SubscriptionController::class, 'current']);
-    Route::post('subscription/subscribe', [App\Http\Controllers\SubscriptionController::class, 'subscribe']);
-    Route::post('subscription/cancel', [App\Http\Controllers\SubscriptionController::class, 'cancel']);
-    Route::get('subscription/history', [App\Http\Controllers\SubscriptionController::class, 'history']);
-    Route::get('subscription/check-feature/{feature}', [App\Http\Controllers\SubscriptionController::class, 'checkFeature']);
 });
 
 // If the app doesn't have the middleware registered, add a fallback route to demonstrate

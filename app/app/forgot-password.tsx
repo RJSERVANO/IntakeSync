@@ -10,9 +10,9 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
-import { AuthField } from './components/auth/AuthField';
-import { AuthLayout } from './components/auth/AuthLayout';
-import { authColors, authStyles } from './components/auth/authStyles';
+import { AuthField } from '../components/auth/AuthField';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import { authColors, authStyles } from '../components/auth/authStyles';
 
 export default function ForgotPassword() {
   const router = useRouter();

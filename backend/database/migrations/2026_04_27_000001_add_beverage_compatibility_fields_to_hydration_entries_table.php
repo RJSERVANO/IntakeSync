@@ -5,7 +5,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
-    public function up()
+    public function up(): void
     {
         Schema::table('hydration_entries', function (Blueprint $table) {
             if (!Schema::hasColumn('hydration_entries', 'beverage_type')) {
@@ -23,12 +23,20 @@ return new class extends Migration {
             if (!Schema::hasColumn('hydration_entries', 'notes')) {
                 $table->text('notes')->nullable()->after('caffeine_level');
             }
+
+            if (!Schema::hasColumn('hydration_entries', 'drink_label')) {
+                $table->string('drink_label')->nullable()->after('notes');
+            }
         });
     }
 
-    public function down()
+    public function down(): void
     {
         Schema::table('hydration_entries', function (Blueprint $table) {
+            if (Schema::hasColumn('hydration_entries', 'drink_label')) {
+                $table->dropColumn('drink_label');
+            }
+
             if (Schema::hasColumn('hydration_entries', 'notes')) {
                 $table->dropColumn('notes');
             }

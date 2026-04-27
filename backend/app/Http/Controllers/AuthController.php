@@ -6,12 +6,26 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Auth\Events\PasswordReset;
 
 class AuthController extends Controller
 {
+    protected function issueToken(User $user)
+    {
+        $token = Str::random(60);
+        $user->forceFill(['api_token' => hash('sha256', $token)])->save();
+
+        return response()->json([
+            'token' => $token,
+            'user' => $user->fresh(),
+            'onboarding_completed' => (bool) $user->onboarding_completed,
+        ]);
+    }
+
     public function register(Request $request)
     {
         $data = $request->validate([
@@ -34,15 +48,7 @@ class AuthController extends Controller
             'address' => $data['address'] ?? null,
         ]);
 
-        // simple token
-        $token = Str::random(60);
-        $user->forceFill(['api_token' => hash('sha256', $token)])->save();
-
-        return response()->json([
-            'token' => $token,
-            'user' => $user,
-            'onboarding_completed' => $user->onboarding_completed,
-        ], 201);
+        return $this->issueToken($user)->setStatusCode(201);
     }
 
     public function login(Request $request)
@@ -58,14 +64,137 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials'], 401);
         }
 
-        $token = Str::random(60);
-        $user->forceFill(['api_token' => hash('sha256', $token)])->save();
+        return $this->issueToken($user);
+    }
 
-        return response()->json([
-            'token' => $token,
-            'user' => $user,
-            'onboarding_completed' => $user->onboarding_completed,
+    public function google(Request $request)
+    {
+        $data = $request->validate([
+            'id_token' => 'required|string',
         ]);
+
+        $clientIds = $this->googleClientIds();
+        if (empty($clientIds)) {
+            return response()->json(['message' => 'Google sign-in is not configured.'], 500);
+        }
+
+        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
+        if (!$googleUser) {
+            return response()->json(['message' => 'Google sign-in could not be verified.'], 401);
+        }
+
+        $hasGoogleId = Schema::hasColumn('users', 'google_id');
+        $hasAvatarUrl = Schema::hasColumn('users', 'avatar_url');
+        $hasAuthProvider = Schema::hasColumn('users', 'auth_provider');
+
+        $user = $hasGoogleId
+            ? User::where('google_id', $googleUser['sub'])->first()
+            : null;
+
+        if (!$user && !empty($googleUser['email'])) {
+            $user = User::where('email', $googleUser['email'])->first();
+        }
+
+        if ($user) {
+            $updates = [];
+
+            if ($hasGoogleId) {
+                $updates['google_id'] = $user->google_id ?: $googleUser['sub'];
+            }
+
+            if ($hasAuthProvider) {
+                $updates['auth_provider'] = 'google';
+            }
+
+            if ($hasAvatarUrl) {
+                $updates['avatar_url'] = $googleUser['picture'] ?? $user->avatar_url;
+            }
+
+            if (!$user->name && !empty($googleUser['name'])) {
+                $updates['name'] = $googleUser['name'];
+            }
+
+            if (!empty($updates)) {
+                $user->forceFill($updates)->save();
+            }
+        } else {
+            $userData = [
+                'name' => $googleUser['name'] ?? explode('@', $googleUser['email'])[0],
+                'email' => $googleUser['email'],
+                'password' => Str::random(48),
+                'email_verified_at' => now(),
+            ];
+
+            if ($hasGoogleId) {
+                $userData['google_id'] = $googleUser['sub'];
+            }
+
+            if ($hasAuthProvider) {
+                $userData['auth_provider'] = 'google';
+            }
+
+            if ($hasAvatarUrl) {
+                $userData['avatar_url'] = $googleUser['picture'] ?? null;
+            }
+
+            $user = User::create($userData);
+        }
+
+        return $this->issueToken($user);
+    }
+
+    protected function googleClientIds(): array
+    {
+        $ids = [];
+        $primary = config('services.google.client_id');
+        $extra = config('services.google.client_ids');
+
+        if ($primary) {
+            $ids[] = $primary;
+        }
+
+        if ($extra) {
+            $ids = array_merge($ids, array_map('trim', explode(',', $extra)));
+        }
+
+        return array_values(array_filter(array_unique($ids)));
+    }
+
+    protected function verifyGoogleIdToken(string $idToken, array $clientIds): ?array
+    {
+        try {
+            $response = Http::timeout(5)->get('https://oauth2.googleapis.com/tokeninfo', [
+                'id_token' => $idToken,
+            ]);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!$response->ok()) {
+            return null;
+        }
+
+        $payload = $response->json();
+        $issuer = $payload['iss'] ?? null;
+        $emailVerified = $payload['email_verified'] ?? false;
+
+        if (!in_array($payload['aud'] ?? null, $clientIds, true)) {
+            return null;
+        }
+
+        if (!in_array($issuer, ['accounts.google.com', 'https://accounts.google.com'], true)) {
+            return null;
+        }
+
+        if (empty($payload['sub']) || empty($payload['email'])) {
+            return null;
+        }
+
+        if (!($emailVerified === true || $emailVerified === 'true' || $emailVerified === '1')) {
+            return null;
+        }
+
+        return $payload;
     }
 
     public function logout(Request $request)

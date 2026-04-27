@@ -50,7 +50,6 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('users/{user}/send-password-reset', [AdminController::class, 'sendPasswordResetEmail'])->name('users.send-password-reset');
         Route::post('users/{user}/update-status', [AdminController::class, 'updateStatus'])->name('users.update-status');
         Route::get('users/{user}/activity-log', [AdminController::class, 'getActivityLog'])->name('users.activity-log');
-        Route::get('users/{user}/transaction-history', [AdminController::class, 'getTransactionHistory'])->name('users.transaction-history');
 
         // Health module management
         Route::get('hydration', [AdminController::class, 'hydration'])->name('hydration.index');

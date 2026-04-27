@@ -17,8 +17,15 @@ class HydrationEntry extends Model
         'sugar_level',
         'caffeine_level',
         'notes',
+        'drink_label',
         'created_at',
     ];
+
+    protected $casts = [
+        'amount_ml' => 'integer',
+        'created_at' => 'datetime',
+    ];
+
     public $timestamps = false;
 
     public function user()

@@ -10,9 +10,9 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
-import { AuthField } from './components/auth/AuthField';
-import { AuthLayout } from './components/auth/AuthLayout';
-import { authColors, authStyles } from './components/auth/authStyles';
+import { AuthField } from '../components/auth/AuthField';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import { authColors, authStyles } from '../components/auth/authStyles';
 
 export default function ResetPassword() {
   const router = useRouter();

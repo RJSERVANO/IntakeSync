@@ -2,14 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
+import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
-import { notificationManager } from '../../../services/notificationManager';
-import { calculateHydrationPace } from '../../../hooks/useHydrationGoal';
-import { useCelebrationAnimation, usePulseAnimation, useBounceAnimation } from '../../../hooks/useHydrationAnimations';
-import * as Notifications from 'expo-notifications';
+import { notificationManager } from '../../../../services/notificationManager';
+import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
+import { useCelebrationAnimation, usePulseAnimation, useBounceAnimation } from '../../../../hooks/useHydrationAnimations';
 
 interface UserDetails {
   weight?: number;
@@ -24,6 +24,7 @@ type BeverageType = 'water' | 'sugar_sweetened' | 'caffeinated' | 'other_non_alc
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 
 const QUICK_WATER_AMOUNTS = [250, 500, 750, 1000];
+const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
 
 const DRINK_OPTIONS: {
   value: string;
@@ -74,13 +75,18 @@ function getAwarenessLevel(score: number): BeverageLevel {
   return 'none';
 }
 
-function getBeverageLabel(entry: any) {
-  const note = typeof entry?.notes === 'string' ? entry.notes.trim() : '';
-  if (note) return note;
+function getBeverageBaseLabel(entry: any) {
+  if (typeof entry?.drink_label === 'string' && entry.drink_label.trim()) return entry.drink_label.trim();
   if (entry?.beverage_type === 'caffeinated') return 'Caffeinated beverage';
   if (entry?.beverage_type === 'sugar_sweetened') return 'Sugar-sweetened drink';
   if (entry?.beverage_type === 'other_non_alcoholic') return 'Other beverage';
   return 'Water';
+}
+
+function getBeverageLabel(entry: any) {
+  const note = typeof entry?.notes === 'string' ? entry.notes.trim() : '';
+  const label = getBeverageBaseLabel(entry);
+  return note ? `${label} (${note})` : label;
 }
 
 function formatSource(source?: string) {
@@ -241,17 +247,29 @@ export default function Hydration() {
 
   // FIX #3: Listen for notification taps to show confirmation modal
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log('Notification tapped:', response);
-      const data = response.notification.request.content.data;
-      
-      // If it's a hydration notification and water was logged, show the goal reached modal
-      if (data?.type === 'hydration' && totalToday() >= goal) {
-        setShowGoalReachedModal(true);
-      }
-    });
+    let subscription: { remove: () => void } | null = null;
 
-    return () => subscription.remove();
+    if (isExpoGo) {
+      console.log('Expo Go detected: using local notifications only.');
+      return () => {};
+    }
+
+    try {
+      const Notifications = require('expo-notifications');
+      subscription = Notifications.addNotificationResponseReceivedListener((response: any) => {
+        console.log('Notification tapped:', response);
+        const data = response.notification.request.content.data;
+
+        // If it's a hydration notification and water was logged, show the goal reached modal
+        if (data?.type === 'hydration' && totalToday() >= goal) {
+          setShowGoalReachedModal(true);
+        }
+      });
+    } catch {
+      console.log('Expo Go detected: using local notifications only.');
+    }
+
+    return () => subscription?.remove();
   }, [goal]);
 
   // FIX #1: Reset goalReachedToday and overhydrationShownToday at midnight each day
@@ -480,6 +498,7 @@ export default function Hydration() {
       sugar_level?: BeverageLevel;
       caffeine_level?: BeverageLevel;
       notes?: string | null;
+      drink_label?: string | null;
     },
   ) {
     const selectedBeverage = metadata?.beverage_type || 'water';
@@ -491,6 +510,7 @@ export default function Hydration() {
       sugar_level: selectedBeverage === 'water' ? 'none' : metadata?.sugar_level || 'none',
       caffeine_level: selectedBeverage === 'water' ? 'none' : metadata?.caffeine_level || 'none',
       notes: metadata?.notes?.trim() || null,
+      drink_label: metadata?.drink_label?.trim() || undefined,
     };
     const newEntries = [...entries, entry];
     const oldTotal = totalToday();
@@ -548,6 +568,7 @@ export default function Hydration() {
           sugar_level: entry.sugar_level,
           caffeine_level: entry.caffeine_level,
           notes: entry.notes,
+          drink_label: entry.drink_label ?? null,
         }, token as string);
       } catch (err:any) {
         console.log('Hydration sync error', err);
@@ -560,8 +581,11 @@ export default function Hydration() {
   async function submitCustom() {
     const val = parseInt(amountInput || '0', 10);
     if (!val || val <= 0) return Alert.alert('Invalid', 'Enter a positive amount in ml');
-    const displayName = selectedDrink === 'other' ? customBeverageName.trim() : beverageNotes.trim();
+    const selectedDrinkOption = DRINK_OPTIONS.find((option) => option.value === selectedDrink) || DRINK_OPTIONS[0];
+    const note = beverageNotes.trim();
+    const drinkLabel = selectedDrink === 'other' ? customBeverageName.trim() : selectedDrinkOption.label;
     setAmountInput('');
+    setBeverageNotes('');
     if (selectedDrink === 'other') {
       setCustomBeverageName('');
     }
@@ -569,7 +593,8 @@ export default function Hydration() {
       beverage_type: beverageType,
       sugar_level: beverageType === 'water' ? 'none' : sugarLevel,
       caffeine_level: beverageType === 'water' ? 'none' : caffeineLevel,
-      notes: displayName || null,
+      notes: note || null,
+      drink_label: drinkLabel || null,
     });
   }
 
@@ -794,9 +819,30 @@ export default function Hydration() {
     setBeverageType(drink.beverageType);
     setSugarLevel(drink.defaultSugar);
     setCaffeineLevel(drink.defaultCaffeine);
-    setBeverageNotes(drink.value === 'water' || drink.value === 'other' ? '' : drink.label);
+    setBeverageNotes('');
     if (drink.value !== 'other') {
       setCustomBeverageName('');
+    }
+  }
+
+  function getNotesPlaceholder() {
+    switch (selectedDrink) {
+      case 'coffee':
+        return 'e.g., Spanish latte, iced coffee';
+      case 'tea':
+        return 'e.g., green tea, black tea';
+      case 'energy_drink':
+        return 'e.g., Red Bull, Monster';
+      case 'soda':
+        return 'e.g., Coke, Sprite';
+      case 'juice':
+        return 'e.g., mango juice, orange juice';
+      case 'milk_tea':
+        return 'e.g., wintermelon, brown sugar';
+      case 'other':
+        return 'e.g., smoothie, protein shake';
+      default:
+        return 'Optional note';
     }
   }
 
@@ -1039,8 +1085,19 @@ export default function Hydration() {
               ))}
             </View>
 
-            <View style={styles.customRowAlt}>
-              <TextInput value={amountInput} onChangeText={setAmountInput} placeholder="Custom ml" keyboardType="numeric" style={styles.inputAlt} />
+            <TextInput value={amountInput} onChangeText={setAmountInput} placeholder="Custom ml" keyboardType="numeric" style={styles.inputAltFull} />
+
+            <Text style={styles.formLabel}>Notes (optional)</Text>
+            <TextInput
+              value={beverageNotes}
+              onChangeText={setBeverageNotes}
+              placeholder={getNotesPlaceholder()}
+              maxLength={50}
+              style={styles.notesInputAlt}
+              returnKeyType="done"
+            />
+
+            <View style={styles.logButtonRow}>
               <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText}>Log</Text></TouchableOpacity>
             </View>
           </View>
@@ -1582,10 +1639,12 @@ const styles = StyleSheet.create({
   levelChip: { minWidth: 70, alignItems: 'center', paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', marginBottom: 8 },
   customRowAlt: { flexDirection: 'row', marginTop: 12 },
   inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8, color:'#0F172A' },
+  inputAltFull: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 11, color:'#0F172A', marginTop: 4, marginBottom: 10 },
   fullInputAlt: { backgroundColor:'#FFFFFF', borderRadius:10, borderWidth: 1, borderColor: '#CBD5E1', paddingHorizontal:12, paddingVertical: 11, color:'#0F172A', marginTop: 10 },
-  addBtnAlt: { backgroundColor:'#2563EB', paddingHorizontal:18, justifyContent:'center', borderRadius:10 },
+  addBtnAlt: { backgroundColor:'#2563EB', paddingHorizontal:18, justifyContent:'center', borderRadius:10, minHeight: 42, alignItems: 'center' },
   addBtnText: { color:'white', fontWeight:'800' },
-  notesInputAlt: { minHeight: 72, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, marginTop: 10, color:'#0F172A', textAlignVertical: 'top' },
+  logButtonRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
+  notesInputAlt: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, marginTop: 4, color:'#0F172A' },
 
   // Calendar styles
   calendarCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:14, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },

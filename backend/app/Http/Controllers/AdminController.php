@@ -8,10 +8,7 @@ use App\Models\HydrationEntry;
 use App\Models\Medication;
 use App\Models\MedicationHistory;
 use App\Models\Notification;
-use App\Models\Subscription;
-use App\Models\SubscriptionPlan;
 use App\Models\UserActivityLog;
-use App\Models\SubscriptionTransaction;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -214,38 +211,6 @@ class AdminController extends Controller
             ->whereDate('updated_at', Carbon::today())
             ->count();
 
-        // MRR: Monthly Recurring Revenue from active premium subscriptions
-        $mrr = Subscription::where('status', 'active')
-            ->where('ends_at', '>', now())
-            ->with('plan')
-            ->get()
-            ->sum(function ($subscription) {
-                $plan = $subscription->plan;
-                if (!$plan) return 0;
-                // If billing period is monthly, use price as-is; if yearly, divide by 12
-                return $plan->billing_period === 'monthly'
-                    ? $plan->price
-                    : ($plan->price / 12);
-            });
-
-        // Premium Conversion Rate: % of users on paid plan
-        $premiumUsers = User::where('role', '!=', 'admin')
-            ->where(function ($query) {
-                $query->whereHas('activeSubscription', function ($q) {
-                    $q->where('status', 'active')
-                        ->where('ends_at', '>', now());
-                })
-                    ->orWhere(function ($q) {
-                        $q->whereNotNull('subscription_expires_at')
-                            ->where('subscription_expires_at', '>', now());
-                    });
-            })
-            ->count();
-
-        $premiumConversionRate = $totalUsers > 0
-            ? round(($premiumUsers / $totalUsers) * 100, 2)
-            : 0;
-
         // User Growth: Last 30 days
         $userGrowth = [];
         for ($i = 29; $i >= 0; $i--) {
@@ -302,8 +267,6 @@ class AdminController extends Controller
             'users',
             'totalUsers',
             'dau',
-            'mrr',
-            'premiumConversionRate',
             'userGrowth',
             'hydrationStats',
             'platformSplit',
@@ -336,7 +299,7 @@ class AdminController extends Controller
             ->get();
 
         $medications = Medication::where('user_id', $user->id)
-            ->where('is_active', true)
+            ->where('active', true)
             ->get();
 
         $medicationHistory = MedicationHistory::where('user_id', $user->id)
@@ -359,9 +322,6 @@ class AdminController extends Controller
             ->where('created_at', '>=', Carbon::now()->subDays(7))
             ->count();
 
-        // Get subscription info
-        $currentSubscription = $user->subscriptions()->where('status', 'active')->with('plan')->first();
-
         return view('admin.users.show', compact(
             'user',
             'hydrationEntries',
@@ -371,8 +331,7 @@ class AdminController extends Controller
             'totalHydrationEntries',
             'totalMedicationEntries',
             'totalNotifications',
-            'recentActivity',
-            'currentSubscription'
+            'recentActivity'
         ));
     }
 
@@ -394,18 +353,8 @@ class AdminController extends Controller
 
     public function editUser(User $user)
     {
-        $subscriptionPlans = SubscriptionPlan::where('is_active', true)->orderBy('price')->get();
-        $currentSubscription = $user->subscriptions()->where('status', 'active')->first();
-
         // Get activity logs
         $activityLogs = $user->activityLogs()->orderBy('created_at', 'desc')->limit(10)->get();
-
-        // Get transaction history
-        $transactionHistory = $user->subscriptionTransactions()
-            ->with('subscription.plan')
-            ->orderBy('created_at', 'desc')
-            ->limit(20)
-            ->get();
 
         // Get last login info
         $lastLogin = $user->activityLogs()
@@ -415,84 +364,13 @@ class AdminController extends Controller
 
         return view('admin.users.edit', compact(
             'user',
-            'subscriptionPlans',
-            'currentSubscription',
             'activityLogs',
-            'transactionHistory',
             'lastLogin'
         ));
     }
 
     public function updateUser(Request $request, User $user)
     {
-        // If the request came from the subscription tab, don't require the account fields
-        $isSubscriptionAction = $request->filled('subscription_plan_id') || $request->has('remove_subscription');
-
-        if ($isSubscriptionAction) {
-            $validated = $request->validate([
-                'subscription_plan_id' => 'nullable|exists:subscription_plans,id',
-                'subscription_duration' => 'nullable|integer|min:1|max:365',
-                'remove_subscription' => 'nullable|boolean',
-            ]);
-
-            if ($request->filled('subscription_plan_id')) {
-                $plan = SubscriptionPlan::find($validated['subscription_plan_id']);
-
-                // Cancel any current active subscriptions
-                $user->subscriptions()->where('status', 'active')->update([
-                    'status' => 'cancelled',
-                    'cancelled_at' => now(),
-                ]);
-
-                $duration = (int) ($validated['subscription_duration'] ?? 30); // Ensure numeric for Carbon
-                $startsAt = now();
-                $endsAt = $startsAt->copy()->addDays($duration);
-
-                // Create the new granted subscription
-                $subscription = $user->subscriptions()->create([
-                    'subscription_plan_id' => $plan->id,
-                    'status' => 'active',
-                    'starts_at' => $startsAt,
-                    'ends_at' => $endsAt,
-                    'payment_method' => 'admin_grant',
-                    'payment_reference' => 'Admin granted by ' . Auth::user()->name,
-                ]);
-
-                // Record the transaction for auditing
-                SubscriptionTransaction::create([
-                    'user_id' => $user->id,
-                    'subscription_id' => $subscription->id,
-                    'amount' => $plan->price ?? 0,
-                    'currency' => 'PHP',
-                    'payment_method' => 'admin_grant',
-                    'transaction_id' => 'ADMIN-' . uniqid(),
-                    'status' => 'completed',
-                    'auto_renewal' => false,
-                    'notes' => 'Granted by admin: ' . Auth::user()->name,
-                ]);
-
-                // Update user flags so premium access is unlocked immediately
-                $user->update([
-                    'current_subscription_plan_id' => $plan->id,
-                    'subscription_expires_at' => $endsAt,
-                ]);
-            } elseif ($request->has('remove_subscription')) {
-                // Cancel active subscriptions if remove_subscription is checked
-                $user->subscriptions()->where('status', 'active')->update([
-                    'status' => 'cancelled',
-                    'cancelled_at' => now(),
-                ]);
-
-                // Reset the user's plan to free
-                $user->update([
-                    'current_subscription_plan_id' => null,
-                    'subscription_expires_at' => null,
-                ]);
-            }
-
-            return redirect()->route('admin.users.edit', $user)->with('success', 'Subscription updated successfully');
-        }
-
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => ['required', 'email', Rule::unique('users')->ignore($user->id)],
@@ -600,19 +478,6 @@ class AdminController extends Controller
             ->paginate(20);
 
         return view('admin.users.activity-log', compact('user', 'activityLogs'));
-    }
-
-    /**
-     * Get transaction history
-     */
-    public function getTransactionHistory(User $user)
-    {
-        $transactions = $user->subscriptionTransactions()
-            ->with('subscription.plan')
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
-
-        return view('admin.users.transaction-history', compact('user', 'transactions'));
     }
 
     // Health module management methods
@@ -763,7 +628,7 @@ class AdminController extends Controller
                 return [
                     'id' => $notif->id,
                     'user_name' => $notif->user->name,
-                    'message' => $notif->message,
+                    'message' => $notif->body,
                     'type' => $notif->type ?? 'General',
                     'status' => $notif->status,
                     'user_interaction' => $status,
@@ -858,21 +723,6 @@ class AdminController extends Controller
                 'color' => 'blue'
             ]);
 
-        // Recent subscriptions
-        $recentSubs = Subscription::where('created_at', '>=', Carbon::now()->subDays(7))
-            ->with('user', 'plan')
-            ->latest('created_at')
-            ->limit(5)
-            ->get()
-            ->map(fn($sub) => [
-                'type' => 'subscription',
-                'title' => 'New Subscription',
-                'description' => $sub->user->name . ' subscribed to ' . $sub->plan->name,
-                'timestamp' => $sub->created_at,
-                'icon' => 'star',
-                'color' => 'green'
-            ]);
-
         // Missed medication alerts
         $missedMeds = MedicationHistory::where('status', 'missed')
             ->where('created_at', '>=', Carbon::now()->subDays(1))
@@ -889,7 +739,7 @@ class AdminController extends Controller
                 'color' => 'red'
             ]);
 
-        $activities = collect(array_merge($recentUsers->toArray(), $recentSubs->toArray(), $missedMeds->toArray()))
+        $activities = collect(array_merge($recentUsers->toArray(), $missedMeds->toArray()))
             ->sortByDesc('timestamp')
             ->take($limit);
 
@@ -966,7 +816,7 @@ class AdminController extends Controller
 
                 if ($entries->isEmpty()) return false;
 
-                $totalIntake = $entries->sum('amount');
+                $totalIntake = $entries->sum('amount_ml');
                 $goalDays = $entries->groupBy('created_at:Y-m-d')->count();
                 $expectedTotal = ($user->hydration_goal ?? 2000) * $goalDays;
 
@@ -976,7 +826,7 @@ class AdminController extends Controller
                 $entries = $user->hydrationEntries()
                     ->where('created_at', '>=', $weekAgo)
                     ->get();
-                $totalIntake = $entries->sum('amount');
+                $totalIntake = $entries->sum('amount_ml');
                 $goalDays = $entries->groupBy('created_at:Y-m-d')->count();
                 $expectedTotal = ($user->hydration_goal ?? 2000) * $goalDays;
 
@@ -1059,7 +909,7 @@ class AdminController extends Controller
                 'id' => $notif->id,
                 'user_name' => $notif->user->name,
                 'user_email' => $notif->user->email,
-                'message' => $notif->message,
+                'message' => $notif->body,
                 'error' => $notif->error_message ?? 'Unknown error',
                 'created_at' => $notif->created_at,
             ]);
@@ -1120,7 +970,7 @@ class AdminController extends Controller
                 $entries = $user->hydrationEntries;
                 if ($entries->isEmpty()) return 0;
 
-                $totalIntake = $entries->sum('amount');
+                $totalIntake = $entries->sum('amount_ml');
                 $daysLogged = $entries->groupBy('created_at:Y-m-d')->count();
                 $expectedTotal = ($user->hydration_goal ?? 2000) * $daysLogged;
 
@@ -1135,7 +985,7 @@ class AdminController extends Controller
                 $entries = $user->hydrationEntries;
                 if ($entries->isEmpty()) return 0;
 
-                $totalIntake = $entries->sum('amount');
+                $totalIntake = $entries->sum('amount_ml');
                 $daysLogged = $entries->groupBy('created_at:Y-m-d')->count();
                 $expectedTotal = ($user->hydration_goal ?? 2000) * $daysLogged;
 

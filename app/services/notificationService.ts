@@ -10,7 +10,7 @@
  *   await scheduleReminderInSeconds('Drink Water', '200ml now', 5);
  *   await scheduleDailyReminder('Evening Meds', 'Take your pills', 21, 0);
  */
-import * as Notifications from 'expo-notifications';
+import type * as ExpoNotifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
@@ -18,39 +18,55 @@ import { Platform } from 'react-native';
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
 
-// Configure notification handler (works for local notifications in Expo Go)
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: !isExpoGo, // Badge might not work in Expo Go
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+const shouldSuppressExpoGoPushMessage = (msg: any) => {
+  const text = (msg?.toString?.() || String(msg)).toLowerCase();
+  return (
+    text.includes('expo go') &&
+    (text.includes('push notifications') || text.includes('remote notifications'))
+  );
+};
 
-// Log that we are using local-only notifications in Expo Go
 if (isExpoGo) {
   console.log('Expo Go detected: using local notifications only.');
-  // Suppress Expo Go remote push warning emitted by expo-notifications
-  const originalWarn = console.warn;
-  const originalError = console.error;
-  const shouldSuppress = (msg: any) => {
-    const text = (msg?.toString?.() || String(msg)).toLowerCase();
-    return (
-      text.includes('expo go') &&
-      text.includes('sdk 53') &&
-      (text.includes('push notifications') || text.includes('remote notifications'))
-    );
-  };
-  console.warn = (...args: any[]) => {
-    if (args.some(shouldSuppress)) return;
-    originalWarn.apply(console, args);
-  };
-  console.error = (...args: any[]) => {
-    if (args.some(shouldSuppress)) return;
-    originalError.apply(console, args);
-  };
+}
+
+// Suppress Expo Go remote push warnings before expo-notifications is loaded.
+const originalWarn = console.warn;
+const originalError = console.error;
+console.warn = (...args: any[]) => {
+  if (isExpoGo && args.some(shouldSuppressExpoGoPushMessage)) return;
+  originalWarn.apply(console, args);
+};
+console.error = (...args: any[]) => {
+  if (isExpoGo && args.some(shouldSuppressExpoGoPushMessage)) return;
+  originalError.apply(console, args);
+};
+
+let notificationsModule: typeof ExpoNotifications | null = null;
+
+function getNotifications(): typeof ExpoNotifications | null {
+  if (notificationsModule) return notificationsModule;
+
+  try {
+    notificationsModule = require('expo-notifications');
+    notificationsModule?.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: !isExpoGo, // Badge might not work in Expo Go
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+    return notificationsModule;
+  } catch (error) {
+    if (isExpoGo) {
+      console.log('Expo Go detected: using local notifications only.');
+    } else {
+      console.error('Notifications module unavailable:', error);
+    }
+    return null;
+  }
 }
 
 export interface NotificationData {
@@ -69,6 +85,11 @@ class NotificationService {
    */
   async requestPermissions(): Promise<boolean> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return false;
+      }
+
       if (!Device.isDevice) {
         console.log('Notifications are not available on simulator/emulator');
         return false;
@@ -127,6 +148,11 @@ class NotificationService {
     data?: NotificationData
   ): Promise<string | null> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return null;
+      }
+
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title,
@@ -157,6 +183,11 @@ class NotificationService {
     data?: NotificationData
   ): Promise<string | null> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return null;
+      }
+
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title,
@@ -269,6 +300,11 @@ class NotificationService {
     backendNotificationId?: string
   ): Promise<void> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return;
+      }
+
       // Cancel the original notification
       if (notificationId) {
         await Notifications.cancelScheduledNotificationAsync(notificationId);
@@ -296,6 +332,11 @@ class NotificationService {
    */
   async cancelNotification(notificationId: string): Promise<void> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return;
+      }
+
       await Notifications.cancelScheduledNotificationAsync(notificationId);
     } catch (error) {
       console.error('Error canceling notification:', error);
@@ -307,6 +348,11 @@ class NotificationService {
    */
   async cancelMedicationNotifications(medicationId: string): Promise<void> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return;
+      }
+
       const allNotifications = await Notifications.getAllScheduledNotificationsAsync();
       
       for (const notification of allNotifications) {
@@ -325,6 +371,12 @@ class NotificationService {
    */
   async cancelAllNotifications(): Promise<void> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        this.scheduledNotifications.clear();
+        return;
+      }
+
       await Notifications.cancelAllScheduledNotificationsAsync();
       this.scheduledNotifications.clear();
     } catch (error) {
@@ -335,8 +387,13 @@ class NotificationService {
   /**
    * Get all scheduled notifications
    */
-  async getAllScheduledNotifications(): Promise<Notifications.NotificationRequest[]> {
+  async getAllScheduledNotifications(): Promise<ExpoNotifications.NotificationRequest[]> {
     try {
+      const Notifications = getNotifications();
+      if (!Notifications) {
+        return [];
+      }
+
       return await Notifications.getAllScheduledNotificationsAsync();
     } catch (error) {
       console.error('Error getting scheduled notifications:', error);
@@ -348,9 +405,14 @@ class NotificationService {
    * Setup notification response handlers
    */
   setupNotificationHandlers(
-    onNotificationReceived?: (notification: Notifications.Notification) => void,
-    onNotificationTapped?: (response: Notifications.NotificationResponse) => void
+    onNotificationReceived?: (notification: ExpoNotifications.Notification) => void,
+    onNotificationTapped?: (response: ExpoNotifications.NotificationResponse) => void
   ) {
+    const Notifications = getNotifications();
+    if (!Notifications) {
+      return () => {};
+    }
+
     // Handle notification received while app is in foreground
     const receivedListener = Notifications.addNotificationReceivedListener((notification) => {
       console.log('Notification received:', notification);

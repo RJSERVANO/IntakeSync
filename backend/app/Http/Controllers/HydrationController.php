@@ -71,6 +71,16 @@ class HydrationController
         return $notes === '' ? null : substr($notes, 0, 500);
     }
 
+    protected function normalizeDrinkLabel($value)
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $label = trim($value);
+        return $label === '' ? null : substr($label, 0, 100);
+    }
+
     protected function entryResponse($entry)
     {
         return [
@@ -81,6 +91,7 @@ class HydrationController
             'sugar_level' => $entry->sugar_level ?? 'none',
             'caffeine_level' => $entry->caffeine_level ?? 'none',
             'notes' => $entry->notes,
+            'drink_label' => $entry->drink_label,
         ];
     }
 
@@ -246,6 +257,7 @@ class HydrationController
         $sugarLevel = $this->normalizeLevel($request->input('sugar_level', 'none'));
         $caffeineLevel = $this->normalizeLevel($request->input('caffeine_level', 'none'));
         $notes = $this->normalizeNotes($request->input('notes'));
+        $drinkLabel = $this->normalizeDrinkLabel($request->input('drink_label'));
 
         if ($beverageType === 'water') {
             $sugarLevel = 'none';
@@ -261,6 +273,7 @@ class HydrationController
                 'sugar_level' => $sugarLevel,
                 'caffeine_level' => $caffeineLevel,
                 'notes' => $notes,
+                'drink_label' => $drinkLabel,
                 'created_at' => now(),
             ]);
             Log::debug('Hydration add (db)', ['user' => $user->id, 'entry_id' => $e->id]);
@@ -275,6 +288,7 @@ class HydrationController
             'sugar_level' => $sugarLevel,
             'caffeine_level' => $caffeineLevel,
             'notes' => $notes,
+            'drink_label' => $drinkLabel,
         ];
         $data['entries'][] = $entry;
         $this->writeData($user->id, $data);
@@ -395,6 +409,7 @@ class HydrationController
                     'sugar_level' => 'none',
                     'caffeine_level' => 'none',
                     'notes' => null,
+                    'drink_label' => null,
                 ], $entry);
             }, $file['entries'] ?? []);
         }

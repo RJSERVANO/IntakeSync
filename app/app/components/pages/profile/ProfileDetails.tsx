@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import EditProfileModal from './EditProfileModal';
 import ProfileInfoList from './ProfileInfoList';
-import useUser from '../../../hooks/useUser';
+import useUser from '../../../../hooks/useUser';
 import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 
 interface UserDetails {

@@ -11,6 +11,8 @@ import {
   TouchableOpacity,
   Platform,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Props = {
   onFinish?: () => void;
@@ -20,28 +22,30 @@ type Props = {
 const onboardingScreens = [
   {
     key: '1',
-    title: 'Beverage Tracking\n💧',
+    title: 'Beverage Tracking',
     description: 'Track your daily beverage intake effortlessly.',
     bgDecor: 'water',
+    icon: 'water' as const,
   },
   {
     key: '2',
-    title: 'Medication Reminders 💊',
-    description: 'Never miss a dose with smart notifications.',
+    title: 'Medication Reminders',
+    description: 'Stay on schedule with helpful reminders.',
     bgDecor: 'pills',
+    icon: 'medkit' as const,
   },
   {
     key: '3',
-    title: 'Personalized Dashboard 📊',
+    title: 'Routine Dashboard',
     description: 'Monitor your beverage intake and medication adherence in one place.',
     bgDecor: 'dashboard',
+    icon: 'bar-chart' as const,
   },
 ];
 
-export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) {
+export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) {
+  const insets = useSafeAreaInsets();
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const [dots, setDots] = useState('');
   const [activeDotIndex, setActiveDotIndex] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
   const [splashFinished, setSplashFinished] = useState(false);
@@ -62,14 +66,6 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
       useNativeDriver: true,
     }).start();
 
-    // Progress bar fill over splash duration
-    progressAnim.setValue(0);
-    Animated.timing(progressAnim, {
-      toValue: 1,
-      duration: minimumMs,
-      useNativeDriver: false,
-    }).start();
-
     const dotInterval = setInterval(() => {
       setActiveDotIndex(prev => (prev + 1) % 5); // 5 dots total, cycle through
     }, 400);
@@ -86,7 +82,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
       clearInterval(dotInterval);
       clearTimeout(finishTimeout);
     };
-  }, [minimumMs]);
+  }, [fadeAnim, minimumMs]);
   // Auto-scroll onboarding screens every 5s
   useEffect(() => {
     if (splashFinished && flatListRef.current) {
@@ -102,7 +98,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
         }
         try {
           flatListRef.current?.scrollToIndex({ index, animated: true });
-        } catch (error) {
+        } catch {
           // Handle scroll error gracefully
           isScrolling = false;
           clearInterval(interval);
@@ -167,7 +163,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
 
             {/* Single tagline */}
             <Animated.Text style={[styles.tagline, { opacity: fadeAnim }]}>
-              Smart Reminders, Healthier You.
+              Helpful reminders for everyday routines.
             </Animated.Text>
 
             {/* Animated loading dots */}
@@ -190,7 +186,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
               ))}
             </Animated.View>
           </View>
-          <View style={styles.footer}>
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + 12, Platform.OS === 'ios' ? 28 : 22) }]}>
             <Text style={styles.footerText}>© {new Date().getFullYear()} IntakeSync</Text>
           </View>
         </ImageBackground>
@@ -204,6 +200,13 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
       {/* Decorative background shapes for onboarding */}
       <View style={styles.decorShapeOne} />
       <View style={styles.decorShapeTwo} />
+      <TouchableOpacity
+        style={[styles.skipButton, { top: Math.max(insets.top + 10, 24) }]}
+        onPress={onFinish}
+        activeOpacity={0.82}
+      >
+        <Text style={styles.skipText}>Skip</Text>
+      </TouchableOpacity>
       <FlatList
         ref={flatListRef}
         data={onboardingScreens}
@@ -218,7 +221,17 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
         renderItem={({ item }) => (
-          <View style={[styles.onboardingScreen, { width, height }]}> 
+          <View
+            style={[
+              styles.onboardingScreen,
+              {
+                width,
+                minHeight: height,
+                paddingTop: Math.max(insets.top + 56, 88),
+                paddingBottom: Math.max(insets.bottom + 26, 34),
+              },
+            ]}
+          >
             {/* Per-screen rich decorations */}
             {item.bgDecor === 'water' && (
               <>
@@ -241,6 +254,9 @@ export default function SplashOnboarding({ onFinish, minimumMs = 5000 }: Props) 
 
             {/* Content wrapper to center main content */}
             <View style={styles.slideContentWrapper}>
+              <View style={styles.iconCircle}>
+                <Ionicons name={item.icon} size={42} color="#1e3a8b" />
+              </View>
               <Text style={styles.onboardingTitle}>{item.title}</Text>
               <Text style={styles.onboardingDescription}>{item.description}</Text>
               
@@ -343,20 +359,7 @@ const styles = StyleSheet.create({
     borderRadius: 3.5,
     backgroundColor: '#FFFFFF',
   },
-  progressTrack: {
-    height: 10,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    marginTop: 16,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: 10,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-  },
   footer: {
-    paddingBottom: Platform.select({ ios: 28, android: 22, default: 20 }),
     alignItems: 'center',
   },
   footerText: {
@@ -365,23 +368,40 @@ const styles = StyleSheet.create({
   },
   onboardingScreen: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 32,
   },
   slideContentWrapper: {
     width: '100%',
-    minHeight: 330,
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
+    transform: [{ translateY: -30 }],
+  },
+  iconCircle: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 26,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.55)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 5,
   },
   onboardingTitle: {
     fontSize: 28,
     fontWeight: '800',
     color: '#fff',
     textAlign: 'center',
-    minHeight: 72,
+    minHeight: 38,
   },
   onboardingDescription: {
     fontSize: 16,
@@ -406,6 +426,22 @@ const styles = StyleSheet.create({
     color: '#1e3a8b',
     fontSize: 18,
     fontWeight: '800',
+  },
+  skipButton: {
+    position: 'absolute',
+    right: 20,
+    zIndex: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  skipText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
   // Decorative shapes for background accents
   decorShapeOne: {

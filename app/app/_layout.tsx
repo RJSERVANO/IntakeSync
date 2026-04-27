@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
-import { notificationManager } from './services/notificationManager';
+import { notificationManager } from '../services/notificationManager';
 import { LogBox } from 'react-native';
 
 // Suppress Expo Go push notification warning in UI

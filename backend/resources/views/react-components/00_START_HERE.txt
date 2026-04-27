@@ -1,6 +1,6 @@
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║                                                                            ║
-║         🎉 AQUATAB ADMIN DASHBOARD - PROJECT COMPLETION SUMMARY 🎉         ║
+║         🎉 INTAKESYNC ADMIN DASHBOARD - PROJECT COMPLETION SUMMARY 🎉         ║
 ║                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 

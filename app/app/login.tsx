@@ -10,12 +10,12 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as AuthSession from 'expo-auth-session';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
-import { AuthField } from './components/auth/AuthField';
-import { AuthLayout } from './components/auth/AuthLayout';
-import { authStyles } from './components/auth/authStyles';
+import { AuthField } from '../components/auth/AuthField';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import { authStyles } from '../components/auth/authStyles';
+import { useGoogleAuth } from '../hooks/useGoogleAuth';
 
 export default function Login() {
   const router = useRouter();
@@ -26,32 +26,7 @@ export default function Login() {
   const headerOpacity = React.useRef(new Animated.Value(0)).current;
   const cardTranslate = React.useRef(new Animated.Value(30)).current;
   const cardOpacity = React.useRef(new Animated.Value(0)).current;
-
-  const redirectUri = AuthSession.makeRedirectUri({ useProxy: true });
-  const clientId =
-    '237625744653-f08o97b5d90esl7je4pie2hephi1t32e.apps.googleusercontent.com';
-  const scopes = ['openid', 'email', 'profile'];
-  const discovery = {
-    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: 'https://oauth2.googleapis.com/token',
-  } as const;
-
-  const [, response, promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId,
-      redirectUri,
-      scopes,
-      responseType: AuthSession.ResponseType.Code,
-      extraParams: { prompt: 'select_account' },
-    },
-    discovery
-  );
-
-  useEffect(() => {
-    if (response) {
-      // consumed during development for auth flow debugging
-    }
-  }, [response]);
+  const { signInWithGoogle } = useGoogleAuth();
 
   useEffect(() => {
     Animated.parallel([
@@ -103,22 +78,18 @@ export default function Login() {
   async function onGoogle() {
     try {
       setLoading(true);
-      console.log('Starting Google auth flow (code + PKCE) with:', { clientId, scopes });
-      const result = await promptAsync({ useProxy: true });
-      console.log('promptAsync result:', result);
-      if (result?.type !== 'success') {
-        Alert.alert('Google Sign-in', 'Canceled or failed');
+      const res = await signInWithGoogle();
+      if (!res) {
         return;
       }
-
-      const code = (result as any).params?.code;
-      if (!code) {
-        Alert.alert('Google Sign-in', 'No code received');
-        return;
+      if (!res.onboarding_completed) {
+        router.replace({
+          pathname: '/onboarding',
+          params: { token: res.token, name: res.user?.name || '' },
+        } as any);
+      } else {
+        router.replace({ pathname: '/home', params: { token: res.token } } as any);
       }
-
-      const res = await api.post('/oauth/google', { code, redirect_uri: redirectUri });
-      router.replace({ pathname: '/home', params: { token: res.token } } as any);
     } catch (err: any) {
       console.log('google signin error', err);
       const message =
@@ -127,10 +98,6 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function onFacebookLogin() {
-    Alert.alert('Coming Soon', 'Facebook login will be available soon');
   }
 
   return (
@@ -207,13 +174,6 @@ export default function Login() {
           <Ionicons name="logo-google" size={18} color="#DB4437" />
         </View>
         <Text style={authStyles.socialButtonText}>Continue with Google</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={authStyles.socialButton} onPress={onFacebookLogin}>
-        <View style={authStyles.socialIconWrap}>
-          <Ionicons name="logo-facebook" size={18} color="#1877F2" />
-        </View>
-        <Text style={authStyles.socialButtonText}>Continue with Facebook</Text>
       </TouchableOpacity>
 
       <View style={styles.footerWrap}>

@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>@yield('title', 'AQUATAB ADMIN')</title>
+  <title>@yield('title', 'IntakeSync ADMIN')</title>
 
   {{-- Tailwind CDN for quick admin styling (no npm required) --}}
   <script>

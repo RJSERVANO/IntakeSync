@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
-import { notificationManager } from '../../../services/notificationManager';
+import { notificationManager } from '../../../../services/notificationManager';
 
 type MedicationItem = {
   id: string;

@@ -16,12 +16,21 @@ class Medication extends Model
         'times',
         'reminder',
         'active',
+        'start_date',
+        'end_date',
+        'frequency',
+        'days_of_week',
+        'notes',
+        'color',
     ];
 
     protected $casts = [
         'times' => 'array',
         'reminder' => 'boolean',
         'active' => 'boolean',
+        'start_date' => 'date',
+        'end_date' => 'date',
+        'days_of_week' => 'array',
     ];
 
     public function history()

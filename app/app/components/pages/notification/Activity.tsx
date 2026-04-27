@@ -25,7 +25,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
 import BottomNavigation from '../../navigation/BottomNavigation';
-import api from '../../../api';
+import { del, get, post, put } from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Types
@@ -76,6 +76,18 @@ export interface AdherenceTrend {
   percentage: number;
 }
 
+export interface HydrationEntry {
+  id?: number | string;
+  amount_ml?: number;
+  logged_ml?: number;
+  timestamp?: string;
+  created_at?: string;
+  source?: string;
+  beverage_type?: string;
+  notes?: string | null;
+  drink_label?: string | null;
+}
+
 // PillIcon Component (inline since we don't have it as a separate file)
 const PillIcon = ({ name, size = 20, color = '#1E3A8A' }: { name: string; size?: number; color?: string }) => {
   const iconMap: Record<string, any> = {
@@ -102,6 +114,7 @@ export default function Activity() {
   // State
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [medicationHistory, setMedicationHistory] = useState<MedicationHistory[]>([]);
+  const [hydrationEntries, setHydrationEntries] = useState<HydrationEntry[]>([]);
   const [stats, setStats] = useState<NotificationStats>({ completed: 0, upcoming: 0, missed: 0 });
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -140,7 +153,7 @@ export default function Activity() {
     switch (status) {
       case 'completed':
       case 'taken':
-        return 'Completed';
+        return 'Taken';
       case 'missed':
       case 'skipped':
         return 'Missed';
@@ -156,16 +169,12 @@ export default function Activity() {
     }
   }, []);
 
-  // Helper: Get notification icon
-  const getNotificationIcon = useCallback((type: NotificationType) => {
-    switch (type) {
-      case 'hydration':
-        return 'water-outline' as const;
-      case 'medication':
-        return 'medkit-outline' as const;
-      default:
-        return 'notifications-outline' as const;
-    }
+  const getActivityIcon = useCallback((type: NotificationType, status?: NotificationStatus) => {
+    if (type === 'hydration') return 'water-outline' as const;
+    if (status === 'missed' || status === 'skipped') return 'alert-circle-outline' as const;
+    if (status === 'snoozed') return 'time-outline' as const;
+    if (type === 'medication') return 'medical-outline' as const;
+    return 'notifications-outline' as const;
   }, []);
 
   // Helper: Format time to 12-hour format
@@ -183,6 +192,26 @@ export default function Activity() {
   const formatDate = (iso?: string | null) => {
     if (!iso) return '';
     return new Date(iso).toLocaleDateString();
+  };
+
+  const formatMeta = (iso?: string | null) => {
+    if (!iso) return '';
+    return `${formatDate(iso)} | ${formatTime(iso)}`;
+  };
+
+  const getBeverageLabel = (entry: HydrationEntry) => {
+    const note = typeof entry.notes === 'string' ? entry.notes.trim() : '';
+    const base =
+      typeof entry.drink_label === 'string' && entry.drink_label.trim()
+        ? entry.drink_label.trim()
+        : entry.beverage_type === 'caffeinated'
+          ? 'Caffeinated beverage'
+          : entry.beverage_type === 'sugar_sweetened'
+            ? 'Sugar-sweetened drink'
+            : entry.beverage_type === 'other_non_alcoholic'
+              ? 'Other beverage'
+              : 'Beverage';
+    return note ? `${base} (${note})` : base;
   };
 
   // Normalize API response to NotificationItem[]
@@ -249,25 +278,35 @@ export default function Activity() {
   // Fetch notifications from API
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await api.get('/notifications', token);
+      const res = await get('/notifications', token);
       const list = normalizeList(res);
       setNotifications(list);
-    } catch (_) {
+    } catch {
       setNotifications([]);
     }
   }, [normalizeList, token]);
+
+  const fetchHydrationEntries = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await get('/hydration', token);
+      setHydrationEntries(Array.isArray(res?.entries) ? res.entries : []);
+    } catch {
+      setHydrationEntries([]);
+    }
+  }, [token]);
 
   // Fetch medication history from all medications
   const fetchMedicationHistory = useCallback(async () => {
     if (!token) return;
     try {
       // Get all medications first
-      const medications: any[] = await api.get('/medications', token);
+      const medications: any[] = await get('/medications', token);
       
       // Fetch history for each medication
       const historyPromises = medications.map(async (med) => {
         try {
-          const history = await api.get(`/medications/${med.id}/history`, token);
+          const history = await get(`/medications/${med.id}/history`, token);
           // Attach medication info to each history entry
           return Array.isArray(history) ? history.map((h: any) => ({
             ...h,
@@ -339,13 +378,13 @@ export default function Activity() {
   // Fetch stats from API (fallback)
   const fetchStats = useCallback(async () => {
     try {
-      const res = await api.get('/notifications/stats', token);
+      const res = await get('/notifications/stats', token);
       const apiStats = normalizeStats(res);
       // Only use if we don't have medication history stats
       if (medicationHistory.length === 0) {
         setStats(apiStats);
       }
-    } catch (_) {
+    } catch {
       // Stats already calculated from medication history
     }
   }, [normalizeStats, token, medicationHistory.length]);
@@ -358,13 +397,14 @@ export default function Activity() {
         await Promise.all([
           fetchNotifications(),
           fetchMedicationHistory(),
+          fetchHydrationEntries(),
           fetchStats(),
         ]);
         setLoading(false);
       };
       
       loadData();
-    }, [fetchNotifications, fetchMedicationHistory, fetchStats])
+    }, [fetchNotifications, fetchMedicationHistory, fetchHydrationEntries, fetchStats])
   );
 
   // Calculate adherence trends when medication history changes
@@ -376,89 +416,47 @@ export default function Activity() {
 
   // Mark all as read
   const markAllAsRead = useCallback(async () => {
-    // Optimistic Update: Update UI immediately for instant feedback
     setNotifications(prev =>
       prev.map(n => ({
         ...n,
         status:
           n.status === 'scheduled' || n.status === 'delivered' || n.status === 'upcoming'
-            ? 'completed'
+            ? 'delivered'
             : n.status,
       }))
     );
-    
-    setMedicationHistory(prev =>
-      prev.map(h => ({
-        ...h,
-        status: h.status === 'missed' || h.status === 'skipped' ? 'completed' : h.status,
-      }))
-    );
-    
-    // Get entries to update before we proceed
-    const entriesToUpdate = medicationHistory.filter(
-      h => h.status === 'missed' || h.status === 'skipped'
-    );
 
-    // Now perform backend updates in the background
     try {
-      // Mark all notifications as read
-      await api.post('/notifications/mark-all-read', {}, token);
-    } catch (_) {
+      await post('/notifications/mark-all-read', {}, token);
+    } catch {
       // If endpoint not available, fall back client-side
     }
-    
-    // Update medication history entries on backend
-    try {
-      await Promise.all(
-        entriesToUpdate.map(entry =>
-          api.put(
-            `/medications/${entry.medication_id}/history/${entry.id}`,
-            { status: 'completed' },
-            token
-          ).catch(() => {}) // Silently fail individual updates
-        )
-      );
-    } catch (_) {
-      // Backend update failed, but optimistic update already applied
-    }
-    
-    // Reload data from backend to ensure sync
-    await fetchMedicationHistory();
-    await fetchStats();
-    
-    // Show success feedback
-    Alert.alert('Success', 'All items marked as read');
-  }, [fetchStats, fetchMedicationHistory, medicationHistory, token]);
+
+    Alert.alert('Success', 'Notification reminders marked as read');
+  }, [token]);
 
   // Clear all notifications
   const clearAllNotifications = useCallback(async () => {
-    // Optimistic Update: Clear UI immediately
     setNotifications([]);
-    setMedicationHistory([]);
     
     // Clear notifications from backend
     try {
-      await api.post('/notifications/clear', {}, token);
-    } catch (_) {
+      await post('/notifications/clear', {}, token);
+    } catch {
       // Backend clear failed, but UI already cleared
     }
     
-    // Note: We only clear the local view state for medication history.
-    // The medical data remains preserved in the backend database for adherence tracking.
-    // This just hides it from the "Recent Activity" feed view.
-    
     await fetchStats();
     
-    // Show success feedback
-    Alert.alert('Success', 'Activity feed cleared');
+    Alert.alert('Success', 'Notification reminders cleared');
   }, [fetchStats, token]);
 
   // Complete a notification
   const completeNotification = useCallback(
     async (id: number | string) => {
       try {
-        await api.put(`/notifications/${id}/complete`, {}, token);
-      } catch (_) {}
+        await put(`/notifications/${id}/complete`, {}, token);
+      } catch {}
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, status: 'completed' } : n))
       );
@@ -471,8 +469,8 @@ export default function Activity() {
   const snoozeNotification = useCallback(
     async (id: number | string) => {
       try {
-        await api.put(`/notifications/${id}/snooze`, { minutes: 10 }, token);
-      } catch (_) {}
+        await put(`/notifications/${id}/snooze`, { minutes: 10 }, token);
+      } catch {}
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, status: 'snoozed' } : n))
       );
@@ -485,8 +483,8 @@ export default function Activity() {
   const deleteNotification = useCallback(
     async (id: number | string) => {
       try {
-        await api.del(`/notifications/${id}`, token);
-      } catch (_) {}
+        await del(`/notifications/${id}`, token);
+      } catch {}
       setNotifications(prev => prev.filter(n => n.id !== id));
       await fetchStats();
     },
@@ -499,10 +497,11 @@ export default function Activity() {
     await Promise.all([
       fetchNotifications(),
       fetchMedicationHistory(),
+      fetchHydrationEntries(),
       fetchStats(),
     ]);
     setRefreshing(false);
-  }, [fetchNotifications, fetchMedicationHistory, fetchStats]);
+  }, [fetchNotifications, fetchMedicationHistory, fetchHydrationEntries, fetchStats]);
 
   // Export to PDF
   const exportToPDF = useCallback(async () => {
@@ -527,7 +526,7 @@ export default function Activity() {
         <html>
         <head>
           <meta charset="utf-8">
-          <title>Medication History Report</title>
+          <title>IntakeSync Activity Report</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -575,7 +574,7 @@ export default function Activity() {
           </style>
         </head>
         <body>
-          <h1>Medication History Report</h1>
+          <h1>IntakeSync Activity Report</h1>
           <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
           <p><strong>Period:</strong> Last 30 entries</p>
           
@@ -611,7 +610,7 @@ export default function Activity() {
           </table>
           
           <div class="footer">
-            <p>AquaTab - Medication Tracking Report</p>
+            <p>IntakeSync Activity Report</p>
           </div>
         </body>
         </html>
@@ -624,7 +623,7 @@ export default function Activity() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
           mimeType: 'application/pdf',
-          dialogTitle: 'Medication History Report',
+          dialogTitle: 'IntakeSync Activity Report',
         });
       } else {
         Alert.alert('Success', `PDF saved to: ${uri}`);
@@ -665,39 +664,89 @@ export default function Activity() {
     [stats]
   );
 
+  const activityFeed = useMemo(() => {
+    const medicationItems = medicationHistory.map(entry => ({
+      id: `med-${entry.id}`,
+      kind: 'medication' as const,
+      title: entry.status === 'missed' || entry.status === 'skipped' ? 'Medication missed' : 'Medication taken',
+      message: `${entry.medication?.name || 'Medication'}${entry.medication?.dosage ? ` | ${entry.medication.dosage}` : ''}`,
+      status: entry.status as NotificationStatus,
+      time: entry.time || entry.created_at,
+      icon: getActivityIcon('medication', entry.status as NotificationStatus),
+    }));
+
+    const beverageItems = hydrationEntries.map((entry, index) => {
+      const amount = Number(entry.amount_ml || entry.logged_ml || 0);
+      return {
+        id: `bev-${entry.id ?? entry.timestamp ?? index}`,
+        kind: 'hydration' as const,
+        title: 'Beverage logged',
+        message: `${getBeverageLabel(entry)}${amount ? ` | ${amount} ml` : ''}`,
+        status: 'completed' as NotificationStatus,
+        time: entry.timestamp || entry.created_at || '',
+        icon: getActivityIcon('hydration'),
+      };
+    });
+
+    const notificationItems = notifications.map(n => ({
+      id: `note-${n.id}`,
+      kind: n.type,
+      title:
+        n.status === 'snoozed'
+          ? 'Snoozed reminder'
+          : n.type === 'hydration'
+            ? 'Beverage reminder'
+            : n.type === 'medication'
+              ? getStatusText(n.status) === 'Missed'
+                ? 'Medication missed'
+                : 'Medication reminder'
+              : 'Reminder activity',
+      message: n.message || n.body || n.title,
+      status: n.status,
+      time: n.scheduled_at || n.scheduled_time || n.created_at || '',
+      icon: getActivityIcon(n.type, n.status),
+      notification: n,
+    }));
+
+    return [...medicationItems, ...beverageItems, ...notificationItems]
+      .filter(item => item.time)
+      .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+      .slice(0, 30);
+  }, [getActivityIcon, getStatusText, hydrationEntries, medicationHistory, notifications]);
+
   return (
     <SafeAreaView style={styles.container}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 10) }]}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.title}>Activity</Text>
+          <Text style={styles.subtitle}>Routine activity from reminders, beverage logs, and medication history</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.exportBtn}
+          onPress={exportToPDF}
+          disabled={exporting || medicationHistory.length === 0}
+        >
+          {exporting ? (
+            <ActivityIndicator size="small" color="#1E3A8A" />
+          ) : (
+            <Ionicons name="download-outline" size={22} color="#1E3A8A" />
+          )}
+        </TouchableOpacity>
+      </View>
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top || 12 }]}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Header with Export Button */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>Activity</Text>
-            <Text style={styles.subtitle}>View your notification history</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.exportBtn}
-            onPress={exportToPDF}
-            disabled={exporting || medicationHistory.length === 0}
-          >
-            {exporting ? (
-              <ActivityIndicator size="small" color="#1E3A8A" />
-            ) : (
-              <Ionicons name="download-outline" size={22} color="#1E3A8A" />
-            )}
-          </TouchableOpacity>
-        </View>
-
         {/* Stats Cards - Real Data */}
         <View style={styles.statsRow}>
           {statsList.map(s => (
             <View
               key={s.key}
-              style={[styles.statBox, { borderColor: '#E5E7EB' }]}
+              style={[styles.statBox, { borderLeftColor: s.color }]}
             >
-              <Ionicons name={s.icon} size={18} color={s.color} />
+              <View style={[styles.statIconBubble, { backgroundColor: `${s.color}18` }]}>
+                <Ionicons name={s.icon} size={17} color={s.color} />
+              </View>
               <Text style={[styles.statValue, { color: s.color }]}>{s.value ?? 0}</Text>
               <Text style={styles.statLabel}>{s.label}</Text>
             </View>
@@ -754,7 +803,7 @@ export default function Activity() {
               <View style={styles.chartLegend}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
-                  <Text style={styles.legendText}>Good (≥80%)</Text>
+                  <Text style={styles.legendText}>Good (80%+)</Text>
                 </View>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
@@ -775,16 +824,16 @@ export default function Activity() {
 
         {/* Quick Actions */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <Text style={styles.sectionTitle}>Notification Actions</Text>
         </View>
         <View style={styles.actionsRow}>
           <TouchableOpacity style={styles.actionBtn} onPress={markAllAsRead}>
             <Ionicons name="checkmark-done" size={18} color="#10B981" />
-            <Text style={styles.actionText}>Mark All Read</Text>
+            <Text style={styles.actionText}>Mark Read</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={clearAllNotifications}>
             <Ionicons name="trash" size={18} color="#EF4444" />
-            <Text style={styles.actionText}>Clear All</Text>
+            <Text style={styles.actionText}>Clear Reminders</Text>
           </TouchableOpacity>
         </View>
 
@@ -795,14 +844,40 @@ export default function Activity() {
 
         {loading ? (
           <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#1E3A8A" />
-        ) : medicationHistory.length === 0 && notifications.length === 0 ? (
+        ) : activityFeed.length === 0 ? (
           <View style={styles.emptyBox}>
             <Ionicons name="notifications-off-outline" size={40} color="#94a3b8" />
             <Text style={styles.emptyTitle}>No Activity Yet</Text>
-            <Text style={styles.emptyText}>Your notification history will appear here.</Text>
+            <Text style={styles.emptyText}>Routine activity will appear here.</Text>
           </View>
         ) : (
           <View>
+            {/* Beverage Log Items */}
+            {hydrationEntries
+              .sort((a, b) => new Date(b.timestamp || b.created_at || '').getTime() - new Date(a.timestamp || a.created_at || '').getTime())
+              .slice(0, 10)
+              .map((entry, index) => {
+                const amount = Number(entry.amount_ml || entry.logged_ml || 0);
+                const time = entry.timestamp || entry.created_at || '';
+                return (
+                  <View key={`hydration-${entry.id ?? time ?? index}`} style={[styles.listItem, { borderLeftColor: '#2563EB' }]}>
+                    <View style={[styles.listIconWrap, { backgroundColor: '#EFF6FF' }]}>
+                      <Ionicons name="water-outline" size={20} color="#2563EB" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.itemHeaderRow}>
+                        <Text style={styles.itemTitle}>Beverage logged</Text>
+                        <View style={[styles.statusPill, { backgroundColor: '#DBEAFE' }]}>
+                          <Text style={[styles.statusText, { color: '#2563EB' }]}>Logged</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.itemMessage}>{getBeverageLabel(entry)}{amount ? ` | ${amount} ml` : ''}</Text>
+                      <Text style={styles.itemMeta}>{formatMeta(time)}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+
             {/* Medication History Items */}
             {medicationHistory
               .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
@@ -818,7 +893,7 @@ export default function Activity() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <View style={styles.itemHeaderRow}>
-                      <Text style={styles.itemTitle}>{entry.medication?.name || 'Medication'}</Text>
+                      <Text style={styles.itemTitle}>{entry.status === 'missed' || entry.status === 'skipped' ? 'Medication missed' : 'Medication taken'}</Text>
                       <View
                         style={[
                           styles.statusPill,
@@ -835,11 +910,9 @@ export default function Activity() {
                         </Text>
                       </View>
                     </View>
-                    {entry.medication?.dosage && (
-                      <Text style={styles.itemMessage}>{entry.medication.dosage}</Text>
-                    )}
+                    <Text style={styles.itemMessage}>{entry.medication?.name || 'Medication'}{entry.medication?.dosage ? ` | ${entry.medication.dosage}` : ''}</Text>
                     <Text style={styles.itemMeta}>
-                      {formatDate(entry.time)} • {formatTime(entry.time)}
+                      {formatMeta(entry.time)}
                     </Text>
                   </View>
                 </View>
@@ -850,14 +923,24 @@ export default function Activity() {
               <View key={n.id} style={styles.listItem}>
                 <View style={styles.listIconWrap}>
                   <Ionicons
-                    name={getNotificationIcon(n.type)}
+                    name={getActivityIcon(n.type, n.status)}
                     size={20}
-                    color="#1E3A8A"
+                    color={getStatusColor(n.status)}
                   />
                 </View>
                 <View style={{ flex: 1 }}>
                   <View style={styles.itemHeaderRow}>
-                    <Text style={styles.itemTitle}>{n.title}</Text>
+                    <Text style={styles.itemTitle}>
+                      {n.status === 'snoozed'
+                        ? 'Snoozed reminder'
+                        : n.type === 'hydration'
+                          ? 'Beverage reminder'
+                          : n.type === 'medication'
+                            ? getStatusText(n.status) === 'Missed'
+                              ? 'Medication missed'
+                              : 'Medication reminder'
+                            : 'Reminder activity'}
+                    </Text>
                     <View
                       style={[
                         styles.statusPill,
@@ -878,11 +961,7 @@ export default function Activity() {
                     <Text style={styles.itemMessage}>{n.message || n.body}</Text>
                   )}
                   <Text style={styles.itemMeta}>
-                    {n.scheduled_at || n.scheduled_time
-                      ? `${formatDate(n.scheduled_at || n.scheduled_time)} • ${formatTime(n.scheduled_at || n.scheduled_time)}`
-                      : n.created_at
-                        ? `${formatDate(n.created_at)} • ${formatTime(n.created_at)}`
-                        : ''}
+                    {formatMeta(n.scheduled_at || n.scheduled_time || n.created_at)}
                   </Text>
                   <View style={styles.itemActionsRow}>
                     <TouchableOpacity
@@ -924,31 +1003,42 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8F9FA',
   },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 100,
+    paddingHorizontal: 16,
+    paddingBottom: 112,
   },
   header: {
-    marginBottom: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#DBEAFE',
+  },
+  headerCopy: {
+    flex: 1,
+    paddingRight: 12,
   },
   title: {
     color: '#1F2937',
-    fontSize: 30,
-    fontWeight: '800',
+    fontSize: 28,
+    fontWeight: '900',
   },
   subtitle: {
-    color: '#6B7280',
+    color: '#64748B',
     marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   exportBtn: {
     width: 44,
     height: 44,
-    borderRadius: 12,
-    backgroundColor: 'white',
+    borderRadius: 22,
+    backgroundColor: '#EFF6FF',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#DBEAFE',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -961,8 +1051,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: '#1F2937',
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
   },
   statsRow: {
     flexDirection: 'row',
@@ -972,11 +1062,25 @@ const styles = StyleSheet.create({
   statBox: {
     flex: 1,
     backgroundColor: 'white',
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
+    borderColor: '#DBEAFE',
+    borderLeftWidth: 4,
     padding: 12,
     alignItems: 'center',
     gap: 6,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  statIconBubble: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statValue: {
     fontSize: 20,
@@ -1012,9 +1116,9 @@ const styles = StyleSheet.create({
   },
   chartContainer: {
     backgroundColor: 'white',
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#DBEAFE',
     padding: 16,
     marginBottom: 16,
     minHeight: 200,
@@ -1096,10 +1200,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#DBEAFE',
   },
   actionText: {
     color: '#1F2937',
@@ -1111,18 +1215,24 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
+    borderLeftWidth: 4,
+    borderColor: '#DBEAFE',
+    borderRadius: 14,
     padding: 12,
     marginBottom: 12,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   listIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 8,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EBF8FF',
+    backgroundColor: '#EFF6FF',
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },

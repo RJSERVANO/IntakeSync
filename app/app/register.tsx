@@ -12,9 +12,10 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
-import { AuthField, AuthSelectField } from './components/auth/AuthField';
-import { AuthLayout } from './components/auth/AuthLayout';
-import { authColors, authStyles, authShadows } from './components/auth/authStyles';
+import { AuthField, AuthSelectField } from '../components/auth/AuthField';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import { authColors, authStyles, authShadows } from '../components/auth/authStyles';
+import { useGoogleAuth } from '../hooks/useGoogleAuth';
 
 export default function Register() {
   const router = useRouter();
@@ -33,6 +34,7 @@ export default function Register() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { signInWithGoogle } = useGoogleAuth();
 
   const displayGender = gender
     ? gender.replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -88,11 +90,29 @@ export default function Register() {
   }
 
   async function onGoogleLogin() {
-    Alert.alert('Coming Soon', 'Google login will be available soon');
-  }
+    try {
+      setLoading(true);
+      const res = await signInWithGoogle();
+      if (!res) {
+        return;
+      }
 
-  async function onFacebookLogin() {
-    Alert.alert('Coming Soon', 'Facebook login will be available soon');
+      if (!res.onboarding_completed) {
+        router.replace({
+          pathname: '/onboarding',
+          params: { token: res.token, name: res.user?.name || '' },
+        } as any);
+      } else {
+        router.replace({ pathname: '/home', params: { token: res.token } } as any);
+      }
+    } catch (err: any) {
+      console.log('google register error', err);
+      const message =
+        err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
+      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -250,13 +270,6 @@ export default function Register() {
             <Ionicons name="logo-google" size={18} color="#DB4437" />
           </View>
           <Text style={authStyles.socialButtonText}>Continue with Google</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={authStyles.socialButton} onPress={onFacebookLogin}>
-          <View style={authStyles.socialIconWrap}>
-            <Ionicons name="logo-facebook" size={18} color="#1877F2" />
-          </View>
-          <Text style={authStyles.socialButtonText}>Continue with Facebook</Text>
         </TouchableOpacity>
 
         <View style={styles.footerWrap}>

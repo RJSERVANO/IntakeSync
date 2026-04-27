@@ -8,7 +8,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as api from '../api';
+import * as api from '../app/api';
 
 // ============================================================================
 // Types & Interfaces

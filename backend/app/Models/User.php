@@ -20,8 +20,12 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'email_verified_at',
         'password',
         'api_token',
+        'google_id',
+        'avatar_url',
+        'auth_provider',
         'role',
         'status',
         'phone',
@@ -31,8 +35,6 @@ class User extends Authenticatable
         'emergency_contact',
         'emergency_contact_name',
         'emergency_contact_phone',
-        'current_subscription_plan_id',
-        'subscription_expires_at',
         'onboarding_completed',
         'nickname',
         'first_medication_time',
@@ -78,7 +80,6 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
-            'subscription_expires_at' => 'datetime',
             'onboarding_completed' => 'boolean',
             'weight' => 'decimal:2',
             'notification_permissions_accepted' => 'boolean',
@@ -86,31 +87,9 @@ class User extends Authenticatable
         ];
     }
 
-    public function currentSubscriptionPlan()
-    {
-        return $this->belongsTo(SubscriptionPlan::class, 'current_subscription_plan_id');
-    }
-
-    public function subscriptions()
-    {
-        return $this->hasMany(Subscription::class);
-    }
-
-    public function activeSubscription()
-    {
-        return $this->hasOne(Subscription::class)
-            ->where('status', 'active')
-            ->where('ends_at', '>', now());
-    }
-
     public function activityLogs()
     {
         return $this->hasMany(UserActivityLog::class);
-    }
-
-    public function subscriptionTransactions()
-    {
-        return $this->hasMany(SubscriptionTransaction::class);
     }
 
     public function hydrationEntries()
@@ -128,18 +107,4 @@ class User extends Authenticatable
         return $this->hasMany(Notification::class);
     }
 
-    public function hasActiveSubscription(): bool
-    {
-        return $this->subscription_expires_at && $this->subscription_expires_at->isFuture();
-    }
-
-    public function getSubscriptionPlanSlug(): string
-    {
-        return $this->currentSubscriptionPlan?->slug ?? 'free';
-    }
-
-    public function canAccessFeature(string $feature): bool
-    {
-        return true;
-    }
 }

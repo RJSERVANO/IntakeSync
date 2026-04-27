@@ -276,7 +276,7 @@
 
     <!-- Footer -->
     <div class="absolute bottom-0 left-0 right-0 py-4 text-center text-white/70 text-xs">
-        <p>&copy; 2025 AQUATAB Health Management System. All rights reserved.</p>
+        <p>&copy; 2026 IntakeSync Health Management System. All rights reserved.</p>
     </div>
 </div>
 

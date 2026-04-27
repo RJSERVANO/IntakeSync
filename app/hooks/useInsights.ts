@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import api from '../api';
+import api from '../app/api';
 
 export type Insight = {
   id: number;
