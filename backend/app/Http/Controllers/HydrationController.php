@@ -187,10 +187,30 @@ class HydrationController
             }
         }
 
-        // If DB model exists, prefer DB for current day's entries
+        // If DB model exists, prefer DB for current day's entries.
+        // Activity can request a recent multi-day feed without changing the default dashboard response.
         if (class_exists(HydrationEntry::class)) {
             $today = date('Y-m-d');
-            $entries = HydrationEntry::where('user_id', $user->id)
+            $activityScope = $request->query('scope') === 'activity';
+            $limit = max(1, min((int) $request->query('limit', 60), 100));
+
+            $entriesQuery = HydrationEntry::where('user_id', $user->id)
+                ->orderBy('created_at', 'desc');
+
+            if ($activityScope) {
+                $entriesQuery->limit($limit);
+            } else {
+                $entriesQuery->whereDate('created_at', $today);
+            }
+
+            $entries = $entriesQuery
+                ->get()
+                ->map(function ($e) {
+                    return $this->entryResponse($e);
+                })
+                ->toArray();
+
+            $todayEntries = HydrationEntry::where('user_id', $user->id)
                 ->whereDate('created_at', $today)
                 ->orderBy('created_at', 'desc')
                 ->get()
@@ -201,7 +221,7 @@ class HydrationController
             $file = $this->readData($user->id);
 
             // Calculate today's total
-            $todayTotal = array_sum(array_column($entries, 'amount_ml'));
+            $todayTotal = array_sum(array_column($todayEntries, 'amount_ml'));
             $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
 
             return response()->json([

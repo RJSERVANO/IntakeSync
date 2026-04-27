@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Schema;
 use App\Models\Notification as NotificationModel;
 use App\Models\User;
 use Carbon\Carbon;
@@ -116,6 +117,53 @@ class NotificationController extends Controller
         $notification->delete();
 
         return response()->json(['message' => 'Notification deleted successfully']);
+    }
+
+    /**
+     * Mark notification reminders as read without changing health history.
+     */
+    public function markAllAsRead(Request $request)
+    {
+        $user = $request->user();
+        $readColumn = null;
+
+        if (Schema::hasColumn('notifications', 'opened_at')) {
+            $readColumn = 'opened_at';
+        } elseif (Schema::hasColumn('notifications', 'read_at')) {
+            $readColumn = 'read_at';
+        }
+
+        if (!$readColumn) {
+            return response()->json([
+                'message' => 'Notification read tracking is not configured.',
+            ], 500);
+        }
+
+        $updated = NotificationModel::where('user_id', $user->id)
+            ->whereNull($readColumn)
+            ->update([
+                $readColumn => Carbon::now(),
+            ]);
+
+        return response()->json([
+            'message' => 'Notifications marked as read',
+            'updated' => $updated,
+        ]);
+    }
+
+    /**
+     * Clear notification/reminder rows only. This does not delete medication or hydration records.
+     */
+    public function clearAll(Request $request)
+    {
+        $user = $request->user();
+
+        $deleted = NotificationModel::where('user_id', $user->id)->delete();
+
+        return response()->json([
+            'message' => 'Notifications cleared',
+            'deleted' => $deleted,
+        ]);
     }
 
     /**

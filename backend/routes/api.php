@@ -70,6 +70,8 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::get('notifications', [App\Http\Controllers\NotificationController::class, 'index']);
     Route::get('notifications/today-timeline', [App\Http\Controllers\NotificationController::class, 'getTodayTimeline']);
     Route::post('notifications', [App\Http\Controllers\NotificationController::class, 'store']);
+    Route::post('notifications/mark-all-read', [App\Http\Controllers\NotificationController::class, 'markAllAsRead']);
+    Route::post('notifications/clear', [App\Http\Controllers\NotificationController::class, 'clearAll']);
     Route::put('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'update']);
     Route::delete('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'destroy']);
     Route::post('notifications/schedule/hydration', [App\Http\Controllers\NotificationController::class, 'scheduleHydration']);

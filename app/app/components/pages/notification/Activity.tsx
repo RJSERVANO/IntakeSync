@@ -25,7 +25,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
 import BottomNavigation from '../../navigation/BottomNavigation';
-import { del, get, post, put } from '../../../api';
+import { del, get, post } from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Types
@@ -88,22 +88,59 @@ export interface HydrationEntry {
   drink_label?: string | null;
 }
 
-// PillIcon Component (inline since we don't have it as a separate file)
-const PillIcon = ({ name, size = 20, color = '#1E3A8A' }: { name: string; size?: number; color?: string }) => {
-  const iconMap: Record<string, any> = {
-    pill: 'medkit',
-    tablet: 'fitness',
-    capsule: 'ellipse',
-    liquid: 'water',
-    injection: 'bandage',
-    inhaler: 'cloud',
-    drops: 'water-outline',
-    cream: 'hand-left',
-    default: 'medical',
-  };
-  
-  const iconName = iconMap[name?.toLowerCase()] || iconMap.default;
-  return <Ionicons name={iconName} size={size} color={color} />;
+type ActivityFeedItem = {
+  id: string;
+  kind: NotificationType;
+  title: string;
+  message: string;
+  status: NotificationStatus;
+  time: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  notification?: NotificationItem;
+};
+
+const escapeHtml = (value: string | number | null | undefined) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const isSameLocalDay = (iso: string | null | undefined, date: Date) => {
+  if (!iso) return false;
+  const parsed = new Date(iso);
+  return (
+    parsed.getFullYear() === date.getFullYear() &&
+    parsed.getMonth() === date.getMonth() &&
+    parsed.getDate() === date.getDate()
+  );
+};
+
+const isCompletedStatus = (status: NotificationStatus | MedicationHistory['status']) =>
+  status === 'completed' || status === 'taken';
+
+const isMissedStatus = (status: NotificationStatus | MedicationHistory['status']) =>
+  status === 'missed' || status === 'skipped';
+
+const parseSafeDate = (value?: string | null) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getSafeTime = (value?: string | null) => parseSafeDate(value)?.getTime() ?? 0;
+
+const formatSafeDate = (value?: string | null) =>
+  parseSafeDate(value)?.toLocaleDateString() ?? 'Unknown';
+
+const formatSafeTime = (value?: string | null) =>
+  parseSafeDate(value)?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) ??
+  'Unknown';
+
+const getErrorMessage = (error: any, fallback: string) => {
+  const message = error?.data?.message || error?.message || error?.data;
+  return typeof message === 'string' && message.trim() ? message : fallback;
 };
 
 export default function Activity() {
@@ -121,32 +158,6 @@ export default function Activity() {
   const [adherencePeriod, setAdherencePeriod] = useState<'7' | '30'>('7');
   const [adherenceTrends, setAdherenceTrends] = useState<AdherenceTrend[]>([]);
   const [exporting, setExporting] = useState<boolean>(false);
-
-  // Helper: Get status color
-  const getStatusColor = useCallback((status: NotificationStatus) => {
-    switch (status) {
-      case 'completed':
-      case 'taken':
-        return '#10B981';
-      case 'missed':
-      case 'skipped':
-        return '#EF4444';
-      case 'snoozed':
-        return '#F59E0B';
-      case 'delivered':
-      case 'scheduled':
-      case 'upcoming':
-        return '#3B82F6';
-      default:
-        return '#3B82F6';
-    }
-  }, []);
-
-  // Helper: Get status background color
-  const getStatusBg = useCallback(
-    (status: NotificationStatus) => `${getStatusColor(status)}20`,
-    [getStatusColor]
-  );
 
   // Helper: Get status text
   const getStatusText = useCallback((status: NotificationStatus) => {
@@ -179,8 +190,8 @@ export default function Activity() {
 
   // Helper: Format time to 12-hour format
   const formatTime = (iso?: string | null) => {
-    if (!iso) return '';
-    const d = new Date(iso);
+    const d = parseSafeDate(iso);
+    if (!d) return 'Unknown';
     const h = d.getHours();
     const m = d.getMinutes().toString().padStart(2, '0');
     const ampm = h >= 12 ? 'PM' : 'AM';
@@ -190,16 +201,15 @@ export default function Activity() {
 
   // Helper: Format date
   const formatDate = (iso?: string | null) => {
-    if (!iso) return '';
-    return new Date(iso).toLocaleDateString();
+    return formatSafeDate(iso);
   };
 
   const formatMeta = (iso?: string | null) => {
-    if (!iso) return '';
+    if (!iso) return 'Unknown';
     return `${formatDate(iso)} | ${formatTime(iso)}`;
   };
 
-  const getBeverageLabel = (entry: HydrationEntry) => {
+  const getBeverageLabel = useCallback((entry: HydrationEntry) => {
     const note = typeof entry.notes === 'string' ? entry.notes.trim() : '';
     const base =
       typeof entry.drink_label === 'string' && entry.drink_label.trim()
@@ -211,8 +221,42 @@ export default function Activity() {
             : entry.beverage_type === 'other_non_alcoholic'
               ? 'Other beverage'
               : 'Beverage';
-    return note ? `${base} (${note})` : base;
-  };
+    const label = note ? `${base} (${note})` : base;
+    return label.trim() || 'Beverage';
+  }, []);
+
+  const getFeedAccent = useCallback(
+    (item: Pick<ActivityFeedItem, 'kind' | 'status'>) => {
+      if (item.kind === 'hydration') {
+        return {
+          color: '#2563EB',
+          bg: '#EFF6FF',
+          border: '#BFDBFE',
+          label: item.status === 'missed' ? 'Missed' : 'Logged',
+        };
+      }
+
+      if (item.status === 'missed' || item.status === 'skipped') {
+        return { color: '#DC2626', bg: '#FEF2F2', border: '#FECACA', label: 'Missed' };
+      }
+
+      if (item.status === 'snoozed') {
+        return { color: '#D97706', bg: '#FFF7ED', border: '#FED7AA', label: 'Snoozed' };
+      }
+
+      if (item.kind === 'medication') {
+        return {
+          color: item.status === 'completed' || item.status === 'taken' ? '#059669' : '#EA580C',
+          bg: item.status === 'completed' || item.status === 'taken' ? '#ECFDF5' : '#FFF7ED',
+          border: item.status === 'completed' || item.status === 'taken' ? '#A7F3D0' : '#FED7AA',
+          label: getStatusText(item.status),
+        };
+      }
+
+      return { color: '#475569', bg: '#F8FAFC', border: '#E2E8F0', label: getStatusText(item.status) };
+    },
+    [getStatusText]
+  );
 
   // Normalize API response to NotificationItem[]
   const normalizeList = useCallback((payload: any): NotificationItem[] => {
@@ -289,7 +333,7 @@ export default function Activity() {
   const fetchHydrationEntries = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await get('/hydration', token);
+      const res = await get('/hydration?scope=activity&limit=60', token);
       setHydrationEntries(Array.isArray(res?.entries) ? res.entries : []);
     } catch {
       setHydrationEntries([]);
@@ -359,9 +403,12 @@ export default function Activity() {
       date.setDate(date.getDate() - i);
       const dateStr = date.toISOString().split('T')[0];
       
-      const dayHistory = medicationHistory.filter(h => h.time?.startsWith(dateStr));
-      const completed = dayHistory.filter(h => h.status === 'completed' || h.status === 'taken').length;
-      const total = dayHistory.length;
+      const dayHistory = medicationHistory.filter(h => isSameLocalDay(h.time || h.created_at, date));
+      const dayBeverages = hydrationEntries.filter(entry =>
+        isSameLocalDay(entry.timestamp || entry.created_at, date)
+      );
+      const completed = dayHistory.filter(h => isCompletedStatus(h.status)).length + dayBeverages.length;
+      const total = dayHistory.length + dayBeverages.length;
       const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
       
       trends.push({
@@ -373,7 +420,7 @@ export default function Activity() {
     }
     
     setAdherenceTrends(trends);
-  }, [medicationHistory, adherencePeriod]);
+  }, [medicationHistory, hydrationEntries, adherencePeriod]);
 
   // Fetch stats from API (fallback)
   const fetchStats = useCallback(async () => {
@@ -409,53 +456,58 @@ export default function Activity() {
 
   // Calculate adherence trends when medication history changes
   useEffect(() => {
-    if (medicationHistory.length > 0) {
-      calculateAdherenceTrends();
-    }
-  }, [medicationHistory, adherencePeriod, calculateAdherenceTrends]);
+    calculateAdherenceTrends();
+  }, [medicationHistory, hydrationEntries, adherencePeriod, calculateAdherenceTrends]);
 
   // Mark all as read
   const markAllAsRead = useCallback(async () => {
-    setNotifications(prev =>
-      prev.map(n => ({
-        ...n,
-        status:
-          n.status === 'scheduled' || n.status === 'delivered' || n.status === 'upcoming'
-            ? 'delivered'
-            : n.status,
-      }))
-    );
-
     try {
       await post('/notifications/mark-all-read', {}, token);
-    } catch {
-      // If endpoint not available, fall back client-side
+      await Promise.all([fetchNotifications(), fetchStats()]);
+      Alert.alert('Success', 'Notifications marked as read');
+    } catch (error) {
+      console.log('mark notifications read error', error);
+      Alert.alert(
+        'Error',
+        getErrorMessage(error, 'Could not mark notifications as read. Please try again.')
+      );
     }
-
-    Alert.alert('Success', 'Notification reminders marked as read');
-  }, [token]);
+  }, [fetchNotifications, fetchStats, token]);
 
   // Clear all notifications
   const clearAllNotifications = useCallback(async () => {
-    setNotifications([]);
-    
-    // Clear notifications from backend
-    try {
-      await post('/notifications/clear', {}, token);
-    } catch {
-      // Backend clear failed, but UI already cleared
-    }
-    
-    await fetchStats();
-    
-    Alert.alert('Success', 'Notification reminders cleared');
+    Alert.alert(
+      'Clear Notifications?',
+      'This will remove reminder notifications only. Medication history and beverage logs will remain.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await post('/notifications/clear', {}, token);
+              setNotifications([]);
+              await fetchStats();
+              Alert.alert('Success', 'Notifications cleared');
+            } catch (error) {
+              console.log('clear notifications error', error);
+              Alert.alert(
+                'Error',
+                getErrorMessage(error, 'Could not clear notifications. Please try again.')
+              );
+            }
+          },
+        },
+      ]
+    );
   }, [fetchStats, token]);
 
   // Complete a notification
   const completeNotification = useCallback(
     async (id: number | string) => {
       try {
-        await put(`/notifications/${id}/complete`, {}, token);
+        await post(`/notifications/${id}/complete`, {}, token);
       } catch {}
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, status: 'completed' } : n))
@@ -469,7 +521,7 @@ export default function Activity() {
   const snoozeNotification = useCallback(
     async (id: number | string) => {
       try {
-        await put(`/notifications/${id}/snooze`, { minutes: 10 }, token);
+        await post(`/notifications/${id}/snooze`, { minutes: 10 }, token);
       } catch {}
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, status: 'snoozed' } : n))
@@ -509,18 +561,39 @@ export default function Activity() {
     
     setExporting(true);
     try {
-      // Get last 30 entries from medication history
-      const recentHistory = medicationHistory
-        .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-        .slice(0, 30);
+      const medicationRows = [...medicationHistory]
+        .sort((a, b) => getSafeTime(b.time || b.created_at) - getSafeTime(a.time || a.created_at))
+        .slice(0, 40);
+      const beverageRows = [...hydrationEntries]
+        .filter(entry => Boolean(entry.timestamp || entry.created_at))
+        .sort(
+          (a, b) =>
+            getSafeTime(b.timestamp || b.created_at) -
+            getSafeTime(a.timestamp || a.created_at)
+        )
+        .slice(0, 40);
+      const allTimes = [
+        ...medicationRows.map(row => row.time || row.created_at),
+        ...beverageRows.map(row => row.timestamp || row.created_at || ''),
+      ].filter(time => Boolean(parseSafeDate(time)));
 
-      if (recentHistory.length === 0) {
-        Alert.alert('No Data', 'No medication history available to export.');
+      if (medicationRows.length === 0 && beverageRows.length === 0) {
+        Alert.alert('No Data', 'No beverage or medication activity available to export.');
         setExporting(false);
         return;
       }
 
-      // Generate HTML for PDF
+      const newest = allTimes.length
+        ? formatSafeDate(
+            new Date(Math.max(...allTimes.map(time => getSafeTime(time)))).toISOString()
+          )
+        : 'Recent';
+      const oldest = allTimes.length
+        ? formatSafeDate(
+            new Date(Math.min(...allTimes.map(time => getSafeTime(time)))).toISOString()
+          )
+        : 'Recent';
+
       const html = `
         <!DOCTYPE html>
         <html>
@@ -529,44 +602,62 @@ export default function Activity() {
           <title>IntakeSync Activity Report</title>
           <style>
             body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              color: #1F2937;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+              padding: 28px;
+              color: #0F172A;
+              background: #F8FAFC;
             }
-            h1 {
-              color: #1E3A8A;
-              border-bottom: 3px solid #1E3A8A;
-              padding-bottom: 10px;
+            .shell {
+              background: #FFFFFF;
+              border: 1px solid #DBEAFE;
+              border-radius: 18px;
+              padding: 22px;
+            }
+            .brand {
+              color: #2563EB;
+              font-size: 13px;
+              font-weight: 800;
+              letter-spacing: 0.08em;
+              text-transform: uppercase;
+            }
+            h1 { margin: 6px 0 4px; font-size: 28px; }
+            .muted { color: #64748B; font-size: 13px; }
+            .summary {
+              display: flex;
+              gap: 10px;
+              margin: 18px 0;
+            }
+            .summary div {
+              flex: 1;
+              border: 1px solid #E2E8F0;
+              border-radius: 12px;
+              padding: 12px;
+              background: #F8FAFC;
             }
             table {
               width: 100%;
               border-collapse: collapse;
-              margin-top: 20px;
+              margin-top: 12px;
+              background: #FFFFFF;
             }
             th {
-              background-color: #1E3A8A;
-              color: white;
-              padding: 12px;
+              background-color: #EFF6FF;
+              color: #1E3A8A;
+              padding: 10px;
               text-align: left;
-              font-weight: bold;
+              font-size: 12px;
             }
             td {
               padding: 10px;
               border-bottom: 1px solid #E5E7EB;
+              font-size: 12px;
             }
-            tr:nth-child(even) {
-              background-color: #F9FAFB;
-            }
-            .completed {
-              color: #10B981;
-              font-weight: bold;
-            }
-            .missed {
-              color: #EF4444;
-              font-weight: bold;
-            }
+            h2 { margin: 22px 0 8px; font-size: 17px; }
+            .completed { color: #059669; font-weight: 800; }
+            .missed { color: #DC2626; font-weight: 800; }
+            .beverage { color: #2563EB; font-weight: 800; }
             .footer {
-              margin-top: 30px;
+              margin-top: 26px;
               text-align: center;
               color: #6B7280;
               font-size: 12px;
@@ -574,43 +665,62 @@ export default function Activity() {
           </style>
         </head>
         <body>
-          <h1>IntakeSync Activity Report</h1>
-          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Period:</strong> Last 30 entries</p>
-          
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Medication</th>
-                <th>Dosage</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${recentHistory.map(entry => {
-                const date = new Date(entry.time);
-                const dateStr = date.toLocaleDateString();
-                const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const statusClass = (entry.status === 'completed' || entry.status === 'taken') ? 'completed' : 'missed';
-                const statusText = (entry.status === 'completed' || entry.status === 'taken') ? 'Completed' : 'Missed';
-                
-                return `
-                  <tr>
-                    <td>${dateStr}</td>
-                    <td>${timeStr}</td>
-                    <td>${entry.medication?.name || 'Unknown'}</td>
-                    <td>${entry.medication?.dosage || '-'}</td>
-                    <td class="${statusClass}">${statusText}</td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-          
-          <div class="footer">
-            <p>IntakeSync Activity Report</p>
+          <div class="shell">
+            <div class="brand">IntakeSync</div>
+            <h1>Routine Activity Report</h1>
+            <div class="muted">Generated ${escapeHtml(new Date().toLocaleString())} | Range: ${escapeHtml(oldest)} - ${escapeHtml(newest)}</div>
+            <div class="summary">
+              <div><strong>${medicationRows.length}</strong><br><span class="muted">Medication records</span></div>
+              <div><strong>${beverageRows.length}</strong><br><span class="muted">Beverage logs</span></div>
+            </div>
+
+            <h2>Beverage Activity</h2>
+            <table>
+              <thead>
+                <tr><th>Date</th><th>Time</th><th>Beverage</th><th>Amount</th><th>Source</th></tr>
+              </thead>
+              <tbody>
+                ${beverageRows.map(entry => {
+                  const time = entry.timestamp || entry.created_at || '';
+                  const label = getBeverageLabel(entry) || 'Beverage';
+                  const amount = Number(entry.amount_ml || entry.logged_ml || 0);
+                  return `
+                    <tr>
+                      <td>${escapeHtml(formatSafeDate(time))}</td>
+                      <td>${escapeHtml(formatSafeTime(time))}</td>
+                      <td class="beverage">${escapeHtml(label.trim() || 'Beverage')}</td>
+                      <td>${escapeHtml(Number.isFinite(amount) ? amount : 0)} ml</td>
+                      <td>${escapeHtml(entry.source || 'manual')}</td>
+                    </tr>
+                  `;
+                }).join('') || '<tr><td colspan="5" class="muted">No beverage activity</td></tr>'}
+              </tbody>
+            </table>
+
+            <h2>Medication Activity</h2>
+            <table>
+              <thead>
+                <tr><th>Date</th><th>Time</th><th>Medication</th><th>Dosage</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                ${medicationRows.map(entry => {
+                  const time = entry.time || entry.created_at;
+                  const statusClass = isCompletedStatus(entry.status) ? 'completed' : 'missed';
+                  const statusText = getStatusText(entry.status as NotificationStatus) || 'Activity';
+                  return `
+                    <tr>
+                      <td>${escapeHtml(formatSafeDate(time))}</td>
+                      <td>${escapeHtml(formatSafeTime(time))}</td>
+                      <td>${escapeHtml(entry.medication?.name || 'Medication')}</td>
+                      <td>${escapeHtml(entry.medication?.dosage || '-')}</td>
+                      <td class="${statusClass}">${escapeHtml(statusText)}</td>
+                    </tr>
+                  `;
+                }).join('') || '<tr><td colspan="5" class="muted">No medication activity</td></tr>'}
+              </tbody>
+            </table>
+
+            <div class="footer">IntakeSync Routine Activity Report</div>
           </div>
         </body>
         </html>
@@ -628,43 +738,70 @@ export default function Activity() {
       } else {
         Alert.alert('Success', `PDF saved to: ${uri}`);
       }
-    } catch (error) {
-      console.error('Error exporting PDF:', error);
-      Alert.alert('Error', 'Failed to generate PDF report.');
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      Alert.alert('Error', getErrorMessage(err, 'Failed to generate PDF report.'));
     } finally {
       setExporting(false);
     }
-  }, [medicationHistory, exporting]);
+  }, [exporting, getBeverageLabel, getStatusText, hydrationEntries, medicationHistory]);
 
   // Memoized stats list
+  const derivedStats = useMemo(() => {
+    const today = new Date();
+    const todayMedication = medicationHistory.filter(entry =>
+      isSameLocalDay(entry.time || entry.created_at, today)
+    );
+    const todayBeverage = hydrationEntries.filter(entry =>
+      isSameLocalDay(entry.timestamp || entry.created_at, today)
+    );
+    const todayNotifications = notifications.filter(item =>
+      isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, today)
+    );
+    const notificationUpcoming = todayNotifications.filter(item =>
+      (item.status === 'scheduled' || item.status === 'upcoming') &&
+      new Date(item.scheduled_at || item.scheduled_time || item.created_at || '').getTime() > Date.now()
+    ).length;
+
+    return {
+      completed:
+        todayMedication.filter(entry => isCompletedStatus(entry.status)).length +
+        todayBeverage.length,
+      upcoming: Math.max(stats.upcoming, notificationUpcoming),
+      missed:
+        todayMedication.filter(entry => isMissedStatus(entry.status)).length +
+        todayNotifications.filter(item => item.status === 'missed').length,
+    };
+  }, [hydrationEntries, medicationHistory, notifications, stats.upcoming]);
+
   const statsList = useMemo(
     () => [
       {
         key: 'completed',
         label: 'Completed',
-        value: stats.completed,
+        value: derivedStats.completed,
         color: '#22c55e',
         icon: 'checkmark-done-outline' as const,
       },
       {
         key: 'upcoming',
         label: 'Upcoming',
-        value: stats.upcoming,
+        value: derivedStats.upcoming,
         color: '#3b82f6',
         icon: 'time-outline' as const,
       },
       {
         key: 'missed',
         label: 'Missed',
-        value: stats.missed,
-        color: '#ef4444',
+        value: derivedStats.missed,
+        color: '#f97316',
         icon: 'alert-circle-outline' as const,
       },
     ],
-    [stats]
+    [derivedStats]
   );
 
-  const activityFeed = useMemo(() => {
+  const activityFeed = useMemo<ActivityFeedItem[]>(() => {
     const medicationItems = medicationHistory.map(entry => ({
       id: `med-${entry.id}`,
       kind: 'medication' as const,
@@ -712,24 +849,27 @@ export default function Activity() {
       .filter(item => item.time)
       .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
       .slice(0, 30);
-  }, [getActivityIcon, getStatusText, hydrationEntries, medicationHistory, notifications]);
+  }, [getActivityIcon, getBeverageLabel, getStatusText, hydrationEntries, medicationHistory, notifications]);
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 10) }]}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, 10) }]}>
         <View style={styles.headerCopy}>
-          <Text style={styles.title}>Activity</Text>
-          <Text style={styles.subtitle}>Routine activity from reminders, beverage logs, and medication history</Text>
+          <Text style={styles.title}>Routine Activity</Text>
+          <Text style={styles.subtitle}>Your recent routine activity and reminders.</Text>
         </View>
         <TouchableOpacity
           style={styles.exportBtn}
           onPress={exportToPDF}
-          disabled={exporting || medicationHistory.length === 0}
+          disabled={exporting || (medicationHistory.length === 0 && hydrationEntries.length === 0)}
         >
           {exporting ? (
-            <ActivityIndicator size="small" color="#1E3A8A" />
+            <ActivityIndicator size="small" color="#2563EB" />
           ) : (
-            <Ionicons name="download-outline" size={22} color="#1E3A8A" />
+            <>
+              <Ionicons name="download-outline" size={16} color="#2563EB" />
+              <Text style={styles.exportText}>Export</Text>
+            </>
           )}
         </TouchableOpacity>
       </View>
@@ -742,7 +882,7 @@ export default function Activity() {
           {statsList.map(s => (
             <View
               key={s.key}
-              style={[styles.statBox, { borderLeftColor: s.color }]}
+              style={[styles.statBox, { borderTopColor: s.color }]}
             >
               <View style={[styles.statIconBubble, { backgroundColor: `${s.color}18` }]}>
                 <Ionicons name={s.icon} size={17} color={s.color} />
@@ -778,28 +918,50 @@ export default function Activity() {
 
         {/* Adherence Chart */}
         <View style={styles.chartContainer}>
+          <View style={styles.chartTopRow}>
+            <Text style={styles.chartHint}>Medication adherence plus beverage logs</Text>
+            <Text style={styles.chartCount}>{adherenceTrends.filter(day => day.total > 0).length} active days</Text>
+          </View>
           {adherenceTrends.length > 0 ? (
             <View style={styles.chart}>
-              <View style={styles.chartBars}>
-                {adherenceTrends.map((trend, idx) => (
-                  <View key={idx} style={styles.barColumn}>
+              <ScrollView
+                horizontal={adherencePeriod === '30'}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[
+                  styles.chartBars,
+                  adherencePeriod === '30' && styles.chartBarsScrollable,
+                ]}
+              >
+                {adherenceTrends.map((trend, idx) => {
+                  const barColor = trend.percentage >= 80 ? '#10B981' : trend.percentage >= 50 ? '#F59E0B' : '#EF4444';
+                  const showLabel = adherencePeriod === '7' || idx % 5 === 0 || idx === adherenceTrends.length - 1;
+
+                  return (
+                  <View
+                    key={trend.date}
+                    style={[
+                      styles.barColumn,
+                      adherencePeriod === '30' && styles.barColumnCompact,
+                    ]}
+                  >
                     <View style={styles.barContainer}>
                       <View
                         style={[
                           styles.bar,
                           {
-                            height: `${trend.percentage}%`,
-                            backgroundColor: trend.percentage >= 80 ? '#10B981' : trend.percentage >= 50 ? '#F59E0B' : '#EF4444',
+                            height: `${Math.max(trend.percentage, trend.total > 0 ? 6 : 0)}%`,
+                            backgroundColor: trend.total > 0 ? barColor : '#E2E8F0',
                           },
                         ]}
                       />
                     </View>
                     <Text style={styles.barLabel}>
-                      {new Date(trend.date).getDate()}
+                      {showLabel ? new Date(trend.date).getDate() : ''}
                     </Text>
                   </View>
-                ))}
-              </View>
+                  );
+                })}
+              </ScrollView>
               <View style={styles.chartLegend}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
@@ -824,171 +986,90 @@ export default function Activity() {
 
         {/* Quick Actions */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Notification Actions</Text>
+          <Text style={styles.sectionTitle}>Reminder Controls</Text>
         </View>
         <View style={styles.actionsRow}>
           <TouchableOpacity style={styles.actionBtn} onPress={markAllAsRead}>
-            <Ionicons name="checkmark-done" size={18} color="#10B981" />
-            <Text style={styles.actionText}>Mark Read</Text>
+            <Ionicons name="checkmark-done" size={17} color="#059669" />
+            <Text style={styles.actionText}>Mark All Read</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actionBtn} onPress={clearAllNotifications}>
-            <Ionicons name="trash" size={18} color="#EF4444" />
-            <Text style={styles.actionText}>Clear Reminders</Text>
+            <Ionicons name="trash-outline" size={17} color="#DC2626" />
+            <Text style={styles.actionText}>Clear Notifications</Text>
           </TouchableOpacity>
         </View>
 
         {/* Recent Activity Section */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          <View>
+            <Text style={styles.sectionTitle}>Recent Timeline</Text>
+            <Text style={styles.sectionSubtitle}>Newest beverage, medication, and reminder events.</Text>
+          </View>
         </View>
 
         {loading ? (
-          <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#1E3A8A" />
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="small" color="#2563EB" />
+            <Text style={styles.loadingText}>Loading routine activity...</Text>
+          </View>
         ) : activityFeed.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Ionicons name="notifications-off-outline" size={40} color="#94a3b8" />
-            <Text style={styles.emptyTitle}>No Activity Yet</Text>
-            <Text style={styles.emptyText}>Routine activity will appear here.</Text>
+            <Ionicons name="pulse-outline" size={34} color="#94A3B8" />
+            <Text style={styles.emptyTitle}>No activity yet</Text>
+            <Text style={styles.emptyText}>Beverage logs, medication actions, and reminders will appear here.</Text>
           </View>
         ) : (
-          <View>
-            {/* Beverage Log Items */}
-            {hydrationEntries
-              .sort((a, b) => new Date(b.timestamp || b.created_at || '').getTime() - new Date(a.timestamp || a.created_at || '').getTime())
-              .slice(0, 10)
-              .map((entry, index) => {
-                const amount = Number(entry.amount_ml || entry.logged_ml || 0);
-                const time = entry.timestamp || entry.created_at || '';
+          <View style={styles.timelineList}>
+            {activityFeed.map(item => {
+                const tone = getFeedAccent(item);
+                const isNotification = Boolean(item.notification);
                 return (
-                  <View key={`hydration-${entry.id ?? time ?? index}`} style={[styles.listItem, { borderLeftColor: '#2563EB' }]}>
-                    <View style={[styles.listIconWrap, { backgroundColor: '#EFF6FF' }]}>
-                      <Ionicons name="water-outline" size={20} color="#2563EB" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.itemHeaderRow}>
-                        <Text style={styles.itemTitle}>Beverage logged</Text>
-                        <View style={[styles.statusPill, { backgroundColor: '#DBEAFE' }]}>
-                          <Text style={[styles.statusText, { color: '#2563EB' }]}>Logged</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.itemMessage}>{getBeverageLabel(entry)}{amount ? ` | ${amount} ml` : ''}</Text>
-                      <Text style={styles.itemMeta}>{formatMeta(time)}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-
-            {/* Medication History Items */}
-            {medicationHistory
-              .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-              .slice(0, 20)
-              .map(entry => (
-                <View key={entry.id} style={styles.listItem}>
-                  <View style={styles.listIconWrap}>
-                    <PillIcon
-                      name={entry.medication?.icon || 'default'}
-                      size={20}
-                      color="#1E3A8A"
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.itemHeaderRow}>
-                      <Text style={styles.itemTitle}>{entry.status === 'missed' || entry.status === 'skipped' ? 'Medication missed' : 'Medication taken'}</Text>
-                      <View
-                        style={[
-                          styles.statusPill,
-                          { backgroundColor: getStatusBg(entry.status as NotificationStatus) },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.statusText,
-                            { color: getStatusColor(entry.status as NotificationStatus) },
-                          ]}
-                        >
-                          {getStatusText(entry.status as NotificationStatus)}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.itemMessage}>{entry.medication?.name || 'Medication'}{entry.medication?.dosage ? ` | ${entry.medication.dosage}` : ''}</Text>
-                    <Text style={styles.itemMeta}>
-                      {formatMeta(entry.time)}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-
-            {/* Legacy Notifications */}
-            {notifications.map(n => (
-              <View key={n.id} style={styles.listItem}>
-                <View style={styles.listIconWrap}>
+              <View key={item.id} style={[styles.listItem, { borderLeftColor: tone.color }]}>
+                <View style={[styles.listIconWrap, { backgroundColor: tone.bg, borderColor: tone.border }]}>
                   <Ionicons
-                    name={getActivityIcon(n.type, n.status)}
+                    name={item.icon}
                     size={20}
-                    color={getStatusColor(n.status)}
+                    color={tone.color}
                   />
                 </View>
-                <View style={{ flex: 1 }}>
+                <View style={styles.itemBody}>
                   <View style={styles.itemHeaderRow}>
-                    <Text style={styles.itemTitle}>
-                      {n.status === 'snoozed'
-                        ? 'Snoozed reminder'
-                        : n.type === 'hydration'
-                          ? 'Beverage reminder'
-                          : n.type === 'medication'
-                            ? getStatusText(n.status) === 'Missed'
-                              ? 'Medication missed'
-                              : 'Medication reminder'
-                            : 'Reminder activity'}
-                    </Text>
-                    <View
-                      style={[
-                        styles.statusPill,
-                        { backgroundColor: getStatusBg(n.status) },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.statusText,
-                          { color: getStatusColor(n.status) },
-                        ]}
-                      >
-                        {getStatusText(n.status)}
-                      </Text>
+                    <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+                    <View style={[styles.statusPill, { backgroundColor: tone.bg, borderColor: tone.border }]}>
+                      <Text style={[styles.statusText, { color: tone.color }]}>{tone.label}</Text>
                     </View>
                   </View>
-                  {!!(n.message || n.body) && (
-                    <Text style={styles.itemMessage}>{n.message || n.body}</Text>
-                  )}
-                  <Text style={styles.itemMeta}>
-                    {formatMeta(n.scheduled_at || n.scheduled_time || n.created_at)}
-                  </Text>
-                  <View style={styles.itemActionsRow}>
-                    <TouchableOpacity
-                      style={styles.itemActionBtn}
-                      onPress={() => completeNotification(n.id)}
-                    >
-                      <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-                      <Text style={styles.itemActionText}>Complete</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.itemActionBtn}
-                      onPress={() => snoozeNotification(n.id)}
-                    >
-                      <Ionicons name="time" size={18} color="#F59E0B" />
-                      <Text style={styles.itemActionText}>Snooze</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.itemActionBtn}
-                      onPress={() => deleteNotification(n.id)}
-                    >
-                      <Ionicons name="trash" size={18} color="#EF4444" />
-                      <Text style={styles.itemActionText}>Delete</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <Text style={styles.itemMessage} numberOfLines={2}>{item.message}</Text>
+                  <Text style={styles.itemMeta}>{formatMeta(item.time)}</Text>
+                  {isNotification && item.notification ? (
+                    <View style={styles.itemActionsRow}>
+                      <TouchableOpacity
+                        style={styles.itemActionBtn}
+                        onPress={() => completeNotification(item.notification!.id)}
+                      >
+                        <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                        <Text style={styles.itemActionText}>Complete</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.itemActionBtn}
+                        onPress={() => snoozeNotification(item.notification!.id)}
+                      >
+                        <Ionicons name="time-outline" size={16} color="#D97706" />
+                        <Text style={styles.itemActionText}>Snooze</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.itemActionBtn}
+                        onPress={() => deleteNotification(item.notification!.id)}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                        <Text style={styles.itemActionText}>Clear</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
                 </View>
               </View>
-            ))}
+                );
+              })}
           </View>
         )}
       </ScrollView>
@@ -1000,7 +1081,7 @@ export default function Activity() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
   },
   scrollContent: {
     paddingHorizontal: 16,
@@ -1011,17 +1092,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingBottom: 10,
-    backgroundColor: '#F8F9FA',
+    paddingBottom: 12,
+    backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#DBEAFE',
+    borderBottomColor: '#E2E8F0',
   },
   headerCopy: {
     flex: 1,
     paddingRight: 12,
   },
   title: {
-    color: '#1F2937',
+    color: '#0F172A',
     fontSize: 28,
     fontWeight: '900',
   },
@@ -1033,14 +1114,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   exportBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#EFF6FF',
+    minWidth: 88,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#BFDBFE',
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  exportText: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '900',
   },
   sectionHeaderRow: {
     marginTop: 8,
@@ -1050,9 +1138,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   sectionTitle: {
-    color: '#1F2937',
+    color: '#0F172A',
     fontSize: 17,
-    fontWeight: '800',
+    fontWeight: '900',
+  },
+  sectionSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
   },
   statsRow: {
     flexDirection: 'row',
@@ -1062,17 +1156,17 @@ const styles = StyleSheet.create({
   statBox: {
     flex: 1,
     backgroundColor: 'white',
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#DBEAFE',
-    borderLeftWidth: 4,
+    borderColor: '#E2E8F0',
+    borderTopWidth: 3,
     padding: 12,
     alignItems: 'center',
     gap: 6,
-    shadowColor: '#1E3A8A',
-    shadowOffset: { width: 0, height: 2 },
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowRadius: 10,
     elevation: 2,
   },
   statIconBubble: {
@@ -1083,19 +1177,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   statValue: {
-    fontSize: 20,
-    fontWeight: '800',
+    fontSize: 22,
+    fontWeight: '900',
   },
   statLabel: {
-    color: '#94a3b8',
+    color: '#64748B',
     fontSize: 12,
+    fontWeight: '700',
   },
   periodToggle: {
     flexDirection: 'row',
     backgroundColor: 'white',
-    borderRadius: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#E2E8F0',
     overflow: 'hidden',
   },
   periodBtn: {
@@ -1104,7 +1199,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
   },
   periodBtnActive: {
-    backgroundColor: '#1E3A8A',
+    backgroundColor: '#2563EB',
   },
   periodText: {
     color: '#6B7280',
@@ -1118,11 +1213,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#E2E8F0',
     padding: 16,
     marginBottom: 16,
     minHeight: 200,
     position: 'relative',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  chartTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 10,
+  },
+  chartHint: {
+    flex: 1,
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chartCount: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '900',
   },
   chart: {
     flex: 1,
@@ -1131,23 +1249,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
-    height: 150,
+    height: 136,
     marginBottom: 8,
+    gap: 7,
+    minWidth: '100%',
+  },
+  chartBarsScrollable: {
+    minWidth: 650,
+    paddingRight: 4,
   },
   barColumn: {
     flex: 1,
     alignItems: 'center',
     gap: 4,
   },
+  barColumnCompact: {
+    width: 18,
+    flex: 0,
+  },
   barContainer: {
     flex: 1,
-    width: '70%',
+    width: '100%',
     justifyContent: 'flex-end',
   },
   bar: {
     width: '100%',
-    borderTopLeftRadius: 4,
-    borderTopRightRadius: 4,
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
     minHeight: 4,
   },
   barLabel: {
@@ -1162,7 +1290,8 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
+    borderTopColor: '#E2E8F0',
+    justifyContent: 'space-between',
   },
   legendItem: {
     flexDirection: 'row',
@@ -1203,12 +1332,20 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   actionText: {
     color: '#1F2937',
     fontWeight: '700',
-    fontSize: 15,
+    fontSize: 14,
+  },
+  timelineList: {
+    marginTop: 2,
   },
   listItem: {
     flexDirection: 'row',
@@ -1216,14 +1353,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderWidth: 1,
     borderLeftWidth: 4,
-    borderColor: '#DBEAFE',
-    borderRadius: 14,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
     padding: 12,
     marginBottom: 12,
-    shadowColor: '#1E3A8A',
-    shadowOffset: { width: 0, height: 2 },
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowRadius: 10,
     elevation: 2,
   },
   listIconWrap: {
@@ -1236,33 +1373,40 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },
+  itemBody: {
+    flex: 1,
+    minWidth: 0,
+  },
   itemHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   itemTitle: {
-    color: '#1F2937',
-    fontSize: 16,
-    fontWeight: '700',
+    color: '#0F172A',
+    fontSize: 15,
+    fontWeight: '900',
     flex: 1,
     paddingRight: 8,
   },
   statusPill: {
     borderRadius: 999,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
+    borderWidth: 1,
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '900',
   },
   itemMessage: {
-    color: '#4B5563',
-    marginTop: 2,
+    color: '#475569',
+    marginTop: 3,
+    fontSize: 13,
+    fontWeight: '700',
   },
   itemMeta: {
-    color: '#6B7280',
+    color: '#64748B',
     fontSize: 12,
     marginTop: 4,
   },
@@ -1277,7 +1421,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: 'white',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#E5E7EB',
     borderRadius: 8,
@@ -1292,8 +1436,23 @@ const styles = StyleSheet.create({
     padding: 24,
     backgroundColor: 'white',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 12,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+  },
+  loadingBox: {
+    minHeight: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 16,
+  },
+  loadingText: {
+    color: '#64748B',
+    fontWeight: '800',
+    fontSize: 13,
   },
   emptyTitle: {
     color: '#1F2937',
