@@ -9,6 +9,10 @@ import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
 import { notificationManager } from '../../../../services/notificationManager';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
+import {
+  calculatePersonalizedHydrationGoal,
+  resolveHydrationGoal,
+} from '../../../../utils/hydrationHelpers';
 import { useCelebrationAnimation, usePulseAnimation, useBounceAnimation } from '../../../../hooks/useHydrationAnimations';
 
 interface UserDetails {
@@ -18,6 +22,9 @@ interface UserDetails {
   climate?: string;
   exercise_frequency?: string;
   age?: number;
+  daily_hydration_goal?: number;
+  hydration_goal?: number;
+  daily_goal_ml?: number;
 }
 
 type BeverageType = 'water' | 'sugar_sweetened' | 'caffeinated' | 'other_non_alcoholic';
@@ -119,32 +126,7 @@ function formatLogTitle(entry: any) {
  * @returns Daily goal in milliliters
  */
 function calculateDailyGoal(user: UserDetails | null): number {
-  if (!user || !user.weight) {
-    return 2000; // Default goal
-  }
-
-  // Base calculation: weight (kg) * 35 ml
-  let goal = user.weight * 35;
-
-  // Climate modifier
-  if (user.climate === 'Tropical' || user.climate === 'Hot') {
-    goal += 500;
-  }
-
-  // Exercise frequency modifier
-  if (user.exercise_frequency === 'high' || user.exercise_frequency === 'High' || user.exercise_frequency === 'Daily') {
-    goal += 1000;
-  } else if (user.exercise_frequency === 'moderate' || user.exercise_frequency === 'Moderate') {
-    goal += 500;
-  }
-
-  // Gender modifier
-  if (user.gender === 'Male' || user.gender === 'male') {
-    goal += 200;
-  }
-
-  // Ensure goal is within reasonable range
-  return Math.max(1500, Math.min(5000, Math.round(goal)));
+  return calculatePersonalizedHydrationGoal(user || {});
 }
 
 /**
@@ -395,13 +377,11 @@ export default function Hydration() {
           if (res) {
             setUserProfile(res.user_profile); // Store user profile for calculations
             
-            // Calculate dynamic goal based on user profile using new function
-            const calculatedGoal = calculateDailyGoal(res.user_profile);
-            
-            // Use calculated goal if it differs significantly from stored goal
-            const finalGoal = res.goal ?? calculatedGoal ?? 2000;
+            const profileGoal = calculateDailyGoal(res.user_profile);
+            const backendGoal = Number(res.daily_goal_ml || res.hydration_goal || res.daily_hydration_goal || 0);
+            const finalGoal = backendGoal || resolveHydrationGoal(res.user_profile) || 2000;
             setGoal(finalGoal);
-            setIdealGoal(calculatedGoal);
+            setIdealGoal(profileGoal);
             
             // Filter out deleted entries from server response
             const serverEntries = (res.entries ?? []).filter((e: any) => 
@@ -429,7 +409,7 @@ export default function Hydration() {
             }
             
             // Show ideal goal popup if it's different from current goal
-            if (calculatedGoal && calculatedGoal !== finalGoal && finalGoal === 2000) {
+            if (profileGoal && profileGoal !== finalGoal && finalGoal === 2000) {
               setTimeout(() => {
                 setShowIdealGoalAlert(true);
               }, 500);
@@ -1281,11 +1261,11 @@ export default function Hydration() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Recommended Hydration Goal</Text>
             <Text style={styles.modalMessage}>
-              Based on your profile (weight, age, climate, exercise), your ideal daily hydration goal is:
+              Based on your weight, climate, and activity level, your estimated daily water goal is:
             </Text>
             <Text style={styles.modalGoalValue}>{idealGoal} ml</Text>
             <Text style={styles.modalSubtext}>
-              This is calculated based on your personal information to help you stay optimally hydrated.
+              This is a general estimate. You can adjust it anytime.
             </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity 
@@ -1428,7 +1408,7 @@ export default function Hydration() {
                     <Text style={styles.recommendedLabel}>📊 Recommended for You:</Text>
                     <Text style={styles.recommendedValue}>{idealGoal} ml</Text>
                     <Text style={styles.recommendedExplain}>
-                      Calculated based on your body profile and climate
+                      Estimated from your profile details
                     </Text>
                   </View>
                 )}

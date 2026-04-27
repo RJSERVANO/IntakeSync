@@ -374,6 +374,12 @@ export default function Home() {
 
   // Use nickname if available, otherwise fall back to first name
   const displayName = user?.nickname || user?.name?.split(' ')[0] || 'User';
+  const greetingPrefix = (() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  })();
 
   const handleInsightsPress = () => {
     router.push({ pathname: '/insights', params: { token } } as any);
@@ -593,7 +599,7 @@ export default function Home() {
 
           {/* Welcome Section */}
           <View style={styles.welcomeSection}>
-            <Text style={styles.welcomeText}>Hi, {displayName}</Text>
+            <Text style={styles.welcomeText}>{displayName ? `${greetingPrefix}, ${displayName}` : 'Welcome back'}</Text>
             <Text style={styles.welcomeSubtext}>Here is your routine summary for today.</Text>
           <View>
             <View style={styles.searchContainer}>

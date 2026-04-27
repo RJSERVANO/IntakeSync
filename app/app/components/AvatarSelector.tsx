@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Image, TouchableOpacity, FlatList, StyleSheet, Alert } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -38,10 +39,6 @@ type AvatarSelectorProps = {
 export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
   const [selected, setSelected] = useState<SelectedAvatar | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const selectedSource = useMemo(() => {
-    return getAvatarSource(selected) || PRESET_AVATARS[0]?.source;
-  }, [selected]);
 
   useEffect(() => {
     (async () => {
@@ -131,80 +128,55 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
         renderItem={renderAvatar}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
+        ListFooterComponent={(
+          <TouchableOpacity onPress={handleUploadCustom} style={styles.uploadAvatar}>
+            <Ionicons name="person-add-outline" size={24} color="#2563EB" />
+          </TouchableOpacity>
+        )}
       />
-
-      <TouchableOpacity style={styles.uploadButton} onPress={handleUploadCustom}>
-        <Text style={styles.uploadButtonText}>Upload Custom Image</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.previewLabel}>Current selection</Text>
-      <View style={styles.previewWrapper}>
-        <Image source={selectedSource as any} style={styles.previewImage} />
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    paddingVertical: 8,
   },
   heading: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 12,
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginBottom: 8,
   },
   subtle: {
     fontSize: 14,
     color: '#6B7280',
   },
   listContent: {
-    paddingVertical: 8,
+    paddingVertical: 4,
+    paddingRight: 4,
   },
   avatarWrapper: {
-    marginRight: 12,
+    marginRight: 10,
   },
   avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     borderWidth: 2,
     borderColor: 'transparent',
   },
   avatarSelected: {
     borderColor: '#2563EB',
   },
-  uploadButton: {
-    marginTop: 12,
-    backgroundColor: '#2563EB',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  uploadButtonText: {
-    color: 'white',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  previewLabel: {
-    marginTop: 20,
-    marginBottom: 8,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  previewWrapper: {
+  uploadAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  previewImage: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 3,
-    borderColor: '#2563EB',
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 2,
+    borderColor: '#BFDBFE',
   },
 });

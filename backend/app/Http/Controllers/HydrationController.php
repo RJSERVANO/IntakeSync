@@ -95,69 +95,99 @@ class HydrationController
         ];
     }
 
+    protected function normalizeClimate($value)
+    {
+        if (!$value || !is_string($value)) {
+            return null;
+        }
+
+        $normalized = strtolower($value);
+
+        if (in_array($normalized, ['hot', 'tropical', 'warm'], true)) {
+            return 'hot';
+        }
+
+        if (in_array($normalized, ['cold', 'cool'], true)) {
+            return 'cold';
+        }
+
+        if (in_array($normalized, ['temperate', 'moderate', 'normal'], true)) {
+            return 'temperate';
+        }
+
+        return null;
+    }
+
+    protected function normalizeExerciseFrequency($value)
+    {
+        if (!$value || !is_string($value)) {
+            return null;
+        }
+
+        $normalized = strtolower($value);
+
+        if (in_array($normalized, ['rarely', 'low', 'none', 'sedentary'], true)) {
+            return 'rarely';
+        }
+
+        if (in_array($normalized, ['sometimes', 'moderate', 'occasional'], true)) {
+            return 'sometimes';
+        }
+
+        if (in_array($normalized, ['regularly', 'regular'], true)) {
+            return 'regularly';
+        }
+
+        if (in_array($normalized, ['often', 'daily', 'high', 'active'], true)) {
+            return 'often';
+        }
+
+        return null;
+    }
+
     /**
-     * Calculate ideal hydration goal based on user profile
-     * Formula: Base (weight-based) + Age adjustment + Climate adjustment + Exercise adjustment
+     * Calculate a general estimated daily water goal in ml.
      */
     protected function calculateIdealGoal($user)
     {
-        $baseGoal = 2000; // Default base goal in ml
+        $weightKg = (float) ($user->weight ?? 0);
+        $unit = $user->weight_unit ?: 'kg';
 
-        // Weight-based calculation (30-35ml per kg)
-        if ($user->weight) {
-            $weightKg = $user->weight;
-            if ($user->weight_unit === 'lbs') {
-                $weightKg = $user->weight * 0.453592; // Convert lbs to kg
-            }
-            $baseGoal = $weightKg * 33; // 33ml per kg is a good average
+        if ($unit === 'lbs' && $weightKg > 0) {
+            $weightKg *= 0.453592;
         }
 
-        // Age adjustment (older adults need slightly more, but not too much)
-        if ($user->age) {
-            if ($user->age >= 65) {
-                $baseGoal += 200; // Older adults may need slightly more
-            } elseif ($user->age < 18) {
-                $baseGoal *= 0.85; // Children need less
-            }
+        if ($weightKg <= 0) {
+            return 2000;
         }
 
-        // Climate adjustment
-        if ($user->climate) {
-            switch ($user->climate) {
-                case 'hot':
-                    $baseGoal += 500; // Hot climate needs more hydration
-                    break;
-                case 'cold':
-                    $baseGoal += 100; // Cold climate needs slightly more
-                    break;
-                case 'temperate':
-                default:
-                    // No adjustment for temperate
-                    break;
-            }
+        $goal = $weightKg * 35;
+        $climate = $this->normalizeClimate($user->climate);
+        $exercise = $this->normalizeExerciseFrequency($user->exercise_frequency);
+
+        if ($climate === 'hot') {
+            $goal += 500;
         }
 
-        // Exercise frequency adjustment
-        if ($user->exercise_frequency) {
-            switch ($user->exercise_frequency) {
-                case 'often':
-                    $baseGoal += 600; // Very active people need significantly more
-                    break;
-                case 'regularly':
-                    $baseGoal += 400; // Regular exercisers need more
-                    break;
-                case 'sometimes':
-                    $baseGoal += 200; // Occasional exercisers need a bit more
-                    break;
-                case 'rarely':
-                default:
-                    // No adjustment for sedentary lifestyle
-                    break;
-            }
+        if ($climate === 'cold') {
+            $goal -= 100;
         }
 
-        // Round to nearest 50ml for cleaner numbers
-        return round($baseGoal / 50) * 50;
+        if ($exercise === 'sometimes') {
+            $goal += 250;
+        }
+
+        if ($exercise === 'regularly') {
+            $goal += 500;
+        }
+
+        if ($exercise === 'often') {
+            $goal += 750;
+        }
+
+        $goal = min(4500, max(1500, $goal));
+
+        return (int) (round($goal / 100) * 100);
     }
 
     // GET /api/hydration
@@ -226,7 +256,18 @@ class HydrationController
 
             return response()->json([
                 'goal' => $goal,
+                'daily_goal_ml' => $goal,
+                'daily_hydration_goal' => $goal,
+                'hydration_goal' => $goal,
                 'ideal_goal' => $idealGoal,
+                'user_profile' => [
+                    'weight' => $user->weight,
+                    'weight_unit' => $user->weight_unit ?: 'kg',
+                    'climate' => $user->climate,
+                    'exercise_frequency' => $user->exercise_frequency,
+                    'daily_hydration_goal' => $user->hydration_goal,
+                    'hydration_goal' => $user->hydration_goal,
+                ],
                 'entries' => $entries,
                 'missed' => $file['missed'] ?? [],
                 'today_total' => $todayTotal,
@@ -244,7 +285,18 @@ class HydrationController
         $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
 
         $data['goal'] = $goal;
+        $data['daily_goal_ml'] = $goal;
+        $data['daily_hydration_goal'] = $goal;
+        $data['hydration_goal'] = $goal;
         $data['ideal_goal'] = $idealGoal;
+        $data['user_profile'] = [
+            'weight' => $user->weight,
+            'weight_unit' => $user->weight_unit ?: 'kg',
+            'climate' => $user->climate,
+            'exercise_frequency' => $user->exercise_frequency,
+            'daily_hydration_goal' => $user->hydration_goal,
+            'hydration_goal' => $user->hydration_goal,
+        ];
         $data['today_total'] = $todayTotal;
         $data['percentage'] = $percentage;
         $data['remaining'] = max(0, $goal - $todayTotal);
@@ -344,7 +396,13 @@ class HydrationController
         $this->writeData($user->id, $data);
 
         Log::debug('Hydration setGoal', ['user' => $user->id, 'goal' => $goal]);
-        return response()->json(['goal' => $goal, 'message' => 'Goal updated successfully']);
+        return response()->json([
+            'goal' => $goal,
+            'daily_goal_ml' => $goal,
+            'daily_hydration_goal' => $goal,
+            'hydration_goal' => $goal,
+            'message' => 'Goal updated successfully',
+        ]);
     }
 
     // POST /api/hydration/delete

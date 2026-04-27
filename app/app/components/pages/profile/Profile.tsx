@@ -1,20 +1,19 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Image, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
-import EditProfileModal from './EditProfileModal';
 import AvatarSelector, { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
 
 export default function Profile() {
   const router = useRouter();
   const { token } = useLocalSearchParams();
-  const { user, loading, reload, setUser } = useUser(token as string | undefined);
-  const [editVisible, setEditVisible] = React.useState(false);
+  const { user, loading, reload } = useUser(token as string | undefined);
+  const [avatarModalVisible, setAvatarModalVisible] = React.useState(false);
   const [selectedAvatar, setSelectedAvatar] = React.useState<SelectedAvatar | null>(null);
   const insets = useSafeAreaInsets();
   const avatarSource = getAvatarSource(selectedAvatar);
@@ -98,19 +97,18 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 18) }]}>
+        <Text style={styles.headerTitle}>Profile</Text>
+      </View>
+
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={{ paddingBottom: 56 }}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Header */}
-        <View style={[styles.header, { paddingTop: (insets.top || 12) }]}>
-          <Text style={styles.headerTitle}>Profile</Text>
-        </View>
-
         {/* Profile Header */}
-        <View style={styles.profileHeader}>
+        <TouchableOpacity activeOpacity={0.82} style={styles.profileHeader} onPress={() => setAvatarModalVisible(true)}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
               {avatarSource ? (
@@ -119,17 +117,20 @@ export default function Profile() {
                 <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
               )}
             </View>
-            <TouchableOpacity style={styles.cameraButton} onPress={() => setEditVisible(true)}>
+            <TouchableOpacity style={styles.cameraButton} onPress={() => setAvatarModalVisible(true)}>
               <Ionicons name="camera" size={16} color="white" />
             </TouchableOpacity>
           </View>
-          <Text style={styles.userName}>{user.name}</Text>
-          <Text style={styles.userEmail}>{user.email}</Text>
-        </View>
-
-        <View style={styles.avatarSelectorCard}>
-          <AvatarSelector onChange={setSelectedAvatar} />
-        </View>
+          <View style={styles.profileCopy}>
+            <Text style={styles.userName} numberOfLines={1}>{user.name}</Text>
+            <Text style={styles.userEmail} numberOfLines={1}>{user.email}</Text>
+            <View style={styles.avatarHint}>
+              <Ionicons name="image-outline" size={13} color="#2563EB" />
+              <Text style={styles.avatarHintText}>Customize avatar</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+        </TouchableOpacity>
 
         {/* Quick Info Cards */}
         <View style={styles.quickInfoContainer}>
@@ -196,13 +197,36 @@ export default function Profile() {
         </TouchableOpacity>
       </ScrollView>
 
-      <EditProfileModal
-        visible={editVisible}
-        onClose={() => setEditVisible(false)}
-        user={user}
-        token={token as string}
-        onSaved={(updated) => setUser && setUser(updated)}
-      />
+      <Modal
+        transparent
+        animationType="slide"
+        visible={avatarModalVisible}
+        onRequestClose={() => setAvatarModalVisible(false)}
+      >
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={() => setAvatarModalVisible(false)} />
+          <View style={styles.avatarSheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetPreview}>
+                {avatarSource ? (
+                  <Image source={avatarSource as any} style={styles.sheetPreviewImage} />
+                ) : (
+                  <Text style={styles.sheetPreviewText}>{getInitials(user.name)}</Text>
+                )}
+              </View>
+              <View style={styles.sheetTitleWrap}>
+                <Text style={styles.sheetTitle}>Customize profile</Text>
+                <Text style={styles.sheetSubtitle}>Choose an avatar or upload your own image.</Text>
+              </View>
+            </View>
+            <AvatarSelector onChange={setSelectedAvatar} />
+            <TouchableOpacity style={styles.sheetDoneButton} onPress={() => setAvatarModalVisible(false)}>
+              <Text style={styles.sheetDoneText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <BottomNavigation currentRoute="profile" />
     </SafeAreaView>
@@ -212,45 +236,56 @@ export default function Profile() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
   },
   scrollView: {
     flex: 1,
     paddingHorizontal: 20,
   },
+  scrollContent: {
+    paddingTop: 16,
+    paddingBottom: 136,
+  },
   header: {
     flexDirection: 'row',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-start',
-    paddingTop: 20,
-    paddingBottom: 24,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#0F172A',
   },
   profileHeader: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    paddingVertical: 28,
-    paddingHorizontal: 20,
+    borderRadius: 18,
+    padding: 14,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    borderLeftWidth: 4,
+    borderLeftColor: '#2563EB',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
     elevation: 3,
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 16,
+    marginRight: 14,
   },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: '#1E3A8A',
     justifyContent: 'center',
     alignItems: 'center',
@@ -262,90 +297,106 @@ const styles = StyleSheet.create({
   },
   avatarText: {
     color: 'white',
-    fontSize: 28,
-    fontWeight: '600',
+    fontSize: 24,
+    fontWeight: '900',
   },
   cameraButton: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
+    bottom: -1,
+    right: -1,
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#1E3A8A',
+    backgroundColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: 'white',
   },
+  profileCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
   userName: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0F172A',
     marginBottom: 4,
   },
   userEmail: {
     fontSize: 14,
-    color: '#6B7280',
+    color: '#64748B',
+    fontWeight: '600',
   },
-  avatarSelectorCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+  avatarHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    marginTop: 9,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  avatarHintText: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '900',
   },
   quickInfoContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 24,
+    gap: 10,
+    marginBottom: 14,
   },
   infoCard: {
     flex: 1,
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
-    marginHorizontal: 6,
-    shadowColor: '#000',
+    minHeight: 104,
+    paddingHorizontal: 14,
+    paddingVertical: 15,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 8,
-    elevation: 2,
+    elevation: 1,
   },
   infoLabel: {
     fontSize: 12,
-    color: '#6B7280',
-    marginTop: 8,
-    marginBottom: 4,
+    color: '#64748B',
+    marginTop: 9,
+    marginBottom: 6,
+    fontWeight: '800',
   },
   infoValue: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontWeight: '900',
+    color: '#0F172A',
   },
   optionsContainer: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    marginBottom: 24,
-    shadowColor: '#000',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 8,
-    elevation: 2,
+    elevation: 1,
+    overflow: 'hidden',
   },
   optionItem: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: '#F1F5F9',
   },
   optionIcon: {
     width: 40,
@@ -360,79 +411,30 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   optionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
     marginBottom: 2,
   },
   optionSubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  emergencyContainer: {
-    marginBottom: 24,
-  },
-  emergencyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 12,
-  },
-  emergencyCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  emergencyIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FEF2F2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  emergencyContent: {
-    flex: 1,
-  },
-  emergencyName: {
-    fontSize: 16,
+    fontSize: 13,
+    color: '#64748B',
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 2,
-  },
-  emergencyDetails: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
-  callButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#EF4444',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 16,
-    marginBottom: 100,
+    borderRadius: 14,
+    paddingVertical: 13,
+    marginTop: 2,
+    marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#F3F4F6',
-    shadowColor: '#000',
+    borderColor: '#FECACA',
+    shadowColor: '#EF4444',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 2,
   },
@@ -442,36 +444,83 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     marginLeft: 8,
   },
-  onboardingCard: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    borderLeftWidth: 4,
-    borderLeftColor: '#1E3A8A',
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
   },
-  onboardingHeader: {
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  avatarSheet: {
+    backgroundColor: '#F8FAFC',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 22,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  sheetHandle: {
+    width: 42,
+    height: 4,
+    borderRadius: 4,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  onboardingTitle: {
+  sheetPreview: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#1E3A8A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    marginRight: 12,
+  },
+  sheetPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  sheetPreviewText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  sheetTitleWrap: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginLeft: 12,
   },
-  onboardingSubtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginLeft: 36,
-    lineHeight: 20,
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  sheetSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+    marginTop: 5,
+  },
+  sheetDoneButton: {
+    backgroundColor: '#2563EB',
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 4,
+    alignSelf: 'stretch',
+  },
+  sheetDoneText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
   },
   loadingContainer: {
     flex: 1,

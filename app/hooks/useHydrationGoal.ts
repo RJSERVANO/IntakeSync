@@ -1,6 +1,10 @@
 import { useMemo } from 'react';
+import {
+  calculatePersonalizedHydrationGoal,
+  type HydrationProfile,
+} from '../utils/hydrationHelpers';
 
-interface HydrationFactors {
+interface HydrationFactors extends HydrationProfile {
   weight?: number;
   height?: number;
   gender?: string;
@@ -9,45 +13,8 @@ interface HydrationFactors {
   age?: number;
 }
 
-/**
- * Calculate recommended daily water intake based on user profile
- * Formula: Base calculation + adjustments for climate and activity
- */
 export function calculateDailyWaterGoal(factors: HydrationFactors): number {
-  let baseGoal = 2000; // Default 2L
-
-  // Base calculation: 35ml per kg of body weight (common medical formula)
-  if (factors.weight) {
-    baseGoal = Math.round(factors.weight * 35);
-  }
-
-  // Climate adjustment: Add 500ml per liter in hot/humid climates
-  if (factors.climate) {
-    const climate = factors.climate.toLowerCase();
-    if (climate.includes('hot') || climate.includes('tropical') || climate.includes('humid')) {
-      baseGoal += 500;
-    }
-  }
-
-  // Activity level adjustment: Add 500-1000ml based on exercise frequency
-  if (factors.exercise_frequency) {
-    const frequency = factors.exercise_frequency.toLowerCase();
-    if (frequency.includes('daily') || frequency.includes('very')) {
-      baseGoal += 1000;
-    } else if (frequency.includes('moderate') || frequency.includes('3-4')) {
-      baseGoal += 750;
-    } else if (frequency.includes('light') || frequency.includes('1-2')) {
-      baseGoal += 500;
-    }
-  }
-
-  // Age adjustment: Elderly people need slightly less
-  if (factors.age && factors.age > 55) {
-    baseGoal = Math.round(baseGoal * 0.95);
-  }
-
-  // Cap between reasonable bounds (1500ml - 5000ml)
-  return Math.max(1500, Math.min(5000, baseGoal));
+  return calculatePersonalizedHydrationGoal(factors);
 }
 
 /**

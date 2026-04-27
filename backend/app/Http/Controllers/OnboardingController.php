@@ -30,6 +30,8 @@ class OnboardingController extends Controller
                 'exercise_frequency' => $user->exercise_frequency,
                 'weight' => $user->weight,
                 'weight_unit' => $user->weight_unit,
+                'daily_hydration_goal' => $user->hydration_goal,
+                'hydration_goal' => $user->hydration_goal,
                 'reminder_tone' => $user->reminder_tone,
                 'notification_permissions_accepted' => $user->notification_permissions_accepted,
                 'battery_optimization_set' => $user->battery_optimization_set,
@@ -58,28 +60,37 @@ class OnboardingController extends Controller
     {
         $user = $request->user();
 
-        $data = $request->validate([
+        $validated = $request->validate([
             'nickname' => 'nullable|string|max:100',
-            'first_medication_time' => 'nullable|date_format:H:i',
-            'end_of_day_time' => 'nullable|date_format:H:i',
-            'wake_up_time' => 'nullable|date_format:H:i',
-            'breakfast_time' => 'nullable|date_format:H:i',
-            'lunch_time' => 'nullable|date_format:H:i',
-            'dinner_time' => 'nullable|date_format:H:i',
-            'climate' => 'nullable|in:hot,temperate,cold',
-            'exercise_frequency' => 'nullable|in:rarely,sometimes,regularly,often',
-            'weight' => 'nullable|numeric|min:0|max:500',
+            'weight' => 'nullable|integer|min:0|max:550',
             'weight_unit' => 'nullable|in:kg,lbs',
-            'age' => 'nullable|integer|min:1|max:150',
-            'reminder_tone' => 'nullable|string|max:100',
+            'climate' => 'nullable|string|in:hot,temperate,cold',
+            'exercise_frequency' => 'nullable|string|in:rarely,sometimes,regularly,often',
             'notification_permissions_accepted' => 'nullable|boolean',
-            'battery_optimization_set' => 'nullable|boolean',
-            'emergency_contact' => 'nullable|string|max:255',
-            'emergency_contact_name' => 'nullable|string|max:255',
-            'emergency_contact_phone' => 'nullable|string|max:50',
+            'daily_hydration_goal' => 'nullable|integer|min:500|max:5000',
         ]);
 
-        $user->update($data);
+        $updates = [];
+
+        foreach ([
+            'nickname',
+            'weight',
+            'weight_unit',
+            'climate',
+            'exercise_frequency',
+            'notification_permissions_accepted',
+        ] as $field) {
+            if (array_key_exists($field, $validated)) {
+                $updates[$field] = $validated[$field];
+            }
+        }
+
+        if (array_key_exists('daily_hydration_goal', $validated)) {
+            $updates['hydration_goal'] = $validated['daily_hydration_goal'];
+        }
+
+        $user->fill($updates);
+        $user->save();
 
         return response()->json([
             'message' => 'Onboarding data updated successfully',
@@ -93,10 +104,19 @@ class OnboardingController extends Controller
     public function complete(Request $request)
     {
         $user = $request->user();
-
-        $user->update([
-            'onboarding_completed' => true,
+        $data = $request->validate([
+            'daily_hydration_goal' => 'nullable|integer|min:500|max:5000',
         ]);
+
+        $updates = [
+            'onboarding_completed' => true,
+        ];
+
+        if (array_key_exists('daily_hydration_goal', $data)) {
+            $updates['hydration_goal'] = $data['daily_hydration_goal'];
+        }
+
+        $user->update($updates);
 
         return response()->json([
             'message' => 'Onboarding completed successfully',

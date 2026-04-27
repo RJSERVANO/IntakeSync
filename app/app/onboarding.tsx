@@ -1,64 +1,33 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert, Platform, Modal } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert, Modal, BackHandler } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Contacts from 'expo-contacts';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import * as api from './api';
+import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
+import { notificationService } from '../services/notificationService';
 
-const { width, height } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 interface OnboardingData {
   nickname?: string;
-  first_medication_time?: string;
-  end_of_day_time?: string;
-  wake_up_time?: string;
-  breakfast_time?: string;
-  lunch_time?: string;
-  dinner_time?: string;
   climate?: 'hot' | 'temperate' | 'cold';
   exercise_frequency?: 'rarely' | 'sometimes' | 'regularly' | 'often';
   weight?: number;
   weight_unit?: 'kg' | 'lbs';
-  reminder_tone?: string;
   notification_permissions_accepted?: boolean;
-  battery_optimization_set?: boolean;
-  emergency_contact?: string;
-  emergency_contact_name?: string;
-  emergency_contact_phone?: string;
+  daily_hydration_goal?: number;
+  hydration_goal?: number;
 }
-
-// Reminder tone options
-// Note: Sound files should be added to app/assets/sounds/ directory
-// For now, using system notification sounds as fallback
-const REMINDER_TONES = [
-  { id: 'default', name: 'Default', sound: null },
-  { id: 'gentle', name: 'Gentle Chime', sound: null },
-  { id: 'classic', name: 'Classic Bell', sound: null },
-  { id: 'modern', name: 'Modern Alert', sound: null },
-  { id: 'soft', name: 'Soft Tone', sound: null },
-];
 
 export default function Onboarding() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const token = params.token as string;
-  const userName = params.name as string || 'User';
 
   const [currentStep, setCurrentStep] = useState(0);
   const [data, setData] = useState<OnboardingData>({});
   const [loading, setLoading] = useState(false);
-  
-  // Time picker states
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [timePickerField, setTimePickerField] = useState<string | null>(null);
-  const [tempTime, setTempTime] = useState<Date | null>(null);
-  
-  // Picker states
   const [showWeightPicker, setShowWeightPicker] = useState(false);
-  
-  // Audio state
-  const [playingTone, setPlayingTone] = useState<string | null>(null);
 
   const steps = [
     'nickname',
@@ -66,17 +35,18 @@ export default function Onboarding() {
     'weight',
     'climate',
     'exercise',
-    'daily-start',
-    'end-of-day',
-    'meal-times',
-    'reminder-tone',
-    'emergency-contact',
     'notifications',
+    'medication-setup-prompt',
     'complete'
   ];
 
   // Generate arrays for pickers
-  const weights = Array.from({ length: 200 }, (_, i) => i + 20); // 20-219
+  const selectedWeightUnit = data.weight_unit || 'kg';
+  const weights =
+    selectedWeightUnit === 'lbs'
+      ? Array.from({ length: 507 }, (_, i) => i + 44)
+      : Array.from({ length: 231 }, (_, i) => i + 20);
+  const estimatedHydrationGoal = calculatePersonalizedHydrationGoal(data);
 
   // Load saved data on mount
   useEffect(() => {
@@ -89,20 +59,6 @@ export default function Onboarding() {
             const dataToLoad = saved.data || saved;
             const normalizedData: any = { ...dataToLoad };
 
-            // Map nested emergencyContact payload to flat fields if present
-            if (dataToLoad.emergencyContact) {
-              const { name, phone } = dataToLoad.emergencyContact;
-              if (!normalizedData.emergency_contact_name && name) {
-                normalizedData.emergency_contact_name = name;
-              }
-              if (!normalizedData.emergency_contact_phone && phone) {
-                normalizedData.emergency_contact_phone = phone;
-              }
-              // Drop the nested object to avoid confusion
-              delete normalizedData.emergencyContact;
-            }
-
-            // Merge saved data with current data, preserving any existing values
             setData(prev => ({ ...prev, ...normalizedData }));
           }
         }
@@ -114,197 +70,67 @@ export default function Onboarding() {
     loadSavedData();
   }, [token]);
 
-  // Update tempTime when time picker opens with the correct default
   useEffect(() => {
-    if (showTimePicker && timePickerField && !tempTime) {
-      const currentTime = parseTimeToDate(data[timePickerField as keyof OnboardingData] as string, timePickerField);
-      setTempTime(currentTime);
-    }
-  }, [showTimePicker, timePickerField]);
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (showWeightPicker) {
+        setShowWeightPicker(false);
+        return true;
+      }
+
+      if (currentStep > 0) {
+        setCurrentStep(prev => Math.max(0, prev - 1));
+        return true;
+      }
+
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [currentStep, showWeightPicker]);
 
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
   };
 
-  const convertTo24HourFormat = (timeString?: string): string => {
-    if (!timeString) return '';
-    try {
-      const [time, period] = timeString.split(' ');
-      if (!period) return timeString; // Already 24-hour format
-      
-      const [hours, minutes] = time.split(':');
-      let hour = parseInt(hours);
-      
-      if (period.toUpperCase() === 'PM' && hour !== 12) hour += 12;
-      if (period.toUpperCase() === 'AM' && hour === 12) hour = 0;
-      
-      return `${hour.toString().padStart(2, '0')}:${minutes}`;
-    } catch {
-      return timeString;
+  const getWeightValidationMessage = () => {
+    if (!data.weight) return null;
+    const unit = data.weight_unit || 'kg';
+    if (unit === 'kg' && (data.weight < 20 || data.weight > 250)) {
+      return 'Please choose a weight between 20 and 250 kg, or skip for now.';
     }
+    if (unit === 'lbs' && (data.weight < 44 || data.weight > 550)) {
+      return 'Please choose a weight between 44 and 550 lbs, or skip for now.';
+    }
+    return null;
   };
 
-  const formatTime = (timeString?: string): string => {
-    if (!timeString) return '';
-    try {
-      // Handle both "HH:MM" and "HH:MM AM/PM" formats
-      const [time, period] = timeString.split(' ');
-      const [hours, minutes] = time.split(':');
-      const hour = parseInt(hours);
-      const min = minutes || '00';
-      
-      if (period) {
-        // Already in 12-hour format
-        return timeString;
-      } else {
-        // Convert 24-hour to 12-hour
-        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        return `${hour12}:${min.padStart(2, '0')} ${ampm}`;
-      }
-    } catch {
-      return timeString;
-    }
-  };
-
-  // Map field names to their default times (in 24-hour format)
-  const getDefaultTimeForField = (field: string): [number, number] => {
-    const defaults: { [key: string]: [number, number] } = {
-      wake_up_time: [8, 0],          // 08:00 AM
-      first_medication_time: [8, 0], // 08:00 AM
-      end_of_day_time: [23, 0],      // 11:00 PM
-      breakfast_time: [8, 0],        // 08:00 AM
-      lunch_time: [12, 0],           // 12:00 PM
-      dinner_time: [19, 0],          // 07:00 PM
-      // Additional medication times (if needed in future)
-      medication_afternoon_time: [13, 0],   // 01:00 PM
-      medication_evening_time: [20, 0],    // 08:00 PM
+  const buildOnboardingPayload = () => {
+    const calculatedGoal = calculatePersonalizedHydrationGoal(data);
+    return {
+      nickname: data.nickname,
+      weight: data.weight,
+      weight_unit: data.weight_unit || 'kg',
+      climate: data.climate,
+      exercise_frequency: data.exercise_frequency,
+      notification_permissions_accepted: data.notification_permissions_accepted,
+      daily_hydration_goal: calculatedGoal,
     };
-    return defaults[field] || [8, 0];
-  };
-
-  const parseTimeToDate = (timeString?: string, field?: string): Date => {
-    if (!timeString) {
-      // Use field-specific default if no saved value
-      const [hour, minutes] = getDefaultTimeForField(field || '');
-      const date = new Date();
-      date.setHours(hour, minutes, 0, 0);
-      return date;
-    }
-    try {
-      const [time, period] = timeString.split(' ');
-      const [hours, minutesStr] = time.split(':');
-      let hour = parseInt(hours);
-      const min = parseInt(minutesStr || '0');
-      
-      if (period) {
-        // 12-hour format
-        if (period.toUpperCase() === 'PM' && hour !== 12) hour += 12;
-        if (period.toUpperCase() === 'AM' && hour === 12) hour = 0;
-      }
-      
-      const date = new Date();
-      date.setHours(hour, min, 0, 0);
-      return date;
-    } catch {
-      // On parse error, return field-specific default
-      const [hour, minutes] = getDefaultTimeForField(field || '');
-      const date = new Date();
-      date.setHours(hour, minutes, 0, 0);
-      return date;
-    }
-  };
-
-  const openTimePicker = (field: string) => {
-    setTimePickerField(field);
-    setTempTime(null); // Reset to trigger useEffect with correct default
-    setShowTimePicker(true);
-  };
-
-  const handleTimeChange = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePicker(false);
-    }
-    
-    if (selectedTime && timePickerField) {
-      const hours = selectedTime.getHours();
-      const minutes = selectedTime.getMinutes();
-      const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      const timeString = `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-      // Update both the temp time and the data immediately
-      setTempTime(selectedTime);
-      updateData(timePickerField as keyof OnboardingData, timeString);
-    }
-    
-    if (Platform.OS === 'ios') {
-      if (event.type === 'dismissed') {
-        setShowTimePicker(false);
-      }
-    }
-  };
-
-  const confirmTimePicker = () => {
-    if (timePickerField && tempTime) {
-      const hours = tempTime.getHours();
-      const minutes = tempTime.getMinutes();
-      const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      const timeString = `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-      updateData(timePickerField as keyof OnboardingData, timeString);
-    }
-    setShowTimePicker(false);
-    setTimePickerField(null);
-  };
-
-  const playTone = async (toneId: string) => {
-    try {
-      const tone = REMINDER_TONES.find(t => t.id === toneId);
-      if (!tone) {
-        return;
-      }
-
-      setPlayingTone(toneId);
-
-      // For preview, we'll use a simple visual feedback
-      // In production, you would add actual sound files and use expo-audio
-      // Sound files would go to app/assets/sounds/ directory
-      setTimeout(() => {
-        setPlayingTone(null);
-      }, 1000);
-    } catch (error) {
-      console.log('Error playing tone:', error);
-      setPlayingTone(null);
-    }
-  };
-
-  const stopTone = async () => {
-    setPlayingTone(null);
   };
 
   const nextStep = async () => {
     if (currentStep < steps.length - 1) {
-      // Save data to backend on certain steps
-      if (['nickname', 'weight', 'climate', 'exercise', 'daily-start', 'end-of-day', 'meal-times', 'reminder-tone', 'emergency-contact'].includes(steps[currentStep])) {
+      if (steps[currentStep] === 'weight') {
+        const validationMessage = getWeightValidationMessage();
+        if (validationMessage) {
+          Alert.alert('Check your weight', validationMessage);
+          return;
+        }
+      }
+
+      const saveSteps = ['nickname', 'weight', 'climate', 'exercise', 'notifications'];
+      if (saveSteps.includes(steps[currentStep])) {
         try {
-          // Convert time fields to 24-hour format for backend
-          const dataToSend = { ...data };
-          const timeFields: (keyof OnboardingData)[] = [
-            'first_medication_time',
-            'end_of_day_time',
-            'wake_up_time',
-            'breakfast_time',
-            'lunch_time',
-            'dinner_time',
-          ];
-          
-          timeFields.forEach(field => {
-            if (dataToSend[field]) {
-              dataToSend[field] = convertTo24HourFormat(dataToSend[field] as string) as any;
-            }
-          });
-          
-          await api.put('/onboarding/update', dataToSend, token);
+          await api.put('/onboarding/update', buildOnboardingPayload(), token);
         } catch (err) {
           console.log('Error saving onboarding data:', err);
         }
@@ -316,6 +142,9 @@ export default function Onboarding() {
   };
 
   const skipStep = () => {
+    if (steps[currentStep] === 'notifications') {
+      updateData('notification_permissions_accepted', false);
+    }
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
@@ -323,30 +152,53 @@ export default function Onboarding() {
     }
   };
 
-  const pickEmergencyContact = async () => {
+  const requestNotificationPermission = async () => {
     try {
-      const permission = await Contacts.requestPermissionsAsync();
-
-      if (permission.status !== 'granted') {
-        Alert.alert('Permission needed', 'Please allow contact access to pick someone automatically.');
-        return;
-      }
-
-      const contact = await Contacts.presentContactPickerAsync();
-
-      if (!contact) {
-        return;
-      }
-
-      const phone = contact.phoneNumbers?.[0]?.number;
-      updateData('emergency_contact_name', contact.name || '');
-
-      if (phone) {
-        updateData('emergency_contact_phone', phone);
-      }
+      const granted = await notificationService.requestPermissions();
+      const nextData = { ...data, notification_permissions_accepted: granted };
+      setData(nextData);
+      await api.put('/onboarding/update', {
+        ...buildOnboardingPayload(),
+        notification_permissions_accepted: granted,
+      }, token);
+      setCurrentStep(currentStep + 1);
     } catch (err) {
-      console.log('Error selecting contact:', err);
-      Alert.alert('Could not open contacts', 'Please enter your emergency contact manually.');
+      console.log('Notification permission request failed:', err);
+      Alert.alert('Reminders not enabled', 'We could not enable reminders right now. You can turn them on later in settings.');
+      updateData('notification_permissions_accepted', false);
+      setCurrentStep(currentStep + 1);
+    }
+  };
+
+  const skipNotifications = async () => {
+    try {
+      updateData('notification_permissions_accepted', false);
+      await api.put('/onboarding/update', {
+        ...buildOnboardingPayload(),
+        notification_permissions_accepted: false,
+      }, token);
+    } catch (err) {
+      console.log('Error saving reminder preference:', err);
+    } finally {
+      setCurrentStep(currentStep + 1);
+    }
+  };
+
+  const openMedicationSetup = async () => {
+    try {
+      setLoading(true);
+      await api.put('/onboarding/update', buildOnboardingPayload(), token);
+      setCurrentStep(steps.length - 1);
+      router.push({
+        pathname: '/components/pages/medication/Medication',
+        params: { token, fromOnboarding: '1' },
+      } as any);
+    } catch (err: any) {
+      console.log('Error opening medication setup:', err);
+      const message = err?.data?.message || err?.message || 'Could not open medication setup right now.';
+      Alert.alert('Medication setup', typeof message === 'string' ? message : JSON.stringify(message));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -356,31 +208,18 @@ export default function Onboarding() {
       // Save any remaining data first
       if (Object.keys(data).length > 0) {
         try {
-          // Convert time fields to 24-hour format for backend
-          const dataToSend = { ...data };
-          const timeFields: (keyof OnboardingData)[] = [
-            'first_medication_time',
-            'end_of_day_time',
-            'wake_up_time',
-            'breakfast_time',
-            'lunch_time',
-            'dinner_time',
-          ];
-          
-          timeFields.forEach(field => {
-            if (dataToSend[field]) {
-              dataToSend[field] = convertTo24HourFormat(dataToSend[field] as string) as any;
-            }
-          });
-          
-          await api.put('/onboarding/update', dataToSend, token);
+          await api.put('/onboarding/update', buildOnboardingPayload(), token);
         } catch (updateErr) {
           console.log('Error updating onboarding data:', updateErr);
           // Continue even if update fails
         }
       }
       // Mark onboarding as complete
-      await api.post('/onboarding/complete', {}, token);
+      await api.post(
+        '/onboarding/complete',
+        { daily_hydration_goal: calculatePersonalizedHydrationGoal(data) },
+        token
+      );
       router.replace({ pathname: '/home', params: { token } } as any);
     } catch (err: any) {
       console.log('Error completing onboarding:', err);
@@ -395,18 +234,22 @@ export default function Onboarding() {
       case 'nickname':
         return (
           <View style={styles.stepContainer}>
-            <View style={styles.iconContainer}>
+            <View style={[styles.iconContainer, styles.heroIconWarm]}>
               <Ionicons name="sunny" size={64} color="#F5A623" />
             </View>
             <Text style={styles.title}>To start with, what should we call you?</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Nickname"
-              placeholderTextColor="#8E8E93"
-              value={data.nickname || ''}
-              onChangeText={(text) => updateData('nickname', text)}
-              autoFocus
-            />
+            <Text style={styles.description}>This keeps your Home greeting personal without adding extra setup.</Text>
+            <View style={styles.inputShell}>
+              <Ionicons name="person-outline" size={20} color="#2563EB" />
+              <TextInput
+                style={styles.input}
+                placeholder="Nickname"
+                placeholderTextColor="#94A3B8"
+                value={data.nickname || ''}
+                onChangeText={(text) => updateData('nickname', text)}
+                autoFocus
+              />
+            </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
                 <Text style={styles.skipButtonText}>Skip for now</Text>
@@ -421,186 +264,19 @@ export default function Onboarding() {
       case 'welcome':
         return (
           <View style={styles.stepContainer}>
-            <View style={styles.iconContainer}>
-              <Text style={styles.emoji}>👋</Text>
+            <View style={[styles.iconContainer, styles.heroIconBlue]}>
+              <Ionicons name="sparkles-outline" size={58} color="#2563EB" />
             </View>
             <Text style={styles.title}>Nice to meet you, {data.nickname || 'there'}!</Text>
             <Text style={styles.description}>
-              By going forward, you agree to how we securely handle your data to personalize hydration, medication reminders, and wellness recommendations.
+              IntakeSync will personalize hydration and reminders from a few quick choices.
             </Text>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <View style={styles.buttonWithIcon}>
-                <Text style={styles.primaryButtonText}>Let's go</Text>
+                <Text style={styles.primaryButtonText}>Let&apos;s go</Text>
                 <Ionicons name="hand-right-outline" size={20} color="#fff" style={{ marginLeft: 8 }} />
               </View>
             </TouchableOpacity>
-          </View>
-        );
-
-      case 'emergency-contact':
-        return (
-          <View style={styles.stepContainer}>
-            <View style={styles.iconContainer}>
-              <Text style={styles.emoji}>🆘</Text>
-            </View>
-            <Text style={styles.title}>Emergency Contact</Text>
-            <Text style={styles.description}>
-              In case of emergency, who should we contact?
-            </Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="John Doe"
-                placeholderTextColor="#8E8E93"
-                value={data.emergency_contact_name || ''}
-                onChangeText={(text) => updateData('emergency_contact_name', text)}
-                autoFocus
-              />
-            </View>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Phone Number</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="09123456789"
-                placeholderTextColor="#8E8E93"
-                keyboardType="phone-pad"
-                value={data.emergency_contact_phone || ''}
-                onChangeText={(text) => updateData('emergency_contact_phone', text)}
-              />
-            </View>
-            <TouchableOpacity onPress={pickEmergencyContact} style={styles.contactPickerButton}>
-              <Ionicons name="people-outline" size={20} color="#1E3A8A" />
-              <Text style={styles.contactPickerText}>Pick from contacts</Text>
-            </TouchableOpacity>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip for now</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        );
-
-      case 'daily-start':
-        return (
-          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContentInner}>
-            <View style={styles.infoBox}>
-              <Text style={styles.infoText}>
-                Getting hydrated <Text style={styles.highlight}>right after</Text> waking up will give you energy in the morning!
-              </Text>
-            </View>
-            
-            <Text style={styles.sectionHeader}>When do you usually wake up?</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Time</Text>
-              <TouchableOpacity onPress={() => openTimePicker('wake_up_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.wake_up_time && styles.timeInputPlaceholder]}>
-                  {data.wake_up_time ? formatTime(data.wake_up_time) : '8:00 AM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.sectionDivider} />
-
-            <Text style={styles.sectionHeader}>What time do you usually take your first medication?</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Time</Text>
-              <TouchableOpacity onPress={() => openTimePicker('first_medication_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.first_medication_time && styles.timeInputPlaceholder]}>
-                  {data.first_medication_time ? formatTime(data.first_medication_time) : '8:00 AM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-        );
-
-      case 'end-of-day':
-        return (
-          <View style={styles.stepContainer}>
-            <View style={styles.infoBox}>
-              <Text style={styles.infoText}>
-                Drinking water <Text style={styles.highlight}>1 hour before</Text> sleep will keep you hydrated during your sweet dream
-              </Text>
-            </View>
-            <Text style={styles.title}>When do you usually end a day?</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Time</Text>
-              <TouchableOpacity onPress={() => openTimePicker('end_of_day_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.end_of_day_time && styles.timeInputPlaceholder]}>
-                  {data.end_of_day_time ? formatTime(data.end_of_day_time) : '11:00 PM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        );
-
-      case 'meal-times':
-        return (
-          <View style={styles.stepContainer}>
-            <View style={styles.infoBox}>
-              <Text style={styles.infoText}>
-                We'll remind you to drink <Text style={styles.highlight}>1 hour before</Text> and <Text style={styles.highlight}>1 hour after</Text> meals for better digestion
-              </Text>
-            </View>
-            <Text style={styles.title}>What's your usual meal time?</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Breakfast</Text>
-              <TouchableOpacity onPress={() => openTimePicker('breakfast_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.breakfast_time && styles.timeInputPlaceholder, !data.breakfast_time && { color: '#999' }]}>
-                  {data.breakfast_time ? formatTime(data.breakfast_time) : '8:00 AM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Lunch</Text>
-              <TouchableOpacity onPress={() => openTimePicker('lunch_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.lunch_time && styles.timeInputPlaceholder, !data.lunch_time && { color: '#999' }]}>
-                  {data.lunch_time ? formatTime(data.lunch_time) : '12:00 PM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Dinner</Text>
-              <TouchableOpacity onPress={() => openTimePicker('dinner_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.dinner_time && styles.timeInputPlaceholder, !data.dinner_time && { color: '#999' }]}>
-                  {data.dinner_time ? formatTime(data.dinner_time) : '7:00 PM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         );
 
@@ -608,26 +284,35 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.infoBox}>
+              <View style={styles.infoIcon}>
+                <Ionicons name="water-outline" size={18} color="#2563EB" />
+              </View>
               <Text style={styles.infoText}>
-                The hotter the climate, the more water you need to consume per day
+                We&apos;ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
-            <Text style={styles.title}>What's the weather in your country now?</Text>
+            <Text style={styles.title}>What climate are you usually in?</Text>
             <View style={styles.optionsContainer}>
               {[
-                { value: 'hot', label: 'Hot', icon: '☀️' },
-                { value: 'temperate', label: 'Temperate', icon: '🍃' },
-                { value: 'cold', label: 'Cold', icon: '❄️' },
+                { value: 'hot', label: 'Hot', icon: 'sunny-outline', color: '#F97316', hint: 'Adds more to your goal' },
+                { value: 'temperate', label: 'Temperate', icon: 'leaf-outline', color: '#10B981', hint: 'Balanced baseline' },
+                { value: 'cold', label: 'Cold', icon: 'snow-outline', color: '#2563EB', hint: 'Slightly lower estimate' },
               ].map((option) => (
                 <TouchableOpacity
                   key={option.value}
                   style={[styles.climateOption, data.climate === option.value && styles.climateOptionSelected]}
                   onPress={() => updateData('climate', option.value as any)}
                 >
-                  <Text style={styles.climateIcon}>{option.icon}</Text>
-                  <Text style={[styles.climateText, data.climate === option.value && styles.climateTextSelected]}>
-                    {option.label}
-                  </Text>
+                  <View style={[styles.optionIconBubble, { backgroundColor: `${option.color}18` }]}>
+                    <Ionicons name={option.icon as any} size={22} color={option.color} />
+                  </View>
+                  <View style={styles.optionCopy}>
+                    <Text style={[styles.climateText, data.climate === option.value && styles.climateTextSelected]}>
+                      {option.label}
+                    </Text>
+                    <Text style={styles.optionHint}>{option.hint}</Text>
+                  </View>
+                  {data.climate === option.value && <Ionicons name="checkmark-circle" size={22} color="#2563EB" />}
                 </TouchableOpacity>
               ))}
             </View>
@@ -646,27 +331,52 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.infoBox}>
+              <View style={styles.infoIcon}>
+                <Ionicons name="fitness-outline" size={18} color="#2563EB" />
+              </View>
               <Text style={styles.infoText}>
-                The daily water intake needs of people with <Text style={styles.highlight}>different exercise</Text> amount vary
+                We’ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
-            <Text style={styles.title}>How much exercise do you do each week?</Text>
+            <Text style={styles.title}>How active are you most weeks?</Text>
             {[
-              { value: 'rarely', label: 'Rarely exercise' },
-              { value: 'sometimes', label: 'Sometimes exercise' },
-              { value: 'regularly', label: 'Regularly exercise' },
-              { value: 'often', label: 'Often exercise' },
+              { value: 'rarely', label: 'Rarely exercise', icon: 'walk-outline' },
+              { value: 'sometimes', label: 'Sometimes exercise', icon: 'bicycle-outline' },
+              { value: 'regularly', label: 'Regularly exercise', icon: 'fitness-outline' },
+              { value: 'often', label: 'Often exercise', icon: 'flash-outline' },
             ].map((option) => (
               <TouchableOpacity
                 key={option.value}
                 style={[styles.exerciseOption, data.exercise_frequency === option.value && styles.exerciseOptionSelected]}
                 onPress={() => updateData('exercise_frequency', option.value as any)}
               >
+                <View style={[styles.optionIconBubble, data.exercise_frequency === option.value && styles.optionIconBubbleSelected]}>
+                  <Ionicons name={option.icon as any} size={21} color={data.exercise_frequency === option.value ? '#2563EB' : '#64748B'} />
+                </View>
                 <Text style={[styles.exerciseText, data.exercise_frequency === option.value && styles.exerciseTextSelected]}>
                   {option.label}
                 </Text>
+                {data.exercise_frequency === option.value && <Ionicons name="checkmark-circle" size={22} color="#2563EB" />}
               </TouchableOpacity>
             ))}
+            <View style={styles.goalPreviewCard}>
+              <View style={styles.goalPreviewIcon}>
+                <Ionicons name="water-outline" size={22} color="#2563EB" />
+              </View>
+              <View style={styles.goalPreviewCopy}>
+                <Text style={styles.goalPreviewTitle}>Estimated daily water goal</Text>
+                {data.weight ? (
+                  <>
+                    <Text style={styles.goalPreviewValue}>Estimated goal: {estimatedHydrationGoal} ml/day</Text>
+                    <Text style={styles.goalPreviewText}>You can adjust this later in Beverage settings.</Text>
+                  </>
+                ) : (
+                  <Text style={styles.goalPreviewText}>
+                    We’ll use a standard 2,000 ml goal for now. You can adjust it later.
+                  </Text>
+                )}
+              </View>
+            </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
                 <Text style={styles.skipButtonText}>Skip</Text>
@@ -682,11 +392,15 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.infoBox}>
+              <View style={styles.infoIcon}>
+                <Ionicons name="analytics-outline" size={18} color="#2563EB" />
+              </View>
               <Text style={styles.infoText}>
-                The daily water intake for people of <Text style={styles.highlight}>different weights</Text> varies greatly
+                We’ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>How much do you weigh?</Text>
+            <Text style={styles.description}>You can skip this and start with a standard goal.</Text>
             <View style={styles.fieldRow}>
               <TouchableOpacity 
                 onPress={() => {
@@ -699,16 +413,24 @@ export default function Onboarding() {
                 style={[styles.pickerButton, { flex: 1 }]}
               >
                 <Text style={[styles.pickerButtonText, !data.weight && styles.pickerPlaceholder]}>
-                  {data.weight || 'Select weight'}
+                  {data.weight ? `${data.weight} ${selectedWeightUnit}` : 'Select weight'}
                 </Text>
                 <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
               </TouchableOpacity>
               <View style={styles.unitSelector}>
-                {['kg', 'lbs'].map((unit) => (
+                {(['kg', 'lbs'] as const).map((unit) => (
                   <TouchableOpacity
                     key={unit}
                     style={[styles.unitButton, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitButtonSelected]}
-                    onPress={() => updateData('weight_unit', unit)}
+                    onPress={() => {
+                      updateData('weight_unit', unit);
+                      const nextWeight = data.weight;
+                      if (nextWeight) {
+                        const invalidKg = unit === 'kg' && (nextWeight < 20 || nextWeight > 250);
+                        const invalidLbs = unit === 'lbs' && (nextWeight < 44 || nextWeight > 550);
+                        if (invalidKg || invalidLbs) updateData('weight', undefined);
+                      }
+                    }}
                   >
                     <Text style={[styles.unitText, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitTextSelected]}>{unit}</Text>
                   </TouchableOpacity>
@@ -726,83 +448,39 @@ export default function Onboarding() {
           </View>
         );
 
-      case 'reminder-tone':
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>Pick your reminder tone</Text>
-            <Text style={styles.description}>For what matters most, choose a sound you won't ignore.</Text>
-            
-            <View style={styles.toneOptionsContainer}>
-              {REMINDER_TONES.map((tone) => (
-                <TouchableOpacity
-                  key={tone.id}
-                  style={[
-                    styles.toneOption,
-                    data.reminder_tone === tone.id && styles.toneOptionSelected,
-                    playingTone === tone.id && styles.toneOptionPlaying
-                  ]}
-                  onPress={() => {
-                    updateData('reminder_tone', tone.id);
-                    playTone(tone.id);
-                  }}
-                >
-                  <View style={styles.toneOptionContent}>
-                    <Ionicons 
-                      name={playingTone === tone.id ? "stop-circle" : "musical-notes"} 
-                      size={24} 
-                      color={data.reminder_tone === tone.id ? '#1E3A8A' : '#6B7280'} 
-                    />
-                    <Text style={[
-                      styles.toneOptionText,
-                      data.reminder_tone === tone.id && styles.toneOptionTextSelected
-                    ]}>
-                      {tone.name}
-                    </Text>
-                  </View>
-                  {data.reminder_tone === tone.id && (
-                    <Ionicons name="checkmark-circle" size={20} color="#1E3A8A" />
-                  )}
-                </TouchableOpacity>
-              ))}
-            </View>
-            
-            {playingTone && (
-              <TouchableOpacity onPress={stopTone} style={styles.stopButton}>
-                <Text style={styles.stopButtonText}>Stop Preview</Text>
-              </TouchableOpacity>
-            )}
-            
-            <Text style={styles.hintText}>Tap a tone to preview it. You can always change this later.</Text>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Continue</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        );
-
       case 'notifications':
         return (
           <View style={styles.stepContainer}>
-            <View style={styles.iconContainer}>
-              <Ionicons name="notifications" size={64} color="#EF4444" />
+            <View style={[styles.iconContainer, styles.heroIconBlue]}>
+              <Ionicons name="notifications-outline" size={58} color="#2563EB" />
             </View>
-            <Text style={styles.title}>Never miss a dose!</Text>
-            <Text style={styles.description}>Let's make sure you get reminders exactly when you need them.</Text>
+            <Text style={styles.title}>Enable reminders?</Text>
+            <Text style={styles.description}>IntakeSync can remind you about hydration and medication schedules. You can change this later.</Text>
             <TouchableOpacity 
-              onPress={() => {
-                updateData('notification_permissions_accepted', true);
-                nextStep();
-              }} 
+              onPress={requestNotificationPermission}
               style={styles.primaryButton}
             >
-              <Text style={styles.primaryButtonText}>Allow notifications</Text>
+              <Text style={styles.primaryButtonText}>Enable reminders</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={skipStep} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>No thanks, I'll take the risk</Text>
+            <TouchableOpacity onPress={skipNotifications} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Not now</Text>
+            </TouchableOpacity>
+          </View>
+        );
+
+      case 'medication-setup-prompt':
+        return (
+          <View style={styles.stepContainer}>
+            <View style={[styles.iconContainer, styles.heroIconOrange]}>
+              <Ionicons name="medical-outline" size={58} color="#F97316" />
+            </View>
+            <Text style={styles.title}>Set up medication reminders?</Text>
+            <Text style={styles.description}>You can add your medicines and reminder times now, or set them up later from the Medication tab.</Text>
+            <TouchableOpacity onPress={openMedicationSetup} style={styles.primaryButton} disabled={loading}>
+              <Text style={styles.primaryButtonText}>{loading ? 'Opening...' : 'Set up now'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={nextStep} style={styles.secondaryButton} disabled={loading}>
+              <Text style={styles.secondaryButtonText}>I&apos;ll do it later</Text>
             </TouchableOpacity>
           </View>
         );
@@ -811,11 +489,13 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.iconContainer}>
-              <Text style={styles.emoji}>✅</Text>
+              <View style={styles.completeIcon}>
+                <Ionicons name="checkmark" size={42} color="#FFFFFF" />
+              </View>
             </View>
             <Text style={styles.title}>Your profile is created!</Text>
-            <Text style={styles.description}>You've taken the first step towards a healthier you!</Text>
-            <TouchableOpacity onPress={completeOnboarding} style={styles.primaryButton} disabled={loading}>
+            <Text style={styles.description}>Your hydration goal is ready, and you can update reminders anytime.</Text>
+            <TouchableOpacity onPress={() => completeOnboarding()} style={styles.primaryButton} disabled={loading}>
               <Text style={styles.primaryButtonText}>{loading ? 'Loading...' : 'Continue'}</Text>
             </TouchableOpacity>
           </View>
@@ -828,11 +508,6 @@ export default function Onboarding() {
 
   return (
     <View style={styles.container}>
-      {currentStep > 0 && currentStep < steps.length - 1 && (
-        <TouchableOpacity style={styles.backButton} onPress={() => setCurrentStep(Math.max(0, currentStep - 1))}>
-          <Ionicons name="arrow-back" size={24} color="#1E3A8A" />
-        </TouchableOpacity>
-      )}
       <View style={styles.progressWrapper}>
         <View style={styles.progressContainer}>
           <View style={styles.progressBarBackground}>
@@ -844,51 +519,6 @@ export default function Onboarding() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {renderStep()}
       </ScrollView>
-
-      {/* Time Picker Modal for iOS */}
-      {Platform.OS === 'ios' && showTimePicker && (
-        <Modal
-          transparent
-          animationType="slide"
-          visible={showTimePicker}
-          onRequestClose={() => setShowTimePicker(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <TouchableOpacity onPress={() => setShowTimePicker(false)}>
-                  <Text style={styles.modalCancel}>Cancel</Text>
-                </TouchableOpacity>
-                <Text style={styles.modalTitle}>Select Time</Text>
-                <TouchableOpacity onPress={confirmTimePicker}>
-                  <Text style={styles.modalConfirm}>Done</Text>
-                </TouchableOpacity>
-              </View>
-              <DateTimePicker
-                value={tempTime || new Date()}
-                mode="time"
-                is24Hour={false}
-                display="spinner"
-                onChange={handleTimeChange}
-                themeVariant="light"
-                accentColor="#1E3A8A"
-                style={styles.dateTimePicker}
-              />
-            </View>
-          </View>
-        </Modal>
-      )}
-
-      {/* Time Picker for Android */}
-      {Platform.OS === 'android' && showTimePicker && (
-        <DateTimePicker
-          value={tempTime || new Date()}
-          mode="time"
-          is24Hour={false}
-          display="default"
-          onChange={handleTimeChange}
-        />
-      )}
 
       {/* Weight Picker Modal */}
       <Modal
@@ -940,87 +570,159 @@ export default function Onboarding() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  backButton: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    zIndex: 10,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 20,
+    backgroundColor: '#F5F8FC',
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
-    paddingTop: 40,
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 28,
   },
   progressWrapper: {
-    paddingTop: 60,
-    paddingHorizontal: 20,
+    paddingTop: 54,
+    paddingHorizontal: 18,
   },
   progressContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
+    alignItems: 'stretch',
+    marginBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    padding: 12,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 2,
   },
   progressBarBackground: {
     width: '100%',
-    height: 6,
-    backgroundColor: '#E5E7EB',
-    borderRadius: 3,
+    height: 8,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 999,
     overflow: 'hidden',
     marginBottom: 8,
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#1E3A8A',
-    borderRadius: 3,
+    backgroundColor: '#2563EB',
+    borderRadius: 999,
   },
   progressText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
+    fontSize: 12,
+    color: '#1E3A8A',
+    fontWeight: '900',
+    textAlign: 'right',
   },
   stepContainer: {
-    flex: 1,
     justifyContent: 'center',
-    minHeight: height * 0.7,
+    minHeight: height * 0.64,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 20,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.07,
+    shadowRadius: 18,
+    elevation: 4,
   },
   iconContainer: {
     alignItems: 'center',
-    marginBottom: 30,
+    justifyContent: 'center',
+    alignSelf: 'center',
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    marginBottom: 22,
+  },
+  heroIconBlue: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  heroIconOrange: {
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    shadowColor: '#F97316',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  heroIconWarm: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
   },
   emoji: {
     fontSize: 80,
   },
+  completeIcon: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10B981',
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 6,
+  },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontSize: 25,
+    fontWeight: '900',
+    color: '#0F172A',
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 10,
+    lineHeight: 31,
   },
   description: {
-    fontSize: 16,
-    color: '#6B7280',
+    fontSize: 15,
+    color: '#64748B',
     textAlign: 'center',
-    marginBottom: 30,
-    lineHeight: 24,
+    marginBottom: 22,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  inputShell: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   input: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    color: '#1F2937',
+    flex: 1,
+    paddingVertical: 16,
+    paddingHorizontal: 10,
+    color: '#0F172A',
     fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    fontWeight: '700',
   },
   nicknameInputContainer: {
     flexDirection: 'row',
@@ -1044,7 +746,7 @@ const styles = StyleSheet.create({
   },
   sectionDivider: {
     height: 1,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#E2E8F0',
     marginVertical: 24,
   },
   scrollContentInner: {
@@ -1053,17 +755,18 @@ const styles = StyleSheet.create({
   },
   timeInputButton: {
     backgroundColor: '#fff',
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#CBD5E1',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   timeInputText: {
-    color: '#1F2937',
+    color: '#0F172A',
     fontSize: 16,
+    fontWeight: '800',
   },
   timeInputPlaceholder: {
     color: '#8E8E93',
@@ -1072,18 +775,24 @@ const styles = StyleSheet.create({
     color: '#A3A3A7',
   },
   pickerButton: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 17,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: '#BFDBFE',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   pickerButtonText: {
-    color: '#1F2937',
+    color: '#0F172A',
     fontSize: 16,
+    fontWeight: '800',
   },
   pickerPlaceholder: {
     color: '#8E8E93',
@@ -1092,15 +801,18 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   fieldLabel: {
-    fontSize: 16,
-    color: '#1F2937',
+    fontSize: 13,
+    color: '#475569',
     marginBottom: 8,
-    fontWeight: '500',
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   buttonRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 30,
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 24,
   },
   contactPickerButton: {
     flexDirection: 'row',
@@ -1114,17 +826,31 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   skipButton: {
-    padding: 16,
+    flex: 1,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
   },
   skipButtonText: {
     color: '#6B7280',
     fontSize: 16,
   },
   nextButton: {
-    backgroundColor: '#1E3A8A',
+    flex: 1,
+    backgroundColor: '#2563EB',
     paddingVertical: 16,
-    paddingHorizontal: 40,
-    borderRadius: 12,
+    paddingHorizontal: 22,
+    borderRadius: 14,
+    alignItems: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 4,
   },
   nextButtonText: {
     color: '#fff',
@@ -1132,11 +858,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   primaryButton: {
-    backgroundColor: '#1E3A8A',
-    paddingVertical: 16,
-    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    paddingVertical: 17,
+    borderRadius: 14,
     alignItems: 'center',
     marginTop: 20,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 4,
   },
   primaryButtonText: {
     color: '#fff',
@@ -1144,29 +875,47 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   secondaryButton: {
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: 'center',
     marginTop: 12,
+    borderRadius: 14,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
   },
   secondaryButtonText: {
-    color: '#6B7280',
+    color: '#1E3A8A',
     fontSize: 16,
+    fontWeight: '900',
   },
   infoBox: {
-    backgroundColor: '#EBF8FF',
+    backgroundColor: '#EFF6FF',
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     marginBottom: 20,
-    borderLeftWidth: 4,
-    borderLeftColor: '#1E3A8A',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  infoIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   infoText: {
-    color: '#1F2937',
+    flex: 1,
+    color: '#334155',
     fontSize: 14,
     lineHeight: 20,
+    fontWeight: '700',
   },
   highlight: {
-    color: '#1E3A8A',
+    color: '#2563EB',
     fontWeight: '600',
   },
   optionsRow: {
@@ -1203,52 +952,88 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#E5E7EB',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderLeftWidth: 4,
+    borderLeftColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   climateOptionSelected: {
-    borderColor: '#1E3A8A',
-    backgroundColor: '#EBF8FF',
+    borderColor: '#93C5FD',
+    borderLeftColor: '#2563EB',
+    backgroundColor: '#EFF6FF',
   },
-  climateIcon: {
-    fontSize: 24,
+  optionIconBubble: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
+  optionIconBubbleSelected: {
+    backgroundColor: '#DBEAFE',
+  },
+  optionCopy: {
+    flex: 1,
+  },
+  optionHint: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
   climateText: {
-    color: '#1F2937',
+    color: '#0F172A',
     fontSize: 16,
     fontWeight: '500',
   },
   climateTextSelected: {
-    color: '#1E3A8A',
+    color: '#2563EB',
     fontWeight: '600',
   },
   exerciseOption: {
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 16,
     marginBottom: 12,
-    borderWidth: 2,
-    borderColor: '#E5E7EB',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderLeftWidth: 4,
+    borderLeftColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 1,
   },
   exerciseOptionSelected: {
-    backgroundColor: '#EBF8FF',
-    borderColor: '#1E3A8A',
+    backgroundColor: '#EFF6FF',
+    borderColor: '#93C5FD',
+    borderLeftColor: '#2563EB',
   },
   exerciseText: {
-    color: '#1F2937',
+    flex: 1,
+    color: '#0F172A',
     fontSize: 16,
+    fontWeight: '700',
   },
   exerciseTextSelected: {
-    color: '#1E3A8A',
-    fontWeight: '600',
+    color: '#2563EB',
+    fontWeight: '900',
   },
   unitSelector: {
     flexDirection: 'row',
     marginLeft: 12,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
+    backgroundColor: '#E0ECFF',
+    borderRadius: 12,
     padding: 4,
   },
   unitButton: {
@@ -1257,7 +1042,12 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   unitButtonSelected: {
-    backgroundColor: '#1E3A8A',
+    backgroundColor: '#2563EB',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.16,
+    shadowRadius: 5,
+    elevation: 2,
   },
   unitText: {
     color: '#6B7280',
@@ -1272,6 +1062,67 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     textAlign: 'center',
+  },
+  optionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginRight: 12,
+  },
+  optionIconWrapSelected: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#BFDBFE',
+  },
+  goalPreviewCard: {
+    flexDirection: 'row',
+    gap: 12,
+    padding: 18,
+    borderRadius: 18,
+    backgroundColor: '#F8FBFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderLeftWidth: 4,
+    borderLeftColor: '#2563EB',
+    marginTop: 8,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  goalPreviewIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EFF6FF',
+  },
+  goalPreviewCopy: {
+    flex: 1,
+  },
+  goalPreviewTitle: {
+    color: '#0F172A',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  goalPreviewValue: {
+    color: '#2563EB',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  goalPreviewText: {
+    color: '#64748B',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+    marginTop: 4,
   },
   // Tone selection styles
   toneOptionsContainer: {
@@ -1326,60 +1177,82 @@ const styles = StyleSheet.create({
   // Modal styles for iOS time picker
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.42)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingBottom: 40,
-    maxHeight: height * 0.6,
+    backgroundColor: '#F8FAFC',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 34,
+    maxHeight: height * 0.62,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: '#DBEAFE',
   },
   modalCancel: {
-    color: '#6B7280',
-    fontSize: 16,
+    color: '#64748B',
+    fontSize: 15,
+    fontWeight: '800',
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontWeight: '900',
+    color: '#0F172A',
   },
   modalConfirm: {
-    color: '#1E3A8A',
-    fontSize: 16,
-    fontWeight: '600',
+    color: '#2563EB',
+    fontSize: 15,
+    fontWeight: '900',
   },
   dateTimePicker: {
     height: 200,
   },
   // Picker modal styles
   pickerScrollView: {
-    maxHeight: 300,
+    maxHeight: 320,
+    paddingHorizontal: 16,
+    paddingTop: 10,
   },
   pickerItem: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    paddingVertical: 14,
+    marginBottom: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
   },
   pickerItemSelected: {
-    backgroundColor: '#EBF8FF',
+    backgroundColor: '#EFF6FF',
+    borderColor: '#93C5FD',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   pickerItemText: {
     fontSize: 18,
-    color: '#1F2937',
+    color: '#334155',
+    fontWeight: '800',
   },
   pickerItemTextSelected: {
-    color: '#1E3A8A',
-    fontWeight: '600',
+    color: '#2563EB',
+    fontWeight: '900',
   },
 });
