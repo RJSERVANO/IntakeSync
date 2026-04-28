@@ -22,7 +22,7 @@
 
         <!-- Stats Cards -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-shadow">
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-purple-50 rounded-xl">
                         <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -36,7 +36,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-shadow">
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-green-50 rounded-xl">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -50,7 +50,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-shadow">
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-blue-50 rounded-xl">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -65,7 +65,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm hover:shadow-md transition-shadow">
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-amber-50 rounded-xl">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -83,7 +83,7 @@
 
         <!-- Additional Metrics -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Snoozed</p>
@@ -95,7 +95,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Failed</p>
@@ -107,7 +107,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Avg Response Time</p>
@@ -169,7 +169,8 @@
 
         <!-- Charts -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <!-- Daily Notification Volume - added accent left border -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Daily Notification Volume</h3>
@@ -181,7 +182,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Notification Types Distribution</h3>
@@ -196,7 +197,7 @@
 
         <!-- Notification Effectiveness & User Interaction Status -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Engagement Status</h3>
@@ -234,7 +235,8 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <!-- Effectiveness Score - fixed orientation -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Effectiveness Score</h3>
@@ -244,7 +246,7 @@
                 <div class="flex flex-col items-center justify-center py-8">
                     <div class="relative w-40 h-40 rounded-full border-8 border-slate-200 flex items-center justify-center" style="border-color: #e2e8f0">
                         <div class="absolute inset-1 rounded-full border-8 flex items-center justify-center" style="border-color: #10b981; border-left-color: #e2e8f0; transform: rotate(-90deg)">
-                            <div class="text-center">
+                            <div class="text-center" style="transform: rotate(90deg)">
                                 <p class="text-4xl font-bold text-slate-900">72%</p>
                                 <p class="text-xs text-slate-500 mt-1">effective</p>
                             </div>

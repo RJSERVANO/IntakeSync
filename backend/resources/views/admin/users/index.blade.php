@@ -50,7 +50,7 @@
                         $roleClass = $user->role === 'admin' ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-700';
                         @endphp
 
-                        <tr class="user-row transition-colors">
+                        <tr class="user-row transition-colors border-l-4 border-slate-100">
                             <td class="px-6 py-4 text-sm font-medium text-slate-900">
                                 <a href="{{ route('admin.users.show', $user) }}" class="text-blue-600 hover:text-blue-700 font-semibold">{{ $user->name }}</a>
                             </td>
@@ -140,15 +140,22 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.addEventListener('mouseenter', () => {
                 const action = btn.dataset.action;
 
-                row.classList.remove('bg-blue-50', 'bg-amber-50', 'bg-red-50');
+                row.classList.remove('bg-blue-50', 'bg-amber-50', 'bg-red-50', 'border-l-blue-500', 'border-l-amber-500', 'border-l-red-500', 'border-l-slate-100');
 
-                if (action === 'view') row.classList.add('bg-blue-50');
-                if (action === 'edit') row.classList.add('bg-amber-50');
-                if (action === 'delete') row.classList.add('bg-red-50');
+                if (action === 'view') {
+                    row.classList.add('bg-blue-50', 'border-l-blue-500');
+                }
+                if (action === 'edit') {
+                    row.classList.add('bg-amber-50', 'border-l-amber-500');
+                }
+                if (action === 'delete') {
+                    row.classList.add('bg-red-50', 'border-l-red-500');
+                }
             });
 
             btn.addEventListener('mouseleave', () => {
-                row.classList.remove('bg-blue-50', 'bg-amber-50', 'bg-red-50');
+                row.classList.remove('bg-blue-50', 'bg-amber-50', 'bg-red-50', 'border-l-blue-500', 'border-l-amber-500', 'border-l-red-500');
+                row.classList.add('border-l-slate-100');
             });
         });
     });
