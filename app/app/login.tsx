@@ -12,6 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
+import { getCachedSession, hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authStyles } from '../components/auth/authStyles';
@@ -58,6 +59,7 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.post('/login', { email, password });
+      await saveCachedSession({ token: res.token, user: res.user });
       if (!res.onboarding_completed) {
         router.replace({
           pathname: '/onboarding',
@@ -68,6 +70,15 @@ export default function Login() {
       }
     } catch (err: any) {
       console.log('login error', err);
+      if (api.isNetworkError(err)) {
+        const cached = await getCachedSession();
+        if (hasValidCachedSession(cached)) {
+          router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
+          return;
+        }
+        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        return;
+      }
       const message = err?.data?.message || err?.data || err?.message || 'Login failed';
       Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
     } finally {
@@ -82,6 +93,7 @@ export default function Login() {
       if (!res) {
         return;
       }
+      await saveCachedSession({ token: res.token, user: res.user });
       if (!res.onboarding_completed) {
         router.replace({
           pathname: '/onboarding',
@@ -92,6 +104,15 @@ export default function Login() {
       }
     } catch (err: any) {
       console.log('google signin error', err);
+      if (api.isNetworkError(err)) {
+        const cached = await getCachedSession();
+        if (hasValidCachedSession(cached)) {
+          router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
+          return;
+        }
+        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        return;
+      }
       const message =
         err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
       Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));

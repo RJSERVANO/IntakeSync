@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 export default function PrivacySecurity() {
   const { token } = useLocalSearchParams();
@@ -15,6 +16,7 @@ export default function PrivacySecurity() {
     confirmPassword: '',
   });
   const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
 
   const closeModal = () => {
     setModalVisible(false);
@@ -23,17 +25,17 @@ export default function PrivacySecurity() {
 
   const handleChangePassword = async () => {
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
-      Alert.alert('Error', 'Please fill in all fields.');
+      setNotice({ type: 'warning', title: 'Missing Details', message: 'Please fill in all fields.' });
       return;
     }
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      Alert.alert('Error', 'New passwords do not match.');
+      setNotice({ type: 'warning', title: 'Password Mismatch', message: 'New passwords do not match.' });
       return;
     }
 
     if (passwordData.newPassword.length < 8) {
-      Alert.alert('Error', 'Password must be at least 8 characters.');
+      setNotice({ type: 'warning', title: 'Password Too Short', message: 'Password must be at least 8 characters.' });
       return;
     }
 
@@ -48,10 +50,10 @@ export default function PrivacySecurity() {
         token as string
       );
 
-      Alert.alert('Success', 'Password updated successfully.');
       closeModal();
+      setNotice({ type: 'success', title: 'Password Updated', message: 'Your password has been changed successfully.' });
     } catch (error: any) {
-      Alert.alert('Error', error?.data?.message || 'Failed to change password.');
+      setNotice({ type: 'error', title: 'Update Failed', message: error?.data?.message || 'Failed to change password.' });
     } finally {
       setLoading(false);
     }
@@ -148,6 +150,15 @@ export default function PrivacySecurity() {
           </View>
         </SafeAreaView>
       </Modal>
+      <ThemedNoticeModal
+        visible={!!notice}
+        type={notice?.type || 'info'}
+        title={notice?.title || ''}
+        message={notice?.message || ''}
+        primaryText="OK"
+        onPrimary={() => setNotice(null)}
+        onClose={() => setNotice(null)}
+      />
     </SafeAreaView>
   );
 }

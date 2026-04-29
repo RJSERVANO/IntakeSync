@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, ActivityIndicator } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { notificationManager } from '../../../../services/notificationManager';
+import { getCachedSession } from '../../../../services/offlineStorage';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 type MedicationItem = {
   id: string;
@@ -220,8 +222,11 @@ function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
 }
 
 export default function Medication() {
-  const { token, medicineName, medicineDosage, medicineData } = useLocalSearchParams();
+  const { token: routeToken, medicineName, medicineDosage, medicineData } = useLocalSearchParams();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const token = (routeToken as string | undefined) || cachedToken;
   const [meds, setMeds] = useState<MedicationItem[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
@@ -243,6 +248,15 @@ export default function Medication() {
   const [nowTick, setNowTick] = useState(Date.now());
   const [deleteTarget, setDeleteTarget] = useState<MedicationItem | null>(null);
   const [themedPopup, setThemedPopup] = useState<ThemedPopup | null>(null);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+    primaryText?: string;
+    secondaryText?: string;
+    onPrimary?: () => void | Promise<void>;
+  } | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
   const shownReminderPopups = useRef<Set<string>>(new Set());
 
   // form state
@@ -281,6 +295,30 @@ export default function Medication() {
     }
   }, [timeModalVisible, MODAL_ANIM]);
   const [reminder, setReminder] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    if (routeToken) {
+      setOfflineMode(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    getCachedSession().then((session) => {
+      if (!mounted) return;
+      if (session?.token) {
+        setCachedToken(session.token);
+        setOfflineMode(true);
+      } else {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [routeToken, router]);
 
   // Medicine autocomplete search
   useEffect(() => {
@@ -328,6 +366,10 @@ export default function Medication() {
           const localRaw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
           const localMeds: MedicationItem[] = localRaw ? JSON.parse(localRaw) : [];
           const localColorById = new Map(localMeds.map((med) => [med.id.toString(), med.color]));
+          if (localMeds.length > 0) {
+            setMeds(localMeds);
+            setLoading(false);
+          }
 
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
@@ -396,19 +438,36 @@ export default function Medication() {
           if (upcomingData.status === 'fulfilled') {
             setUpcoming(upcomingData.value || []);
           }
+          setOfflineMode(false);
         } else {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
           const hraw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
           if (raw) setMeds(JSON.parse(raw));
           if (hraw) setHistory(JSON.parse(hraw));
         }
-      } catch {
-        console.log('Failed to load meds');
+      } catch (err) {
+        if (api.isAuthError(err)) {
+          router.replace('/login');
+          return;
+        }
+        if (api.isNetworkError(err)) {
+          setOfflineMode(true);
+          try {
+            const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
+            const hraw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
+            if (raw) setMeds(JSON.parse(raw));
+            if (hraw) setHistory(JSON.parse(hraw));
+          } catch {
+            // Keep whatever is already visible.
+          }
+        } else {
+          console.log('Failed to load meds');
+        }
       } finally {
         setLoading(false);
       }
     })();
-  }, [token]);
+  }, [router, token]);
 
   // Persist medications to local storage
   useEffect(() => {
@@ -535,15 +594,15 @@ export default function Medication() {
   }
 
   async function saveMedication() {
-    if (!name.trim()) return Alert.alert('Validation', 'Please enter a name');
-    if (!times.length) return Alert.alert('Validation', 'Please add at least one reminder time');
+    if (!name.trim()) return showNotice('warning', 'Validation', 'Please enter a name');
+    if (!times.length) return showNotice('warning', 'Validation', 'Please add at least one reminder time');
     const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
     const startChanged = !editing || (startDate || todayDateString()) !== originalStart;
     if (startChanged && parseDateStringLocal(startDate || todayDateString()).getTime() < parseDateStringLocal(todayDateString()).getTime()) {
-      return Alert.alert('Validation', 'Start date cannot be in the past. Please select today or a future date.');
+      return showNotice('warning', 'Validation', 'Start date cannot be in the past. Please select today or a future date.');
     }
     if (endDate && parseDateStringLocal(endDate).getTime() < parseDateStringLocal(startDate || todayDateString()).getTime()) {
-      return Alert.alert('Validation', 'End date cannot be before the start date.');
+      return showNotice('warning', 'Validation', 'End date cannot be before the start date.');
     }
 
     const medData = {
@@ -584,7 +643,7 @@ export default function Medication() {
           await reloadAllData({ [editing.id]: color });
         } catch (err) {
           console.log('Failed to update on server:', err);
-          Alert.alert('Warning', 'Medication saved locally but failed to sync with server');
+          showNotice('warning', 'Saved Locally', 'Medication saved locally but failed to sync with server');
         }
       }
     } else {
@@ -605,7 +664,7 @@ export default function Medication() {
           await reloadAllData({ [newMed.id]: newMed.color });
         } catch (err: any) {
           console.log('Failed to save to server:', err);
-          Alert.alert('Error', err?.data?.message || 'Failed to save medication. Please try again.');
+          showNotice('error', 'Action Failed', err?.data?.message || 'Failed to save medication. Please try again.');
           return;
         }
       } else {
@@ -649,6 +708,10 @@ export default function Medication() {
 
   function showThemedPopup(popup: ThemedPopup) {
     setThemedPopup(popup);
+  }
+
+  function showNotice(type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') {
+    setNoticeModal({ type, title, message, primaryText });
   }
 
   function showMedicationReminderPopup(medication: MedicationItem, reminderTime: Date) {
@@ -779,7 +842,7 @@ export default function Medication() {
     } catch {
       setMeds(previous);
       setHistory(previousHistory);
-      Alert.alert('Delete failed', 'Could not update local storage. Please try again.');
+      showNotice('error', 'Delete Failed', 'Could not update local storage. Please try again.');
       setActionBusy(actionKey, false);
       return;
     }
@@ -831,17 +894,20 @@ export default function Medication() {
 
       const fullMsg = status ? `Server ${status}: ${serverMsg}` : serverMsg;
 
-      Alert.alert('Delete failed', fullMsg, [
-        { text: 'Retry', onPress: async () => {
-            // re-apply optimistic delete then retry server call
-            setMeds(newMeds);
-            try { await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(newMeds)); } catch {}
-            const retried = await performServerDelete(id, previous, newMeds, previousHistory);
-            if (retried) setDeleteTarget(null);
-          }
+      setNoticeModal({
+        type: 'error',
+        title: 'Delete Failed',
+        message: fullMsg,
+        primaryText: 'Retry',
+        secondaryText: 'OK',
+        onPrimary: async () => {
+          setNoticeModal(null);
+          setMeds(newMeds);
+          try { await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(newMeds)); } catch {}
+          const retried = await performServerDelete(id, previous, newMeds, previousHistory);
+          if (retried) setDeleteTarget(null);
         },
-        { text: 'OK', style: 'cancel' }
-      ]);
+      });
       console.log('performServerDelete error', err);
       return false;
     }
@@ -880,7 +946,7 @@ export default function Medication() {
 
   function addOrUpdateReminderTime(date: Date) {
     if (!date || Number.isNaN(date.getTime())) {
-      Alert.alert('Validation', 'Please select a valid reminder time.');
+      showNotice('warning', 'Validation', 'Please select a valid reminder time.');
       return false;
     }
 
@@ -889,7 +955,7 @@ export default function Medication() {
     const duplicateIndex = times.findIndex((time, index) => index !== pickerIndex && getTimeKey(time) === nextKey);
 
     if (duplicateIndex >= 0) {
-      Alert.alert('Duplicate time', `${formatReminderTime(date)} is already in your reminder list.`);
+      showNotice('info', 'Duplicate Time', `${formatReminderTime(date)} is already in your reminder list.`);
       return false;
     }
 
@@ -926,7 +992,7 @@ export default function Medication() {
     if (!isCalendarDateSelectable(date)) return;
 
     if (tempActiveDateField === 'end' && parseDateStringLocal(selected).getTime() < parseDateStringLocal(tempStartDate || todayDateString()).getTime()) {
-      Alert.alert('Validation', 'End date cannot be before the start date.');
+      showNotice('warning', 'Validation', 'End date cannot be before the start date.');
       return;
     }
 
@@ -956,7 +1022,7 @@ export default function Medication() {
 
   function commitScheduleSheet() {
     if (!tempStartDate) {
-      Alert.alert('Validation', 'Please select a start date.');
+      showNotice('warning', 'Validation', 'Please select a start date.');
       return;
     }
 
@@ -966,12 +1032,12 @@ export default function Medication() {
     const startChanged = !editing || tempStartDate !== originalStart;
 
     if (startChanged && tempStartTime < todayTime) {
-      Alert.alert('Validation', 'Start date cannot be in the past. Please select today or a future date.');
+      showNotice('warning', 'Validation', 'Start date cannot be in the past. Please select today or a future date.');
       return;
     }
 
     if (tempEndDate && parseDateStringLocal(tempEndDate).getTime() < tempStartTime) {
-      Alert.alert('Validation', 'End date cannot be before the start date.');
+      showNotice('warning', 'Validation', 'End date cannot be before the start date.');
       return;
     }
 
@@ -1054,24 +1120,18 @@ export default function Medication() {
         if (err?.status === 409) {
           notificationManager.showCustomNotification('Already taken', err?.data?.message || 'This scheduled dose has already been logged.', 'toast', 'low');
         } else if (err?.status === 404) {
-          // Medication not found on server
-          Alert.alert('Error', 'This medication no longer exists on the server. Please refresh the page.');
+          showNotice('error', 'Action Failed', 'This medication no longer exists on the server. Please refresh the page.');
         } else if (err?.status === 401 || err?.status === 403) {
-          // Authentication error
-          Alert.alert('Authentication Error', 'Your session may have expired. Please log in again.');
+          showNotice('error', 'Authentication Error', 'Your session may have expired. Please log in again.');
         } else if (err?.status === 408) {
-          // Timeout
-          Alert.alert('Request Timeout', 'The request took too long. Please check your internet connection and try again.');
+          showNotice('warning', 'Request Timeout', 'The request took too long. Please check your internet connection and try again.');
         } else if (err?.status >= 500) {
-          // Server error
-          Alert.alert('Server Error', 'The server encountered an error. Please try again later.');
+          showNotice('error', 'Server Error', 'The server encountered an error. Please try again later.');
         } else if (!err?.status && err?.message === 'Network request failed') {
-          // Network error
-          Alert.alert('Network Error', 'Unable to connect to the server. Please check your internet connection.');
+          showNotice('warning', 'Network Error', 'Unable to connect to the server. Please check your internet connection.');
         } else {
-          // Generic error with details
           const errorMsg = err?.data?.message || err?.message || 'Unknown error occurred';
-          Alert.alert('Error', `Failed to save: ${errorMsg}`);
+          showNotice('error', 'Action Failed', `Failed to save: ${errorMsg}`);
         }
       } finally {
         setActionBusy(actionKey, false);
@@ -1142,9 +1202,14 @@ export default function Medication() {
 
 
   async function clearHistory() {
-    Alert.alert('Clear History', 'This will hide all visible history entries. Medical data will be preserved.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: async () => {
+    setNoticeModal({
+      type: 'destructive',
+      title: 'Clear Recent History?',
+      message: 'This removes recent medication activity records from this view. Your medication schedules will remain.',
+      primaryText: 'Clear',
+      secondaryText: 'Cancel',
+      onPrimary: async () => {
+        setNoticeModal(null);
         const now = Date.now();
         const visibleEntries = getValidHistoryEntries();
         const keysToClear = visibleEntries.flatMap((entry) => [entry.id, getHistoryCompositeKey(entry)]);
@@ -1158,12 +1223,13 @@ export default function Medication() {
           setClearedHistoryKeys(nextClearedKeys);
           setHistory(remainingHistory);
           setHistoryExpanded(false);
+          showNotice('success', 'History Cleared', 'Recent medication activity was cleared successfully.', 'Done');
         } catch (error) {
           console.log('Error saving cleared time:', error);
-          Alert.alert('Error', 'Failed to clear history');
+          showNotice('error', 'Action Failed', 'We could not complete this action. Please try again.');
         }
-      }},
-    ]);
+      },
+    });
   }
 
   // Helper functions for new features
@@ -1402,17 +1468,14 @@ export default function Medication() {
       setExporting(true);
       await api.get(`/medications/export/${format}`, token as string, 20000);
       setExportModalVisible(false);
-      Alert.alert(
-        'Export Ready',
-        `${format.toUpperCase()} export was generated successfully. This mobile build cannot save downloaded files directly yet, so please use the web download option if you need a local file.`
-      );
+      showNotice('success', 'Export Ready', `${format.toUpperCase()} export was generated successfully. This mobile build cannot save downloaded files directly yet, so please use the web download option if you need a local file.`, 'Done');
     } catch (err: any) {
       console.log('Export error:', err);
       if (err?.status === 408) {
-        Alert.alert('Export Timeout', 'The export took too long. Please check your connection and try again.');
+        showNotice('warning', 'Export Timeout', 'The export took too long. Please check your connection and try again.');
       } else {
         const message = err?.data?.message || err?.message || `Failed to export ${format.toUpperCase()} medication history.`;
-        Alert.alert('Export Failed', message);
+        showNotice('error', 'Export Failed', message);
       }
     } finally {
       setExporting(false);
@@ -1440,7 +1503,8 @@ export default function Medication() {
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading medications...</Text>
+          <ActivityIndicator size="large" color="#2563EB" />
+          <Text style={styles.loadingText}>Loading Medication...</Text>
         </View>
       </SafeAreaView>
     );
@@ -1496,6 +1560,13 @@ export default function Medication() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {offlineMode ? (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
+            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+          </View>
+        ) : null}
 
         {/* Stats Dashboard */}
         <View style={styles.statsContainer}>
@@ -2306,6 +2377,18 @@ export default function Medication() {
         </View>
       </Modal>
 
+      <ThemedNoticeModal
+        visible={!!noticeModal}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        primaryText={noticeModal?.primaryText || 'OK'}
+        secondaryText={noticeModal?.secondaryText}
+        onPrimary={noticeModal?.onPrimary || (() => setNoticeModal(null))}
+        onSecondary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
+
       {/* Themed Popup Modal */}
       <Modal
         visible={!!themedPopup}
@@ -2425,10 +2508,28 @@ export default function Medication() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { fontSize: 15, color: '#64748B', fontWeight: '700' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8FAFC' },
+  loadingText: { marginTop: 12, fontSize: 14, color: '#64748B', fontWeight: '700' },
   scrollView: { flex: 1 },
   scrollContent: { paddingBottom: 104 },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 10,
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '800',
+  },
 
   // Header
   headerSection: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 10, backgroundColor: '#F8FAFC', zIndex: 10, borderBottomWidth: 1, borderBottomColor: 'transparent' },

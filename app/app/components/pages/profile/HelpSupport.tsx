@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 
 interface FAQItem {
   id: string;
@@ -12,19 +13,20 @@ interface FAQItem {
 export default function HelpSupport() {
   const insets = useSafeAreaInsets();
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
 
   const showPrivacyPolicy = () => {
-    Alert.alert(
-      'IntakeSync Privacy Policy',
-      'IntakeSync is a self-monitoring app for beverage tracking, hydration goals, and medication reminder support.\n\nIt may store account/profile information and app activity needed for app features. Data is used to support functionality such as reminders, summaries, and preferences.\n\nIntakeSync does not provide medical diagnosis, treatment, or professional medical advice. Users are responsible for reviewing medication instructions from healthcare professionals.'
-    );
+    setNotice({
+      title: 'IntakeSync Privacy Policy',
+      message: 'IntakeSync is a self-monitoring app for beverage tracking, hydration goals, and medication reminder support.\n\nIt may store account/profile information and app activity needed for app features. Data is used to support functionality such as reminders, summaries, and preferences.\n\nIntakeSync does not provide medical diagnosis, treatment, or professional medical advice. Users are responsible for reviewing medication instructions from healthcare professionals.',
+    });
   };
 
   const showTerms = () => {
-    Alert.alert(
-      'IntakeSync Terms of Service',
-      'IntakeSync is for personal organization and self-monitoring. It does not replace professional healthcare advice.\n\nUsers should consult a qualified professional for medical concerns and are responsible for the accuracy of information they enter.\n\nReminder notifications may depend on device permissions and settings and may not always be delivered. Use of the app means accepting these limitations.'
-    );
+    setNotice({
+      title: 'IntakeSync Terms of Service',
+      message: 'IntakeSync is for personal organization and self-monitoring. It does not replace professional healthcare advice.\n\nUsers should consult a qualified professional for medical concerns and are responsible for the accuracy of information they enter.\n\nReminder notifications may depend on device permissions and settings and may not always be delivered. Use of the app means accepting these limitations.',
+    });
   };
 
   const faqItems: FAQItem[] = [
@@ -66,7 +68,7 @@ export default function HelpSupport() {
       title: 'Email Support',
       description: 'support@intakesync.local',
       icon: 'mail-outline',
-      action: () => Alert.alert('Info', 'Email support is not available yet.'),
+      action: () => setNotice({ title: 'Email Support', message: 'Email support is not available yet.' }),
     },
     {
       id: '2',
@@ -135,6 +137,15 @@ export default function HelpSupport() {
           <Text style={styles.buildText}>App Version 1.0.0</Text>
         </View>
       </ScrollView>
+      <ThemedNoticeModal
+        visible={!!notice}
+        type="info"
+        title={notice?.title || ''}
+        message={notice?.message || ''}
+        primaryText="OK"
+        onPrimary={() => setNotice(null)}
+        onClose={() => setNotice(null)}
+      />
     </SafeAreaView>
   );
 }

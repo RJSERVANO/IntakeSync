@@ -1,15 +1,18 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
+import { clearCachedSession, getCachedSession, hasValidCachedSession, updateCachedUser } from '../services/offlineStorage';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
+import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 
 const { width } = Dimensions.get('window');
+const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
 
 interface TimelineItem {
   id: number;
@@ -59,7 +62,7 @@ const resolveHydrationPercentage = (hydrationData: any, goal: number) => {
 
 export default function Home() {
   const insets = useSafeAreaInsets();
-  const { token } = useLocalSearchParams();
+  const { token, offline } = useLocalSearchParams();
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
@@ -81,12 +84,22 @@ export default function Home() {
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
   const [upcomingMedications, setUpcomingMedications] = useState<any[]>([]);
   const [notificationStats, setNotificationStats] = useState<any>(null);
+  const [offlineMode, setOfflineMode] = useState(offline === '1');
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
   const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+    primaryText?: string;
+    secondaryText?: string;
+    onPrimary?: () => void;
+  } | null>(null);
+  const goalCompletionShownRef = useRef(false);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const avatarSource = getAvatarSource(selectedAvatar);
 
@@ -135,10 +148,25 @@ export default function Home() {
   // Detect hydration goal completion and over-hydration
   useEffect(() => {
     const currentPercentage = quickStatus.hydrationPercentage;
+    let cancelled = false;
     
     // Show goal completion modal when crossing 100% threshold
-    if (currentPercentage >= 100 && previousHydrationPercentage < 100) {
-      setShowGoalCompletionModal(true);
+    if (currentPercentage >= 100 && previousHydrationPercentage < 100 && !goalCompletionShownRef.current) {
+      const showOnce = async () => {
+        const today = new Date().toISOString().slice(0, 10);
+        const key = `${HOME_GOAL_COMPLETION_SHOWN_PREFIX}.${today}`;
+        const alreadyShown = await AsyncStorage.getItem(key);
+        if (cancelled || alreadyShown === '1') return;
+        goalCompletionShownRef.current = true;
+        await AsyncStorage.setItem(key, '1');
+        if (!cancelled) setShowGoalCompletionModal(true);
+      };
+      showOnce().catch(() => {
+        if (!cancelled) {
+          goalCompletionShownRef.current = true;
+          setShowGoalCompletionModal(true);
+        }
+      });
     }
     
     // Show over-hydration modal when exceeding 110% (after goal was already completed)
@@ -150,6 +178,10 @@ export default function Home() {
     if (currentPercentage !== previousHydrationPercentage) {
       setPreviousHydrationPercentage(currentPercentage);
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [quickStatus.hydrationPercentage, previousHydrationPercentage]);
 
   useEffect(() => {
@@ -165,6 +197,14 @@ export default function Home() {
       try {
         console.log('Home: token=', token);
         if (!token) {
+          const cached = await getCachedSession();
+          if (hasValidCachedSession(cached)) {
+            setUser(cached.user || { name: 'User', email: '', nickname: 'User' });
+            setOfflineMode(true);
+            clearTimeout(safetyTimeout);
+            setLoading(false);
+            return;
+          }
           clearTimeout(safetyTimeout);
           setLoading(false);
           router.replace({ pathname: '/login' } as any);
@@ -179,20 +219,24 @@ export default function Home() {
           ]) as any;
           console.log('Home: /me response:', me);
           setUser(me);
+          setOfflineMode(false);
+          await updateCachedUser(me, token as string);
           // Set loading to false immediately after getting user data
           clearTimeout(safetyTimeout);
           setLoading(false);
         } catch (meErr: any) {
           console.log('Home: /me error:', meErr);
-          // Set a default user to allow UI to render immediately
-          setUser({ name: 'User', email: '', nickname: 'User' });
-          clearTimeout(safetyTimeout);
-          setLoading(false);
           // If it's an auth error, redirect to login
-          if (meErr?.status === 401) {
+          if (api.isAuthError(meErr)) {
+            await clearCachedSession();
             router.replace({ pathname: '/login' } as any);
             return;
           }
+          const cached = await getCachedSession();
+          setUser(cached?.user || { name: 'User', email: '', nickname: 'User' });
+          setOfflineMode(true);
+          clearTimeout(safetyTimeout);
+          setLoading(false);
           // For other errors, continue to show UI with default data
         }
         
@@ -404,9 +448,9 @@ export default function Home() {
 
   if (loading) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#F8F9FA', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#1E3A8A" />
-        <Text style={{ marginTop: 16, color: '#6B7280', fontSize: 14 }}>Loading...</Text>
+      <SafeAreaView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+        <Text style={styles.loadingText}>Loading Home...</Text>
       </SafeAreaView>
     );
   }
@@ -436,32 +480,30 @@ export default function Home() {
   const handleMenuAction = (item: typeof menuItems[0]) => {
     setMenuVisible(false);
     if ('action' in item && item.action === 'logout') {
-      Alert.alert(
-        'Sign Out',
-        'Are you sure you want to sign out of your account?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Sign Out',
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await api.post('/logout', {}, token as string);
-              } catch (err) {
-                console.log('Logout error:', err);
-              }
-              router.replace({ pathname: '/login' } as any);
-            },
-          },
-        ]
-      );
+      setNoticeModal({
+        type: 'destructive',
+        title: 'Sign Out?',
+        message: 'Are you sure you want to sign out of your account?',
+        primaryText: 'Sign Out',
+        secondaryText: 'Cancel',
+        onPrimary: async () => {
+          setNoticeModal(null);
+          try {
+            await api.post('/logout', {}, token as string);
+          } catch (err) {
+            console.log('Logout error:', err);
+          }
+          await clearCachedSession();
+          router.replace({ pathname: '/login' } as any);
+        },
+      });
       return;
     }
 
     if ('route' in item && item.route) {
       router.push({ pathname: item.route, params: { token } } as any);
     } else {
-      Alert.alert('Coming Soon', `${item.label} will be available soon.`);
+      setNoticeModal({ type: 'info', title: 'Coming Soon', message: `${item.label} will be available soon.` });
     }
   };
 
@@ -633,7 +675,7 @@ export default function Home() {
     <SafeAreaView style={styles.container}>
       <View style={[styles.header, headerElevated && styles.headerElevated, { paddingTop: Math.max(insets.top, 8) }]}>
         <View style={styles.headerBrand}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => setMenuVisible(true)}>
+          <TouchableOpacity style={styles.menuButton} onPress={() => setMenuVisible(true)} activeOpacity={0.82}>
             <Ionicons name="menu" size={22} color="#1E3A8A" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>IntakeSync</Text>
@@ -653,14 +695,21 @@ export default function Home() {
             )}
           </TouchableOpacity>
           
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.profileAvatar}
             onPress={() => router.push({ pathname: '/components/pages/profile/Profile', params: { token } } as any)}
+            activeOpacity={0.82}
           >
             {renderHeaderAvatar()}
           </TouchableOpacity>
         </View>
       </View>
+      {offlineMode ? (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
+          <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+        </View>
+      ) : null}
 
       <ScrollView
         style={styles.scrollView}
@@ -711,42 +760,39 @@ export default function Home() {
                       onPress={() => {
                         setMedicineSearch('');
                         setShowSuggestions(false);
-                        Alert.alert(
-                          medicine.name,
-                          `${medicine.generic_name ? `Generic: ${medicine.generic_name}\n` : ''}${medicine.brand ? `Brand: ${medicine.brand}\n` : ''}Category: ${medicine.category}\n${medicine.description ? `\n${medicine.description}` : ''}${medicine.dosage ? `\n\nRecommended Dosage: ${medicine.dosage}` : ''}`,
-                          [
-                            { text: 'Close', style: 'cancel' },
-                            {
-                              text: 'Add to Medications',
-                              onPress: () => {
-                                // Determine frequency from dosage text
-                                let frequency = 'daily';
-                                const dosageLower = (medicine.dosage || '').toLowerCase();
-                                if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
-                                  frequency = 'twice_daily';
-                                } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
-                                  frequency = 'three_times_daily';
-                                } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
-                                  frequency = 'four_times_daily';
-                                }
-                                
-                                router.push({ 
-                                  pathname: '/components/pages/medication/Medication', 
-                                  params: { 
-                                    token, 
-                                    medicineName: medicine.name, 
-                                    medicineDosage: medicine.dosage || '',
-                                    medicineData: JSON.stringify({
-                                      description: medicine.description,
-                                      category: medicine.category,
-                                      frequency: frequency
-                                    })
-                                  } 
-                                } as any);
-                              }
+                        setNoticeModal({
+                          type: 'info',
+                          title: medicine.name,
+                          message: `${medicine.generic_name ? `Generic: ${medicine.generic_name}\n` : ''}${medicine.brand ? `Brand: ${medicine.brand}\n` : ''}Category: ${medicine.category}\n${medicine.description ? `\n${medicine.description}` : ''}${medicine.dosage ? `\n\nRecommended Dosage: ${medicine.dosage}` : ''}`,
+                          primaryText: 'Add to Medications',
+                          secondaryText: 'Close',
+                          onPrimary: () => {
+                            setNoticeModal(null);
+                            let frequency = 'daily';
+                            const dosageLower = (medicine.dosage || '').toLowerCase();
+                            if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
+                              frequency = 'twice_daily';
+                            } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
+                              frequency = 'three_times_daily';
+                            } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
+                              frequency = 'four_times_daily';
                             }
-                          ]
-                        );
+
+                            router.push({
+                              pathname: '/components/pages/medication/Medication',
+                              params: {
+                                token,
+                                medicineName: medicine.name,
+                                medicineDosage: medicine.dosage || '',
+                                medicineData: JSON.stringify({
+                                  description: medicine.description,
+                                  category: medicine.category,
+                                  frequency,
+                                }),
+                              },
+                            } as any);
+                          },
+                        });
                       }}
                     >
                       <View style={styles.suggestionIcon}>
@@ -1060,6 +1106,18 @@ export default function Home() {
         </TouchableOpacity>
       </Modal>
 
+      <ThemedNoticeModal
+        visible={!!noticeModal}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        primaryText={noticeModal?.primaryText || 'OK'}
+        secondaryText={noticeModal?.secondaryText}
+        onPrimary={noticeModal?.onPrimary || (() => setNoticeModal(null))}
+        onSecondary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
+
       {/* Goal Completion Modal */}
       <Modal
         visible={showGoalCompletionModal}
@@ -1069,21 +1127,39 @@ export default function Home() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.goalModalContent}>
+            <View style={styles.goalModalTopGlow} />
+            <View style={styles.goalModalIconRing}>
+              <View style={styles.goalModalIconInner}>
+                <Ionicons name="checkmark" size={34} color="#FFFFFF" />
+              </View>
+            </View>
             <View style={styles.goalModalHeader}>
-              <Ionicons name="checkmark-circle" size={64} color="#10B981" />
-              <Text style={styles.goalModalTitle}>🎉 Goal Achieved!</Text>
-              <Text style={styles.goalModalSubtitle}>Amazing progress on your beverage intake goal.</Text>
+              <Text style={styles.goalModalEyebrow}>Daily target complete</Text>
+              <Text style={styles.goalModalTitle}>Goal Achieved</Text>
+              <Text style={styles.goalModalSubtitle}>Your beverage pace is right on track.</Text>
             </View>
             
             <View style={styles.goalModalStats}>
               <View style={styles.goalStatBox}>
-                <Text style={styles.goalStatValue}>{quickStatus.hydrationPercentage}%</Text>
-                <Text style={styles.goalStatLabel}>Beverage Intake</Text>
+                <View style={styles.goalStatHeader}>
+                  <View>
+                    <Text style={styles.goalStatLabel}>Beverage Intake</Text>
+                    <Text style={styles.goalStatCaption}>{quickStatus.hydrationTotal} / {quickStatus.hydrationGoal} ml</Text>
+                  </View>
+                  <Text style={styles.goalStatValue}>{Math.max(100, quickStatus.hydrationPercentage)}%</Text>
+                </View>
+                <View style={styles.goalProgressTrack}>
+                  <View style={[styles.goalProgressFill, { width: `${Math.min(100, Math.max(0, quickStatus.hydrationPercentage))}%` }]} />
+                </View>
+                <View style={styles.goalStatFooter}>
+                  <Text style={styles.goalStatFooterText}>{"Synced with today's dashboard"}</Text>
+                  <Ionicons name="sparkles-outline" size={15} color="#2563EB" />
+                </View>
               </View>
             </View>
 
             <Text style={styles.goalModalMessage}>
-              You have reached 100% of your daily beverage intake goal. Keep up the steady routine.
+              {"You reached today's beverage goal. Keep the steady routine going."}
             </Text>
 
             <TouchableOpacity 
@@ -1151,6 +1227,34 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8F9FA',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#DBEAFE',
+    borderBottomWidth: 1,
+    borderBottomColor: '#BFDBFE',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  offlineBannerText: {
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '800',
   },
   scrollView: {
     flex: 1,
@@ -2458,82 +2562,163 @@ const styles = StyleSheet.create({
   },
   // Goal Completion Modal Styles
   goalModalContent: {
-    backgroundColor: 'white',
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
-    padding: 28,
+    padding: 22,
     width: '100%',
     maxWidth: 380,
     alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#DCEBFF',
     shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  goalModalTopGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 112,
+    backgroundColor: '#EFF6FF',
+    borderBottomLeftRadius: 90,
+    borderBottomRightRadius: 90,
+  },
+  goalModalIconRing: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  goalModalIconInner: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2563EB',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 10,
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 6,
   },
   goalModalHeader: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 18,
+  },
+  goalModalEyebrow: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+    marginBottom: 5,
   },
   goalModalTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginTop: 16,
+    fontSize: 26,
+    fontWeight: '900',
+    color: '#0F172A',
     textAlign: 'center',
   },
   goalModalSubtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    marginTop: 8,
+    fontSize: 14,
+    color: '#64748B',
+    marginTop: 6,
     textAlign: 'center',
+    fontWeight: '700',
   },
   goalModalStats: {
     width: '100%',
-    marginBottom: 20,
+    marginBottom: 18,
   },
   goalStatBox: {
-    backgroundColor: '#ECFDF5',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#10B981',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  goalStatHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
   },
   goalStatValue: {
-    fontSize: 48,
-    fontWeight: '700',
-    color: '#10B981',
-    marginBottom: 4,
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#2563EB',
+    lineHeight: 38,
   },
   goalStatLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
+    fontSize: 15,
+    color: '#0F172A',
+    fontWeight: '900',
+  },
+  goalStatCaption: {
+    marginTop: 3,
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  goalProgressTrack: {
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#DBEAFE',
+    overflow: 'hidden',
+  },
+  goalProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#2563EB',
+  },
+  goalStatFooter: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  goalStatFooterText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '800',
   },
   goalModalMessage: {
-    fontSize: 15,
-    color: '#4B5563',
+    fontSize: 14,
+    color: '#475569',
     textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 24,
+    lineHeight: 21,
+    marginBottom: 18,
+    fontWeight: '700',
   },
   goalModalButton: {
-    backgroundColor: '#10B981',
-    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 32,
     width: '100%',
     alignItems: 'center',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
     elevation: 4,
   },
   goalModalButtonText: {
     color: 'white',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '900',
   },
   // Over-Hydration Modal Styles
   overHydrationModalContent: {

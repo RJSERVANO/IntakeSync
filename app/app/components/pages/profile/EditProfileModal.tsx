@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Modal, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, StyleSheet } from 'react-native';
+import { View, Text, Modal, SafeAreaView, ScrollView, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 interface Props {
   visible: boolean;
@@ -18,6 +19,7 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function EditProfileModal({ visible, onClose, token, user, onSaved }: Props) {
   const [editData, setEditData] = useState<any>({ ...(user || {}) });
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -50,21 +52,21 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
   const saveChanges = async () => {
     try {
       if (!editData.name?.trim()) {
-        Alert.alert('Validation Error', 'Full name is required.');
+        setNotice({ type: 'warning', title: 'Validation Error', message: 'Full name is required.' });
         return;
       }
       if (!editData.email?.trim()) {
-        Alert.alert('Validation Error', 'Email is required.');
+        setNotice({ type: 'warning', title: 'Validation Error', message: 'Email is required.' });
         return;
       }
       if (!emailPattern.test(editData.email.trim())) {
-        Alert.alert('Validation Error', 'Enter a valid email address.');
+        setNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid email address.' });
         return;
       }
 
       const weightError = validateWeight();
       if (weightError) {
-        Alert.alert('Validation Error', weightError);
+        setNotice({ type: 'warning', title: 'Validation Error', message: weightError });
         return;
       }
 
@@ -103,18 +105,19 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
       const updated = resp?.user ? { ...(user || {}), ...(resp.user || {}) } : { ...(user || {}), ...payload };
       onSaved(updated);
       onClose();
-      Alert.alert('Success', 'Profile updated successfully.');
+      setNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
     } catch (err: any) {
       console.error('EditProfileModal saveChanges', err);
-      Alert.alert('Error', err.data?.message || err.message || 'Failed to save profile.');
+      setNotice({ type: 'error', title: 'Update Failed', message: err.data?.message || err.message || 'We could not save your changes. Please try again.' });
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalContainer}>
+    <>
+      <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+        <SafeAreaView style={styles.modalContainer}>
         <View style={styles.modalSheet}>
           <View style={styles.handle} />
           <View style={styles.modalHeader}>
@@ -191,8 +194,18 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
             </View>
           </ScrollView>
         </View>
-      </SafeAreaView>
-    </Modal>
+        </SafeAreaView>
+      </Modal>
+      <ThemedNoticeModal
+        visible={!!notice}
+        type={notice?.type || 'info'}
+        title={notice?.title || ''}
+        message={notice?.message || ''}
+        primaryText="OK"
+        onPrimary={() => setNotice(null)}
+        onClose={() => setNotice(null)}
+      />
+    </>
   );
 }
 

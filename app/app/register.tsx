@@ -12,6 +12,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
+import { hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
 import { AuthField, AuthSelectField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authColors, authStyles, authShadows } from '../components/auth/authStyles';
@@ -71,6 +72,12 @@ export default function Register() {
         gender: gender || null,
         address: address || null,
       });
+      if (!hasValidCachedSession({ token: res?.token })) {
+        Alert.alert('Registration Error', 'Registration succeeded but no valid session token was returned. Please sign in.');
+        router.replace({ pathname: '/login' } as any);
+        return;
+      }
+      await saveCachedSession({ token: res.token, user: res.user });
 
       if (!res.onboarding_completed) {
         router.replace({
@@ -82,6 +89,10 @@ export default function Register() {
       }
     } catch (err: any) {
       console.log('register error', err);
+      if (api.isNetworkError(err)) {
+        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        return;
+      }
       const message = err?.data?.message || err?.data || err?.message || 'Registration failed';
       Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
     } finally {
@@ -96,6 +107,12 @@ export default function Register() {
       if (!res) {
         return;
       }
+      if (!hasValidCachedSession({ token: res?.token })) {
+        Alert.alert('Registration Error', 'No valid session token was returned. Please sign in.');
+        router.replace({ pathname: '/login' } as any);
+        return;
+      }
+      await saveCachedSession({ token: res.token, user: res.user });
 
       if (!res.onboarding_completed) {
         router.replace({
@@ -107,6 +124,10 @@ export default function Register() {
       }
     } catch (err: any) {
       console.log('google register error', err);
+      if (api.isNetworkError(err)) {
+        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        return;
+      }
       const message =
         err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
       Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));

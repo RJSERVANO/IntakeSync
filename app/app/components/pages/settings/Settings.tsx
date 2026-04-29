@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
+import { getCachedSession } from '../../../../services/offlineStorage';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 type SettingPrefs = {
   useMetricUnits: boolean;
@@ -24,9 +26,13 @@ const DEFAULT_PREFS: SettingPrefs = {
 
 export default function Settings() {
   const router = useRouter();
-  const { token } = useLocalSearchParams();
+  const { token: routeToken } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const [prefs, setPrefs] = useState<SettingPrefs>(DEFAULT_PREFS);
+  const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
+  const token = (routeToken as string | undefined) || cachedToken;
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -35,6 +41,30 @@ export default function Settings() {
       })
       .catch((err) => console.log('Settings preference load error:', err));
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    if (routeToken) {
+      setOfflineMode(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    getCachedSession().then((session) => {
+      if (!mounted) return;
+      if (session?.token) {
+        setCachedToken(session.token);
+        setOfflineMode(true);
+      } else {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [routeToken, router]);
 
   const updatePref = async (key: keyof SettingPrefs, value: boolean) => {
     const previous = prefs;
@@ -45,15 +75,16 @@ export default function Settings() {
     } catch (error) {
       console.log('Settings preference save error:', error);
       setPrefs(previous);
-      Alert.alert('Could Not Save', 'This setting was not saved. Please try again.');
+      setNotice({ type: 'error', title: 'Could Not Save', message: 'This setting was not saved. Please try again.' });
     }
   };
 
   const showAbout = () => {
-    Alert.alert(
-      'IntakeSync',
-      'Version 1.0.0\nBuild 2024.12.10\n\nBeverage tracking and medication adherence support.'
-    );
+    setNotice({
+      type: 'info',
+      title: 'IntakeSync',
+      message: 'Version 1.0.0\nBuild 2024.12.10\n\nBeverage tracking and medication adherence support.',
+    });
   };
 
   return (
@@ -66,6 +97,13 @@ export default function Settings() {
       </View>
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {offlineMode ? (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
+            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+          </View>
+        ) : null}
+
         <View style={styles.identityCard}>
           <View style={styles.logoFrame}>
             <Image source={require('../../../../assets/images/mainlogo.png')} style={styles.appLogo} resizeMode="contain" />
@@ -86,7 +124,7 @@ export default function Settings() {
           <DisabledRow
             icon="cloud-offline-outline"
             title="Offline Mode"
-            subtitle="Not available yet."
+            subtitle={token ? 'Available with cached session data.' : 'Internet is required for first-time login.'}
           />
         </SettingGroup>
 
@@ -164,6 +202,16 @@ export default function Settings() {
           />
         </SettingGroup>
       </ScrollView>
+
+      <ThemedNoticeModal
+        visible={!!notice}
+        type={notice?.type || 'info'}
+        title={notice?.title || ''}
+        message={notice?.message || ''}
+        primaryText="OK"
+        onPrimary={() => setNotice(null)}
+        onClose={() => setNotice(null)}
+      />
 
       <BottomNavigation currentRoute="settings" />
     </SafeAreaView>
@@ -278,6 +326,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 128,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 12,
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '800',
   },
   identityCard: {
     backgroundColor: '#FFFFFF',

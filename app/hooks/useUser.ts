@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../app/api';
+import { getCachedSession, updateCachedUser } from '../services/offlineStorage';
 
 interface NormalizedUser {
   [key: string]: any;
@@ -13,8 +14,14 @@ export default function useUser(token?: string) {
     setLoading(true);
     try {
       if (!token) {
-        setUser(null);
+        const cached = await getCachedSession();
+        setUser(cached?.user ?? null);
         return;
+      }
+      const cached = await getCachedSession();
+      if (cached?.user) {
+        setUser(cached.user);
+        setLoading(false);
       }
       const data: any = await api.get('/me', token as string);
       // Return the raw data but also add normalized/camelCase aliases
@@ -25,9 +32,15 @@ export default function useUser(token?: string) {
         emergencyContact: data.emergency_contact || data.emergencyContact || undefined,
       };
       setUser(merged);
+      await updateCachedUser(merged, token);
     } catch (err) {
       console.warn('useUser: failed to load user', err);
-      setUser(null);
+      if (api.isAuthError(err)) {
+        setUser(null);
+        return;
+      }
+      const cached = await getCachedSession();
+      setUser(cached?.user ?? null);
     } finally {
       setLoading(false);
     }

@@ -14,6 +14,12 @@ import type * as ExpoNotifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { notificationSettings } from './notificationSettings';
+
+export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
+export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
+const HYDRATION_SOUND = 'hydration_reminder.wav';
+const MEDICATION_SOUND = 'medication_reminder.wav';
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
@@ -80,6 +86,64 @@ export interface NotificationData {
 class NotificationService {
   public scheduledNotifications: Map<string, string> = new Map();
 
+  async ensureAndroidChannels(): Promise<void> {
+    const Notifications = getNotifications();
+    if (!Notifications || Platform.OS !== 'android') {
+      return;
+    }
+
+    try {
+      await Notifications.setNotificationChannelAsync(HYDRATION_CHANNEL_ID, {
+        name: 'Hydration Reminders',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: HYDRATION_SOUND,
+        vibrationPattern: [0, 250, 250, 250],
+        enableVibrate: true,
+      });
+
+      await Notifications.setNotificationChannelAsync(MEDICATION_CHANNEL_ID, {
+        name: 'Medication Reminders',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: MEDICATION_SOUND,
+        vibrationPattern: [0, 250, 250, 250],
+        enableVibrate: true,
+      });
+    } catch (channelError) {
+      console.log('Error setting notification channels (non-critical):', channelError);
+    }
+  }
+
+  private async getSoundForType(type?: NotificationData['type']): Promise<string | false> {
+    try {
+      await notificationSettings.initialize();
+      const settings = notificationSettings.getSettings();
+      const categoryEnabled =
+        type === 'hydration'
+          ? settings.categories.hydration
+          : type === 'medication'
+            ? settings.categories.medications
+            : true;
+
+      if (!settings.masterToggle || !settings.soundEnabled || !categoryEnabled) {
+        return false;
+      }
+
+      if (type === 'hydration') return HYDRATION_SOUND;
+      if (type === 'medication') return MEDICATION_SOUND;
+      return false;
+    } catch {
+      if (type === 'hydration') return HYDRATION_SOUND;
+      if (type === 'medication') return MEDICATION_SOUND;
+      return false;
+    }
+  }
+
+  private getChannelIdForType(type?: NotificationData['type']): string | undefined {
+    if (type === 'hydration') return HYDRATION_CHANNEL_ID;
+    if (type === 'medication') return MEDICATION_CHANNEL_ID;
+    return undefined;
+  }
+
   /**
    * Request notification permissions (local notifications only in Expo Go)
    */
@@ -113,23 +177,7 @@ class NotificationService {
         return false;
       }
 
-      // Configure Android channel (works for local notifications)
-      if (Platform.OS === 'android') {
-        try {
-          await Notifications.setNotificationChannelAsync('default', {
-            name: 'Health Reminders',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#1E3A8A',
-            sound: 'default',
-            enableVibrate: true,
-            showBadge: !isExpoGo,
-          });
-        } catch (channelError) {
-          console.log('Error setting notification channel (non-critical):', channelError);
-          // Continue even if channel setup fails
-        }
-      }
+      await this.ensureAndroidChannels();
 
       return true;
     } catch (error) {
@@ -153,16 +201,20 @@ class NotificationService {
         return null;
       }
 
+      const channelId = this.getChannelIdForType(data?.type);
+      const sound = await this.getSoundForType(data?.type);
+      const triggerInput = trigger instanceof Date
+        ? { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger, channelId }
+        : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: trigger, channelId };
+
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title,
           body,
-          sound: true,
+          sound,
           data: data || {},
         },
-        trigger: trigger instanceof Date 
-          ? { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger }
-          : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: trigger },
+        trigger: triggerInput as any,
       });
 
       return notificationId;
@@ -188,11 +240,14 @@ class NotificationService {
         return null;
       }
 
+      const channelId = this.getChannelIdForType(data?.type);
+      const sound = await this.getSoundForType(data?.type);
+
       const notificationId = await Notifications.scheduleNotificationAsync({
         content: {
           title,
           body,
-          sound: true,
+          sound,
           data: data || {},
         },
         trigger: {
@@ -200,7 +255,8 @@ class NotificationService {
           hour,
           minute,
           repeats: true,
-        },
+          channelId,
+        } as any,
       });
 
       return notificationId;
@@ -312,7 +368,7 @@ class NotificationService {
 
       // Schedule new notification
       const snoozeTime = new Date(Date.now() + minutes * 60 * 1000);
-      const newNotificationId = await this.scheduleNotification(
+      await this.scheduleNotification(
         'Reminder Snoozed',
         'Your reminder has been snoozed',
         snoozeTime,

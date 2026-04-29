@@ -1,4 +1,62 @@
-const BASE_URL = 'https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api'; 
+const BASE_URL = 'http://192.168.254.101:8000/api';
+
+export type ApiErrorType = 'auth' | 'network' | 'timeout' | 'validation' | 'server' | 'unknown';
+
+export interface ApiError {
+  status?: number;
+  data?: any;
+  type: ApiErrorType;
+  message: string;
+  isNetworkError?: boolean;
+  isAuthError?: boolean;
+  isValidationError?: boolean;
+}
+
+function makeApiError(status: number | undefined, data: any, fallbackMessage: string): ApiError {
+  const message = data?.message || data || fallbackMessage;
+  const type: ApiErrorType =
+    status === 401 ? 'auth' :
+    status === 422 ? 'validation' :
+    status && status >= 500 ? 'server' :
+    status ? 'unknown' :
+    'network';
+
+  return {
+    status,
+    data,
+    type,
+    message: typeof message === 'string' ? message : JSON.stringify(message),
+    isNetworkError: type === 'network',
+    isAuthError: type === 'auth',
+    isValidationError: type === 'validation',
+  };
+}
+
+function normalizeFetchError(error: any): ApiError {
+  if (error?.type) {
+    return error;
+  }
+  if (error?.name === 'AbortError') {
+    return {
+      status: 408,
+      data: { message: 'Request timeout' },
+      type: 'timeout',
+      message: 'Request timeout',
+      isNetworkError: true,
+      isAuthError: false,
+      isValidationError: false,
+    };
+  }
+  return {
+    status: 0,
+    data: { message: error?.message || 'Backend unavailable' },
+    type: 'network',
+    message: error?.message || 'Backend unavailable',
+    isNetworkError: true,
+    isAuthError: false,
+    isValidationError: false,
+  };
+}
 
 async function parseResponse(res: Response) {
 
@@ -21,17 +79,26 @@ function joinPath(path: string) {
   return `${BASE_URL}/${path}`;
 }
 
-export async function post(path: string, body: any, token?: string) {
+export async function post(path: string, body: any, token?: string, timeout: number = 10000) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(joinPath(path), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  const data = await parseResponse(res);
-  if (!res.ok) throw { status: res.status, data };
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(joinPath(path), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const data = await parseResponse(res);
+    if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
+    return data;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    throw normalizeFetchError(error);
+  }
 }
 
 export async function get(path: string, token?: string, timeout: number = 10000) {
@@ -49,37 +116,59 @@ export async function get(path: string, token?: string, timeout: number = 10000)
     });
     clearTimeout(timeoutId);
     const data = await parseResponse(res);
-    if (!res.ok) throw { status: res.status, data };
+    if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw { status: 408, data: { message: 'Request timeout' } };
-    }
-    throw error;
+    throw normalizeFetchError(error);
   }
 }
 
-export async function put(path: string, body: any, token?: string) {
+export async function put(path: string, body: any, token?: string, timeout: number = 10000) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(joinPath(path), {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify(body),
-  });
-  const data = await parseResponse(res);
-  if (!res.ok) throw { status: res.status, data };
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(joinPath(path), {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const data = await parseResponse(res);
+    if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
+    return data;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    throw normalizeFetchError(error);
+  }
 }
 
-export async function del(path: string, token?: string) {
+export async function del(path: string, token?: string, timeout: number = 10000) {
   const headers: any = { Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(joinPath(path), { method: 'DELETE', headers });
-  const data = await parseResponse(res);
-  if (!res.ok) throw { status: res.status, data };
-  return data;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(joinPath(path), { method: 'DELETE', headers, signal: controller.signal });
+    clearTimeout(timeoutId);
+    const data = await parseResponse(res);
+    if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
+    return data;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    throw normalizeFetchError(error);
+  }
 }
 
-export default { post, get, put, del };
+export function isNetworkError(error: any) {
+  return error?.isNetworkError || error?.type === 'network' || error?.type === 'timeout' || error?.status === 0 || error?.status === 408;
+}
+
+export function isAuthError(error: any) {
+  return error?.isAuthError || error?.type === 'auth' || error?.status === 401;
+}
+
+export default { post, get, put, del, isNetworkError, isAuthError };

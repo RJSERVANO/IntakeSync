@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCachedSession, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
+import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
 import { notificationManager } from '../../../../services/notificationManager';
@@ -32,6 +34,27 @@ type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 
 const QUICK_WATER_AMOUNTS = [250, 500, 750, 1000];
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
+const HYDRATION_GOAL_REACHED_SHOWN_PREFIX = 'intakesync.hydration.goalReachedShown';
+
+function createLocalId() {
+  return `bev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function entryKey(entry: any) {
+  return String(entry?.id ?? entry?.local_id ?? `${entry?.timestamp ?? ''}:${entry?.amount_ml ?? ''}:${entry?.source ?? ''}:${entry?.drink_label ?? ''}`);
+}
+
+function mergeEntries(primary: any[], secondary: any[]) {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+  [...primary, ...secondary].forEach((entry) => {
+    const key = entryKey(entry);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(entry);
+  });
+  return merged.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+}
 
 const DRINK_OPTIONS: {
   value: string;
@@ -154,8 +177,10 @@ function calculateDailyGoal(user: UserDetails | null): number {
  */
 
 export default function Hydration() {
-  const { token } = useLocalSearchParams();
+  const { token: routeToken } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
+  const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const token = (routeToken as string | undefined) || cachedToken;
   const [goal, setGoal] = useState<number>(2000);
   const [idealGoal, setIdealGoal] = useState<number | null>(null);
   const [entries, setEntries] = useState<any[]>([]);
@@ -177,6 +202,8 @@ export default function Hydration() {
   const [behindAlert, setBehindAlert] = useState<string | null>(null);
   const [showBehindAlert, setShowBehindAlert] = useState(false);
   const [customGoalInput, setCustomGoalInput] = useState('');
+  const [showGoalEditorModal, setShowGoalEditorModal] = useState(false);
+  const [goalUpdateResult, setGoalUpdateResult] = useState<{ goal: number; synced: boolean } | null>(null);
   const [selectedDrink, setSelectedDrink] = useState('water');
   const [beverageType, setBeverageType] = useState<BeverageType>('water');
   const [sugarLevel, setSugarLevel] = useState<BeverageLevel>('none');
@@ -189,6 +216,8 @@ export default function Hydration() {
   const [calendarExpanded, setCalendarExpanded] = useState(false);
   const [quickWaterFeedback, setQuickWaterFeedback] = useState<number | null>(null);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [offlineMode, setOfflineMode] = useState(false);
 
   const anim = useRef(new Animated.Value(0)).current;
   const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
@@ -204,6 +233,13 @@ export default function Hydration() {
   const fmt = (n:number) => {
     try { return n.toLocaleString(); } catch { return String(n); }
   };
+
+  useEffect(() => {
+    if (routeToken) return;
+    getCachedSession()
+      .then((session) => setCachedToken(session?.token))
+      .catch(() => {});
+  }, [routeToken]);
 
   // Hydration reminder timer ID
   const [reminderTimerId, setReminderTimerId] = useState<string | null>(null);
@@ -244,7 +280,7 @@ export default function Hydration() {
 
         // If it's a hydration notification and water was logged, show the goal reached modal
         if (data?.type === 'hydration' && totalToday() >= goal) {
-          setShowGoalReachedModal(true);
+          void showGoalReachedOnce();
         }
       });
     } catch {
@@ -281,8 +317,7 @@ export default function Hydration() {
   useEffect(() => {
     async function checkInitialGoal() {
       try {
-        const local = await AsyncStorage.getItem('hydration');
-        // If no local data exists, show initial goal modal
+        const local = await readHydrationCache<any>();
         if (!local && !loading) {
           setShowInitialGoalModal(true);
         }
@@ -351,6 +386,25 @@ export default function Hydration() {
     setTimeout(() => setInlineNotice(null), 2400);
   }
 
+  async function showGoalReachedOnce() {
+    if (goalReachedShownRef.current) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const shownKey = `${HYDRATION_GOAL_REACHED_SHOWN_PREFIX}.${today}`;
+    const alreadyShown = await AsyncStorage.getItem(shownKey);
+    if (alreadyShown === '1') {
+      goalReachedShownRef.current = true;
+      setGoalReachedToday(true);
+      return;
+    }
+    goalReachedShownRef.current = true;
+    setGoalReachedToday(true);
+    await AsyncStorage.setItem(shownKey, '1');
+    triggerCelebration();
+    setShowGoalReachedModal(true);
+    showInlineNotice('Hydration goal reached');
+    notificationManager.showGoalCompletionAlert('hydration', goal);
+  }
+
   function quickAddWater(amount: number) {
     setQuickWaterFeedback(amount);
     void addAmount(amount, 'quick');
@@ -359,22 +413,29 @@ export default function Hydration() {
 
   useEffect(() => {
     async function load() {
+      let usedCache = false;
+      let cachedEntries: any[] = [];
       try {
-        // first, try local storage
-        const local = await AsyncStorage.getItem('hydration');
-        if (local) {
-          const parsed = JSON.parse(local);
+        const local = await readHydrationCache<any>();
+        if (local && (Array.isArray(local.entries) || local.goal)) {
+          const parsed = local;
           setGoal(parsed.goal ?? 2000);
-          // Filter out any deleted entries
           const filteredEntries = (parsed.entries ?? []).filter((e: any) => 
             !deletedTimestamps.has(e.timestamp)
           );
+          cachedEntries = filteredEntries;
           setEntries(filteredEntries);
+          setUserProfile(parsed.user_profile ?? null);
+          setMissedCount((parsed.missed || []).length || 0);
+          setLoading(false);
+          usedCache = true;
         }
-        // then try server
+        await syncPendingBeverages(false);
         if (token) {
-          const res = await api.get('/hydration', token as string);
+          if (usedCache) setSyncing(true);
+          const res = await api.get('/hydration', token as string, usedCache ? 5000 : 10000);
           if (res) {
+            setOfflineMode(false);
             setUserProfile(res.user_profile); // Store user profile for calculations
             
             const profileGoal = calculateDailyGoal(res.user_profile);
@@ -384,21 +445,22 @@ export default function Hydration() {
             setIdealGoal(profileGoal);
             
             // Filter out deleted entries from server response
+            const pendingEntries = cachedEntries.filter((e: any) => e.sync_status === 'pending' || e.sync_status === 'failed');
             const serverEntries = (res.entries ?? []).filter((e: any) => 
               !deletedTimestamps.has(e.timestamp)
             );
-            setEntries(serverEntries);
+            const finalEntries = mergeEntries(serverEntries, pendingEntries);
+            setEntries(finalEntries);
             setMissedCount((res.missed || []).length || 0);
             
-            // Save filtered entries to AsyncStorage
-            await AsyncStorage.setItem('hydration', JSON.stringify({ 
+            await writeHydrationCache({ 
               ...res, 
               goal: finalGoal,
-              entries: serverEntries 
-            }));
+              entries: finalEntries 
+            });
             
             // FIX #1: Check if goal was already reached today (prevent modal flashing on re-render)
-            const todayTotal = serverEntries.filter((e: any) => {
+            const todayTotal = finalEntries.filter((e: any) => {
               const entryDate = new Date(e.timestamp).toDateString();
               const today = new Date().toDateString();
               return entryDate === today;
@@ -418,12 +480,47 @@ export default function Hydration() {
         }
       } catch (err:any) {
         console.log('Hydration load error', err);
+        if (api.isNetworkError(err)) {
+          setOfflineMode(true);
+          showInlineNotice('Offline mode - changes will sync when connected.');
+        }
       } finally {
         setLoading(false);
+        setSyncing(false);
       }
     }
     load();
   }, [token, deletedTimestamps]);
+
+  async function syncPendingBeverages(showResult = true) {
+    if (!token) return;
+    setSyncing(true);
+    try {
+      const result = await processBeverageQueue(token as string, async (localId, response) => {
+        setEntries((current) => {
+          const next = current.map((entry) => {
+            if (entry.local_id !== localId) return entry;
+            return {
+              ...entry,
+              id: response?.id ?? response?.entry?.id ?? entry.id,
+              sync_status: 'synced',
+            };
+          });
+          void persistLocal({ goal, entries: next });
+          return next;
+        });
+      });
+      if (result.synced > 0) {
+        setOfflineMode(false);
+        if (showResult) showInlineNotice('Changes synced');
+      }
+    } catch {
+      setOfflineMode(true);
+      if (showResult) showInlineNotice('Still offline. Changes are saved on this device.');
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   useEffect(() => {
     async function loadHistory() {
@@ -467,7 +564,7 @@ export default function Hydration() {
 
   async function persistLocal(data?: any) {
     const payload = data ?? { goal, entries };
-  try { await AsyncStorage.setItem('hydration', JSON.stringify(payload)); } catch { }
+    try { await writeHydrationCache(payload); } catch { }
   }
 
   async function addAmount(
@@ -482,7 +579,9 @@ export default function Hydration() {
     },
   ) {
     const selectedBeverage = metadata?.beverage_type || 'water';
+    const localId = createLocalId();
     const entry = {
+      local_id: localId,
       amount_ml: amountMl,
       timestamp: new Date().toISOString(),
       source,
@@ -491,6 +590,7 @@ export default function Hydration() {
       caffeine_level: selectedBeverage === 'water' ? 'none' : metadata?.caffeine_level || 'none',
       notes: metadata?.notes?.trim() || null,
       drink_label: metadata?.drink_label?.trim() || undefined,
+      sync_status: 'pending',
     };
     const newEntries = [...entries, entry];
     const oldTotal = totalToday();
@@ -505,14 +605,8 @@ export default function Hydration() {
     // FIX: Check if goal reached (only show modal once per session)
     // Uses ref to prevent repeated modals when user adds more water after crossing 100% threshold
     const justReachedGoal = newTotal >= goal && oldTotal < goal;
-    if (justReachedGoal && !goalReachedShownRef.current) {
-      triggerCelebration();
-      showInlineNotice('Hydration goal reached');
-      goalReachedShownRef.current = true; // Mark as shown this session
-      setGoalReachedToday(true); // Also mark for backend tracking
-      
-      // Show goal completion notification
-      notificationManager.showGoalCompletionAlert('hydration', goal);
+    if (justReachedGoal) {
+      await showGoalReachedOnce();
     }
     
     // Check for overhydration (>150% of goal) - only show modal once per session
@@ -538,10 +632,25 @@ export default function Hydration() {
       }
     }
     
-    // optimistic server sync
+    const queuePayload: BeverageLogPayload = {
+      local_id: localId,
+      amount_ml: amountMl,
+      source,
+      beverage_type: entry.beverage_type,
+      sugar_level: entry.sugar_level,
+      caffeine_level: entry.caffeine_level,
+      notes: entry.notes,
+      drink_label: entry.drink_label ?? null,
+      timestamp: entry.timestamp,
+    };
+    await enqueueBeverageLog(queuePayload);
+
     if (token) {
       try {
-        await api.post('/hydration', {
+        setSyncing(true);
+        const response = await api.post('/hydration', {
+          local_id: localId,
+          client_uuid: localId,
           amount_ml: amountMl,
           source,
           beverage_type: entry.beverage_type,
@@ -549,10 +658,28 @@ export default function Hydration() {
           caffeine_level: entry.caffeine_level,
           notes: entry.notes,
           drink_label: entry.drink_label ?? null,
+          timestamp: entry.timestamp,
         }, token as string);
+        await markBeverageLogSynced(localId);
+        const syncedEntries = newEntries.map((item) => item.local_id === localId ? {
+          ...item,
+          id: response?.id ?? response?.entry?.id ?? item.id,
+          sync_status: 'synced',
+        } : item);
+        setEntries(syncedEntries);
+        await persistLocal({ goal, entries: syncedEntries });
+        await syncPendingBeverages(false);
+        setOfflineMode(false);
       } catch (err:any) {
         console.log('Hydration sync error', err);
+        setOfflineMode(api.isNetworkError(err));
+        showInlineNotice(api.isNetworkError(err) ? 'Offline mode - changes will sync when connected.' : 'Saved locally. Sync pending.');
+      } finally {
+        setSyncing(false);
       }
+    } else {
+      setOfflineMode(true);
+      showInlineNotice('Offline mode - changes will sync when connected.');
     }
   }
 
@@ -578,58 +705,54 @@ export default function Hydration() {
     });
   }
 
-  async function changeGoal() {
-    const message = idealGoal && idealGoal !== goal 
-      ? `Set your daily water intake goal in milliliters\n\nBased on your profile, your ideal hydration goal is ${idealGoal} ml.\n\nCurrent goal: ${goal} ml`
-      : 'Set your daily water intake goal in milliliters\n\nRecommended: 2000-3000ml for adults';
-    
-    const buttons: any[] = [
-      { text: 'Cancel', style: 'cancel' as const },
-      { text: 'Quick Set', onPress: () => {
-        Alert.alert('Quick Goal Set', 'Choose a preset goal', [
-          { text: '1500ml', onPress: () => updateGoal(1500) },
-          { text: '2000ml', onPress: () => updateGoal(2000) },
-          { text: '2500ml', onPress: () => updateGoal(2500) },
-          { text: '3000ml', onPress: () => updateGoal(3000) },
-          { text: 'Cancel', style: 'cancel' }
-        ]);
-      }},
-      { text: 'Custom', onPress: async (text:any) => {
-        const v = parseInt(text || '0', 10);
-        if (!v || v <= 0) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
-        if (v < 1000 || v > 5000) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
-        await updateGoal(v);
-      }}
-    ];
-    
-    if (idealGoal && idealGoal !== goal) {
-      buttons.splice(1, 0, {
-        text: `Use Ideal (${idealGoal}ml)`, 
-        onPress: () => updateGoal(idealGoal)
-      });
+  function changeGoal() {
+    setCustomGoalInput('');
+    setShowGoalEditorModal(true);
+  }
+
+  async function applyGoalAndClose(newGoal: number) {
+    await updateGoal(newGoal);
+    setShowGoalEditorModal(false);
+    setCustomGoalInput('');
+  }
+
+  async function applyCustomGoal() {
+    const val = parseInt(customGoalInput || '0', 10);
+    if (!customGoalInput.trim() || !Number.isFinite(val)) {
+      Alert.alert('Invalid Input', 'Please enter a hydration goal in milliliters.');
+      return;
     }
-    
-    Alert.prompt(
-      'Daily Hydration Goal', 
-      message,
-      buttons, 
-      'plain-text', 
-      String(goal)
-    );
+    if (val < 1000 || val > 5000) {
+      Alert.alert('Invalid Range', 'Goal must be between 1000 and 5000 ml.');
+      return;
+    }
+    await applyGoalAndClose(val);
   }
 
   async function updateGoal(newGoal: number) {
     setGoal(newGoal);
+    await updateCachedHydrationGoal(newGoal, token as string | undefined);
     await persistLocal({ goal: newGoal, entries });
     
     if (token) {
       try { 
         await api.post('/hydration/goal', { goal_ml: newGoal }, token as string);
-        Alert.alert('Success', `Daily goal updated to ${newGoal}ml`);
+        setOfflineMode(false);
+        setGoalUpdateResult({ goal: newGoal, synced: true });
       } catch (e) { 
         console.log('Goal update error:', e);
-        Alert.alert('Error', 'Failed to update goal on server');
+        if (api.isNetworkError(e)) {
+          setOfflineMode(true);
+          showInlineNotice('Goal saved locally. Server sync can retry when connected.');
+          setGoalUpdateResult({ goal: newGoal, synced: false });
+          return;
+        }
+        setGoalUpdateResult({ goal: newGoal, synced: false });
+        showInlineNotice('Goal saved locally, but server sync failed.');
       }
+    } else {
+      showInlineNotice('Goal saved locally.');
+      setGoalUpdateResult({ goal: newGoal, synced: false });
     }
   }
 
@@ -668,10 +791,10 @@ export default function Hydration() {
             
             // Persist to AsyncStorage to prevent restoration on refresh
             try {
-              await AsyncStorage.setItem('hydration', JSON.stringify({ 
+              await writeHydrationCache({ 
                 goal, 
                 entries: newEntries 
-              }));
+              });
               console.log('Entry deleted from AsyncStorage');
             } catch (storageErr) {
               console.error('AsyncStorage delete error:', storageErr);
@@ -695,10 +818,10 @@ export default function Hydration() {
                   );
                   setEntries(filteredEntries);
                   // Update AsyncStorage with server data
-                  await AsyncStorage.setItem('hydration', JSON.stringify({
+                  await writeHydrationCache({
                     goal,
                     entries: filteredEntries
-                  }));
+                  });
                 }
               } catch (err: any) {
                 console.error('Server delete sync error:', err);
@@ -873,7 +996,14 @@ export default function Hydration() {
     return '#EF4444'; // Red
   }
 
-  if (loading) return <SafeAreaView style={{flex:1,justifyContent:'center'}}><Text>Loading...</Text></SafeAreaView>;
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2563EB" />
+        <Text style={styles.loadingText}>Loading Beverage...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -883,13 +1013,13 @@ export default function Hydration() {
           <Text style={styles.headerSubtitle}>{fmt(totalToday())} / {fmt(goal)} ml today</Text>
         </View>
         <TouchableOpacity
-          onPress={changeGoal}
+          onPress={() => setShowGoalEditorModal(true)}
           style={styles.headerIconButton}
           activeOpacity={0.8}
           accessibilityLabel="Change hydration goal"
           accessibilityRole="button"
         >
-          <Ionicons name="flag-outline" size={20} color="#1E3A8A" />
+          <Ionicons name="speedometer-outline" size={20} color="#1E3A8A" />
         </TouchableOpacity>
       </View>
 
@@ -899,6 +1029,14 @@ export default function Hydration() {
           <Text style={styles.inlineNoticeText}>{inlineNotice}</Text>
         </View>
       )}
+      {(offlineMode || syncing) && !inlineNotice ? (
+        <View pointerEvents="none" style={[styles.syncNotice, { top: Math.max(insets.top, 8) + 54 }]}>
+          <Ionicons name={offlineMode ? 'cloud-offline-outline' : 'sync-outline'} size={15} color="#1E3A8A" />
+          <Text style={styles.syncNoticeText}>
+            {offlineMode ? 'Offline mode - changes will sync when connected.' : 'Syncing...'}
+          </Text>
+        </View>
+      ) : null}
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 160, paddingTop: 12 }]}
@@ -1228,7 +1366,10 @@ export default function Hydration() {
                   <View style={styles.historyRowContent}>
                     <View style={styles.historyRowLeft}>
                       <Text style={styles.historyText} numberOfLines={2}>{formatLogTitle(e)}</Text>
-                      <Text style={styles.historyMeta}>{new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                      <Text style={styles.historyMeta}>
+                        {new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {e.sync_status === 'pending' || e.sync_status === 'failed' ? ' - Pending sync' : ''}
+                      </Text>
                     </View>
                     <View style={styles.historyRight}>
                       <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
@@ -1255,6 +1396,147 @@ export default function Hydration() {
       </ScrollView>
 
       <BottomNavigation currentRoute="hydration" />
+
+      <Modal
+        visible={showGoalEditorModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowGoalEditorModal(false);
+          setCustomGoalInput('');
+        }}
+      >
+        <View style={styles.goalSheetOverlay}>
+          <TouchableOpacity
+            style={styles.goalSheetBackdrop}
+            activeOpacity={1}
+            onPress={() => {
+              setShowGoalEditorModal(false);
+              setCustomGoalInput('');
+            }}
+          />
+          <View style={[styles.goalSheet, { paddingBottom: Math.max(insets.bottom + 18, 28) }]}>
+            <View style={styles.goalSheetHandle} />
+            <View style={styles.goalSheetHeader}>
+              <View style={styles.goalSheetTitleWrap}>
+                <Text style={styles.goalSheetTitle}>Hydration Goal</Text>
+                <Text style={styles.goalSheetSubtitle}>Adjust your daily beverage intake target.</Text>
+              </View>
+              <View style={styles.goalCurrentPill}>
+                <Text style={styles.goalCurrentLabel}>Current</Text>
+                <Text style={styles.goalCurrentValue}>{fmt(goal)} ml</Text>
+              </View>
+            </View>
+
+            {idealGoal ? (
+              <TouchableOpacity
+                style={styles.goalRecommendedCard}
+                activeOpacity={0.84}
+                onPress={() => applyGoalAndClose(idealGoal)}
+              >
+                <View style={styles.goalRecommendedIcon}>
+                  <Ionicons name="sparkles-outline" size={18} color="#2563EB" />
+                </View>
+                <View style={styles.goalRecommendedTextWrap}>
+                  <Text style={styles.goalRecommendedLabel}>{fmt(idealGoal)} ml recommended</Text>
+                  <Text style={styles.goalRecommendedText}>Based on your profile details</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#2563EB" />
+              </TouchableOpacity>
+            ) : null}
+
+            <Text style={styles.goalSheetSectionTitle}>Quick goals</Text>
+            <View style={styles.goalPresetGrid}>
+              {[1500, 2000, 2500, 3000].map((preset) => {
+                const selected = goal === preset;
+                return (
+                  <TouchableOpacity
+                    key={preset}
+                    style={[styles.goalPresetChip, selected && styles.goalPresetChipActive]}
+                    activeOpacity={0.84}
+                    onPress={() => applyGoalAndClose(preset)}
+                  >
+                    <Text style={[styles.goalPresetText, selected && styles.goalPresetTextActive]}>
+                      {fmt(preset)} ml
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.goalSheetSectionTitle}>Custom goal</Text>
+            <View style={styles.goalCustomRow}>
+              <TextInput
+                value={customGoalInput}
+                onChangeText={setCustomGoalInput}
+                keyboardType="numeric"
+                placeholder="1000 - 5000 ml"
+                placeholderTextColor="#94A3B8"
+                style={styles.goalCustomInput}
+              />
+              <TouchableOpacity style={styles.goalApplyButton} activeOpacity={0.84} onPress={applyCustomGoal}>
+                <Text style={styles.goalApplyButtonText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.goalSheetHint}>Enter a number between 1000 and 5000 ml.</Text>
+
+            <TouchableOpacity
+              style={styles.goalCancelButton}
+              activeOpacity={0.84}
+              onPress={() => {
+                setShowGoalEditorModal(false);
+                setCustomGoalInput('');
+              }}
+            >
+              <Text style={styles.goalCancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={goalUpdateResult !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setGoalUpdateResult(null)}
+      >
+        <View style={styles.goalSuccessOverlay}>
+          <View style={styles.goalSuccessCard}>
+            <View style={styles.goalSuccessGlow} />
+            <View style={styles.goalSuccessIconRing}>
+              <View style={styles.goalSuccessIconInner}>
+                <Ionicons name="speedometer-outline" size={30} color="#FFFFFF" />
+              </View>
+            </View>
+            <Text style={styles.goalSuccessEyebrow}>
+              {goalUpdateResult?.synced ? 'Goal synced' : 'Saved on this device'}
+            </Text>
+            <Text style={styles.goalSuccessTitle}>Hydration Goal Updated</Text>
+            <Text style={styles.goalSuccessSubtitle}>
+              Your daily beverage target is now set to {fmt(goalUpdateResult?.goal || goal)} ml.
+            </Text>
+            <View style={styles.goalSuccessMetricCard}>
+              <Text style={styles.goalSuccessMetricLabel}>New target</Text>
+              <Text style={styles.goalSuccessMetricValue}>{fmt(goalUpdateResult?.goal || goal)} ml</Text>
+              <View style={styles.goalSuccessTrack}>
+                <View style={styles.goalSuccessFill} />
+              </View>
+              <Text style={styles.goalSuccessHelper}>
+                {goalUpdateResult?.synced
+                  ? 'Your target is saved locally and synced with IntakeSync.'
+                  : 'Your target is saved locally. Sync can retry when connected.'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.goalSuccessButton}
+              activeOpacity={0.84}
+              onPress={() => setGoalUpdateResult(null)}
+            >
+              <Text style={styles.goalSuccessButtonText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Ideal Goal Alert Modal */}
       <Modal
@@ -1305,20 +1587,38 @@ export default function Hydration() {
       >
         <View style={styles.modalOverlay}>
           <Animated.View style={[styles.celebrationContainer, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}>
-            <View style={styles.modalContent}>
-              <Ionicons name="trophy" size={60} color="#F59E0B" style={{ marginBottom: 16 }} />
-              <Text style={styles.celebrationTitle}>🎉 Hydration Goal Reached!</Text>
-              <Text style={styles.celebrationMessage}>
-                Great job keeping your body fueled! You have reached your daily hydration goal of {goal}ml.
-              </Text>
-              <View style={styles.celebrationStats}>
-                <View style={styles.statBox}>
-                  <Text style={styles.celebrationStatValue}>{fmt(totalToday())}</Text>
-                  <Text style={styles.celebrationStatLabel}>Total Intake</Text>
+            <View style={styles.celebrationCard}>
+              <View style={styles.celebrationGlow} />
+              <View style={styles.celebrationIconRing}>
+                <View style={styles.celebrationIconInner}>
+                  <Ionicons name="water" size={30} color="#FFFFFF" />
                 </View>
-                <View style={styles.statBox}>
-                  <Text style={styles.celebrationStatValue}>100%</Text>
-                  <Text style={styles.celebrationStatLabel}>Goal Completed</Text>
+              </View>
+              <Text style={styles.celebrationEyebrow}>Daily target complete</Text>
+              <Text style={styles.celebrationTitle}>Beverage Goal Reached</Text>
+              <Text style={styles.celebrationMessage}>
+                You reached {fmt(goal)} ml today. Nice, steady beverage rhythm.
+              </Text>
+              <View style={styles.celebrationProgressCard}>
+                <View style={styles.celebrationProgressHeader}>
+                  <View>
+                    <Text style={styles.celebrationProgressLabel}>Today's intake</Text>
+                    <Text style={styles.celebrationProgressMeta}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
+                  </View>
+                  <Text style={styles.celebrationProgressValue}>{Math.max(100, Math.round(percent()))}%</Text>
+                </View>
+                <View style={styles.celebrationProgressTrack}>
+                  <View style={[styles.celebrationProgressFill, { width: `${Math.min(100, Math.max(0, percent()))}%` }]} />
+                </View>
+                <View style={styles.celebrationBadgeRow}>
+                  <View style={styles.celebrationBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color="#2563EB" />
+                    <Text style={styles.celebrationBadgeText}>Goal complete</Text>
+                  </View>
+                  <View style={styles.celebrationBadge}>
+                    <Ionicons name="sparkles-outline" size={14} color="#2563EB" />
+                    <Text style={styles.celebrationBadgeText}>Balanced pace</Text>
+                  </View>
                 </View>
               </View>
               <TouchableOpacity 
@@ -1496,6 +1796,18 @@ export default function Hydration() {
 
 const styles = StyleSheet.create({
   container: { flex:1, backgroundColor:'#F8FAFC' },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  loadingText: {
+    marginTop: 12,
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   content: { padding:20 },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
   headerRow: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 },
@@ -1531,6 +1843,8 @@ const styles = StyleSheet.create({
   headerIconButton: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
   inlineNotice: { position: 'absolute', left: 20, right: 20, zIndex: 60, backgroundColor: '#2563EB', borderRadius: 999, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 10, elevation: 8 },
   inlineNoticeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  syncNotice: { position: 'absolute', left: 20, right: 20, zIndex: 55, backgroundColor: '#DBEAFE', borderRadius: 999, paddingVertical: 9, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: '#BFDBFE' },
+  syncNoticeText: { color: '#1E3A8A', fontSize: 12, fontWeight: '800' },
   headerRowAlt: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:12 },
   goalWrap: { flexDirection: 'row', alignItems: 'center' },
   goalLabel: { color: '#6B7280', marginRight: 8, fontWeight: '600' },
@@ -1715,6 +2029,51 @@ const styles = StyleSheet.create({
   missedMiniLabel: { fontSize: 10, color: '#334155', fontWeight: '700', textAlign: 'center' },
   missedMiniHelper: { fontSize: 9, color: '#64748B', fontWeight: '600', textAlign: 'center', marginTop: 2, lineHeight: 12 },
   missedMiniNumber: { fontSize: 18, color: '#C2410C', fontWeight: '900', marginTop: 2 },
+  goalSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  goalSheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15, 23, 42, 0.45)' },
+  goalSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 10, paddingHorizontal: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -6 }, shadowOpacity: 0.16, shadowRadius: 18, elevation: 16 },
+  goalSheetHandle: { alignSelf: 'center', width: 42, height: 5, borderRadius: 999, backgroundColor: '#CBD5E1', marginBottom: 16 },
+  goalSheetHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 },
+  goalSheetTitleWrap: { flex: 1, minWidth: 0 },
+  goalSheetTitle: { fontSize: 22, fontWeight: '900', color: '#0F172A' },
+  goalSheetSubtitle: { marginTop: 4, fontSize: 13, lineHeight: 18, color: '#64748B', fontWeight: '700' },
+  goalCurrentPill: { borderRadius: 14, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', paddingVertical: 8, paddingHorizontal: 11, alignItems: 'center' },
+  goalCurrentLabel: { fontSize: 10, color: '#64748B', fontWeight: '900', textTransform: 'uppercase' },
+  goalCurrentValue: { marginTop: 2, fontSize: 14, color: '#1E3A8A', fontWeight: '900' },
+  goalRecommendedCard: { flexDirection: 'row', alignItems: 'center', borderRadius: 16, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#DBEAFE', paddingVertical: 12, paddingHorizontal: 12, marginBottom: 14 },
+  goalRecommendedIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  goalRecommendedTextWrap: { flex: 1, minWidth: 0 },
+  goalRecommendedLabel: { fontSize: 14, color: '#0F172A', fontWeight: '900' },
+  goalRecommendedText: { marginTop: 2, fontSize: 12, color: '#64748B', fontWeight: '700' },
+  goalSheetSectionTitle: { marginTop: 4, marginBottom: 9, fontSize: 12, color: '#475569', fontWeight: '900', textTransform: 'uppercase' },
+  goalPresetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, marginBottom: 14 },
+  goalPresetChip: { flexGrow: 1, minWidth: '47%', minHeight: 44, borderRadius: 14, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  goalPresetChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  goalPresetText: { color: '#1E3A8A', fontSize: 14, fontWeight: '900' },
+  goalPresetTextActive: { color: '#FFFFFF' },
+  goalCustomRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  goalCustomInput: { flex: 1, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#F8FAFC', paddingHorizontal: 14, color: '#0F172A', fontSize: 15, fontWeight: '800' },
+  goalApplyButton: { minHeight: 48, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, shadowColor: '#1E3A8A', shadowOpacity: 0.12, shadowRadius: 8, elevation: 3 },
+  goalApplyButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  goalSheetHint: { marginTop: 7, color: '#64748B', fontSize: 12, fontWeight: '700' },
+  goalCancelButton: { marginTop: 16, minHeight: 48, borderRadius: 14, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0', alignItems: 'center', justifyContent: 'center' },
+  goalCancelButtonText: { color: '#334155', fontSize: 14, fontWeight: '900' },
+  goalSuccessOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.48)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 22 },
+  goalSuccessCard: { width: '100%', maxWidth: 380, backgroundColor: '#FFFFFF', borderRadius: 28, padding: 22, alignItems: 'center', overflow: 'hidden', borderWidth: 1, borderColor: '#DCEBFF', shadowColor: '#000', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.2, shadowRadius: 24, elevation: 16 },
+  goalSuccessGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 112, backgroundColor: '#EFF6FF', borderBottomLeftRadius: 92, borderBottomRightRadius: 92 },
+  goalSuccessIconRing: { width: 82, height: 82, borderRadius: 41, backgroundColor: 'rgba(37, 99, 235, 0.12)', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center', marginTop: 6, marginBottom: 12 },
+  goalSuccessIconInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', shadowColor: '#2563EB', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 6 },
+  goalSuccessEyebrow: { color: '#2563EB', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
+  goalSuccessTitle: { color: '#0F172A', fontSize: 24, fontWeight: '900', textAlign: 'center' },
+  goalSuccessSubtitle: { color: '#64748B', fontSize: 14, fontWeight: '700', lineHeight: 21, textAlign: 'center', marginTop: 7, marginBottom: 16 },
+  goalSuccessMetricCard: { width: '100%', backgroundColor: '#F8FAFC', borderRadius: 20, borderWidth: 1, borderColor: '#BFDBFE', padding: 16, marginBottom: 18 },
+  goalSuccessMetricLabel: { color: '#475569', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginBottom: 4 },
+  goalSuccessMetricValue: { color: '#2563EB', fontSize: 34, fontWeight: '900', marginBottom: 12 },
+  goalSuccessTrack: { height: 10, borderRadius: 999, backgroundColor: '#DBEAFE', overflow: 'hidden', marginBottom: 10 },
+  goalSuccessFill: { width: '100%', height: '100%', borderRadius: 999, backgroundColor: '#2563EB' },
+  goalSuccessHelper: { color: '#475569', fontSize: 12, fontWeight: '800', lineHeight: 17 },
+  goalSuccessButton: { width: '100%', minHeight: 50, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', shadowColor: '#2563EB', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 4 },
+  goalSuccessButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' },
   // Modal styles
   modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
   modalContent: { backgroundColor: 'white', borderRadius: 20, padding: 24, marginHorizontal: 20, maxWidth: 400, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 10 },
@@ -1728,15 +2087,30 @@ const styles = StyleSheet.create({
   modalButtonPrimary: { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#1E3A8A', shadowColor: '#1E3A8A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 },
   modalButtonPrimaryText: { color: '#FFFFFF', fontWeight: '700', textAlign: 'center', fontSize: 14 },
   // Celebration styles
-  celebrationContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  celebrationTitle: { fontSize: 28, fontWeight: '900', color: '#10B981', marginBottom: 12, textAlign: 'center' },
-  celebrationMessage: { fontSize: 16, color: '#6B7280', marginBottom: 20, textAlign: 'center', lineHeight: 24 },
+  celebrationContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
+  celebrationCard: { width: '100%', maxWidth: 390, backgroundColor: '#FFFFFF', borderRadius: 28, padding: 22, alignItems: 'center', overflow: 'hidden', borderWidth: 1, borderColor: '#DCEBFF', shadowColor: '#000', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 14 },
+  celebrationGlow: { position: 'absolute', top: 0, left: 0, right: 0, height: 118, backgroundColor: '#EFF6FF', borderBottomLeftRadius: 92, borderBottomRightRadius: 92 },
+  celebrationIconRing: { width: 84, height: 84, borderRadius: 42, backgroundColor: 'rgba(37, 99, 235, 0.12)', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center', marginTop: 6, marginBottom: 12 },
+  celebrationIconInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', shadowColor: '#2563EB', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 6 },
+  celebrationEyebrow: { color: '#2563EB', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
+  celebrationTitle: { fontSize: 25, fontWeight: '900', color: '#0F172A', marginBottom: 8, textAlign: 'center' },
+  celebrationMessage: { fontSize: 14, color: '#64748B', marginBottom: 18, textAlign: 'center', lineHeight: 21, fontWeight: '700' },
+  celebrationProgressCard: { width: '100%', backgroundColor: '#F8FAFC', borderRadius: 20, borderWidth: 1, borderColor: '#BFDBFE', padding: 16, marginBottom: 18 },
+  celebrationProgressHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 },
+  celebrationProgressLabel: { color: '#0F172A', fontSize: 15, fontWeight: '900' },
+  celebrationProgressMeta: { marginTop: 3, color: '#64748B', fontSize: 12, fontWeight: '700' },
+  celebrationProgressValue: { color: '#2563EB', fontSize: 34, fontWeight: '900', lineHeight: 38 },
+  celebrationProgressTrack: { height: 12, borderRadius: 999, backgroundColor: '#DBEAFE', overflow: 'hidden' },
+  celebrationProgressFill: { height: '100%', borderRadius: 999, backgroundColor: '#2563EB' },
+  celebrationBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  celebrationBadge: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: '#EFF6FF', borderRadius: 999, paddingVertical: 7, paddingHorizontal: 9, borderWidth: 1, borderColor: '#DBEAFE' },
+  celebrationBadgeText: { color: '#1E3A8A', fontSize: 11, fontWeight: '900' },
   celebrationStats: { flexDirection: 'row', marginBottom: 24, gap: 16 },
   statBox: { flex: 1, backgroundColor: '#F0FDF4', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, alignItems: 'center' },
   celebrationStatValue: { fontSize: 20, fontWeight: '900', color: '#10B981', marginBottom: 4 },
   celebrationStatLabel: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
-  celebrationButton: { paddingVertical: 14, paddingHorizontal: 32, backgroundColor: '#10B981', borderRadius: 10, marginTop: 12 },
-  celebrationButtonText: { color: 'white', fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  celebrationButton: { width: '100%', paddingVertical: 14, paddingHorizontal: 32, backgroundColor: '#2563EB', borderRadius: 14, marginTop: 2, shadowColor: '#2563EB', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.22, shadowRadius: 12, elevation: 4 },
+  celebrationButtonText: { color: 'white', fontWeight: '900', fontSize: 16, textAlign: 'center' },
   overhydrationTitle: { fontSize: 26, fontWeight: '900', color: '#EF4444', marginBottom: 12, textAlign: 'center' },
   overhydrationMessage: { fontSize: 16, color: '#6B7280', marginBottom: 20, textAlign: 'center', lineHeight: 24 },
   // Alert styles

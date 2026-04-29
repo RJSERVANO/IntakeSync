@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,11 +8,15 @@ import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
 import AvatarSelector, { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
+import { clearCachedSession, getCachedSession } from '../../../../services/offlineStorage';
 
 export default function Profile() {
   const router = useRouter();
-  const { token } = useLocalSearchParams();
-  const { user, loading, reload } = useUser(token as string | undefined);
+  const { token: routeToken } = useLocalSearchParams();
+  const [cachedToken, setCachedToken] = React.useState<string | undefined>();
+  const [offlineMode, setOfflineMode] = React.useState(false);
+  const token = (routeToken as string | undefined) || cachedToken;
+  const { user, loading, reload } = useUser(token);
   const [avatarModalVisible, setAvatarModalVisible] = React.useState(false);
   const [signOutVisible, setSignOutVisible] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
@@ -27,6 +31,30 @@ export default function Profile() {
       })
       .catch((err) => console.log('Profile avatar load error:', err));
   }, []);
+
+  React.useEffect(() => {
+    let mounted = true;
+    if (routeToken) {
+      setOfflineMode(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    getCachedSession().then((session) => {
+      if (!mounted) return;
+      if (session?.token) {
+        setCachedToken(session.token);
+        setOfflineMode(true);
+      } else {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [routeToken, router]);
 
   const profileOptions = [
     {
@@ -89,6 +117,7 @@ export default function Profile() {
     } catch (err) {
       console.log('Logout error:', err);
     } finally {
+      await clearCachedSession();
       setSigningOut(false);
       setSignOutVisible(false);
       router.replace({ pathname: '/login' } as any);
@@ -99,7 +128,8 @@ export default function Profile() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading profile...</Text>
+          <ActivityIndicator size="large" color="#2563EB" />
+          <Text style={styles.loadingText}>Loading Profile...</Text>
         </View>
       </SafeAreaView>
     );
@@ -133,6 +163,13 @@ export default function Profile() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {offlineMode ? (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
+            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+          </View>
+        ) : null}
+
         {/* Profile Header */}
         <TouchableOpacity activeOpacity={0.82} style={styles.profileHeader} onPress={() => setAvatarModalVisible(true)}>
           <View style={styles.avatarContainer}>
@@ -277,6 +314,24 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingTop: 16,
     paddingBottom: 136,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 10,
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '800',
   },
   header: {
     flexDirection: 'row',
@@ -669,10 +724,13 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#F8FAFC',
   },
   loadingText: {
-    fontSize: 16,
-    color: '#6B7280',
+    marginTop: 12,
+    fontSize: 14,
+    color: '#64748B',
+    fontWeight: '700',
   },
   errorContainer: {
     flex: 1,

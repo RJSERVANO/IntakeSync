@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { notificationService } from '../../../../services/notificationService';
 import { get, post } from '../../../api';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
 
@@ -29,7 +30,7 @@ export default function NotificationSettings() {
   const [notificationRecordCount, setNotificationRecordCount] = useState<number | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [clearModalVisible, setClearModalVisible] = useState(false);
-  const [noticeModal, setNoticeModal] = useState<{ title: string; message: string } | null>(null);
+  const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
 
   useEffect(() => {
     loadSettings();
@@ -43,7 +44,7 @@ export default function NotificationSettings() {
       }
     } catch (error) {
       console.log('Notification settings load error:', error);
-      Alert.alert('Notice', 'Could not load saved notification preferences.');
+      setNoticeModal({ type: 'warning', title: 'Notice', message: 'Could not load saved notification preferences.' });
     } finally {
       setLoading(false);
     }
@@ -77,7 +78,7 @@ export default function NotificationSettings() {
     if (key === 'allowNotifications' && value) {
       const granted = await notificationService.requestPermissions();
       if (!granted) {
-        Alert.alert('Notifications are off', 'Notification permission was not granted. You can enable it later in your device settings.');
+        setNoticeModal({ type: 'warning', title: 'Notifications Are Off', message: 'Notification permission was not granted. You can enable it later in your device settings.' });
         next = { ...prefs, allowNotifications: false };
       }
     }
@@ -92,7 +93,7 @@ export default function NotificationSettings() {
     } catch (error) {
       console.log('Notification settings save error:', error);
       setPrefs(previous);
-      Alert.alert('Could Not Save', 'Your notification preference was not saved. Please try again.');
+      setNoticeModal({ type: 'error', title: 'Could Not Save', message: 'Your notification preference was not saved. Please try again.' });
     }
   };
 
@@ -105,12 +106,14 @@ export default function NotificationSettings() {
       await post('/notifications/mark-all-read', {}, token as string);
       await loadNotificationStats();
       setNoticeModal({
+        type: 'success',
         title: 'All caught up',
         message: 'Unread notification records were marked as read.',
       });
     } catch (error) {
       console.log('Mark all notifications read error:', error);
       setNoticeModal({
+        type: 'error',
         title: 'Could not update',
         message: 'Notification records could not be marked read. Please try again.',
       });
@@ -127,12 +130,14 @@ export default function NotificationSettings() {
       setClearModalVisible(false);
       await loadNotificationStats();
       setNoticeModal({
+        type: 'success',
         title: 'Notifications cleared',
         message: 'Only notification records were cleared. Beverage logs and medication history remain.',
       });
     } catch (error) {
       console.log('Clear notifications error:', error);
       setNoticeModal({
+        type: 'error',
         title: 'Could not clear',
         message: 'Notification records could not be cleared. Please try again.',
       });
@@ -264,34 +269,28 @@ export default function NotificationSettings() {
         <Text style={styles.recordHelper}>Only notification records are affected. Beverage logs and medication history remain.</Text>
       </ScrollView>
 
-      <Modal visible={clearModalVisible} transparent animationType="fade" onRequestClose={() => setClearModalVisible(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.detailModal}>
-            <Text style={styles.modalTitle}>Clear notifications?</Text>
-            <Text style={styles.modalMessage}>This removes notification records from this list. Beverage logs and medication history will remain.</Text>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity style={styles.cancelButton} onPress={() => setClearModalVisible(false)}>
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.clearButton} onPress={clearNotifications} disabled={actionBusy}>
-                <Text style={styles.clearButtonText}>{actionBusy ? 'Clearing...' : 'Clear'}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ThemedNoticeModal
+        visible={clearModalVisible}
+        type="destructive"
+        title="Clear Notifications?"
+        message="This removes notification records from this list. Beverage logs and medication history will remain."
+        primaryText="Clear"
+        secondaryText="Cancel"
+        loading={actionBusy}
+        onPrimary={clearNotifications}
+        onSecondary={() => setClearModalVisible(false)}
+        onClose={() => setClearModalVisible(false)}
+      />
 
-      <Modal visible={Boolean(noticeModal)} transparent animationType="fade" onRequestClose={() => setNoticeModal(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.detailModal}>
-            <Text style={styles.modalTitle}>{noticeModal?.title}</Text>
-            <Text style={styles.modalMessage}>{noticeModal?.message}</Text>
-            <TouchableOpacity style={styles.primaryModalButton} onPress={() => setNoticeModal(null)}>
-              <Text style={styles.primaryModalText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        primaryText="Done"
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
     </SafeAreaView>
   );
 }

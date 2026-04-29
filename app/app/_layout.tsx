@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
 import { notificationManager } from '../services/notificationManager';
+import { notificationService } from '../services/notificationService';
 import { LogBox } from 'react-native';
 
 // Suppress Expo Go push notification warning in UI
@@ -15,6 +16,7 @@ export default function RootLayout() {
   useEffect(() => {
     // Initialize notification manager
     notificationManager.initialize();
+    notificationService.ensureAndroidChannels();
 
     // Cleanup on unmount
     return () => {

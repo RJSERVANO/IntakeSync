@@ -10,6 +10,7 @@ import {
   Dimensions,
   TouchableOpacity,
   Platform,
+  type ViewStyle,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -67,7 +68,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
   const personTranslate = useRef(new Animated.Value(0)).current;
 
   const bg = useMemo(() => require('../../../assets/images/mainbg.png'), []);
-  const logo = useMemo(() => require('../../../assets/images/mainlogo.png'), []);
+  const logo = useMemo(() => require('../../../assets/images/customsplash.png'), []);
 
   // Splash animation + dots
   useEffect(() => {
@@ -265,7 +266,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
     };
   };
 
-  const iconFloatStyle = {
+  const iconFloatStyle: Animated.WithAnimatedValue<ViewStyle> = {
     transform: [
       {
         translateY: iconFloat.interpolate({
@@ -276,7 +277,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
     ],
   };
 
-  const iconPulseStyle = {
+  const iconPulseStyle: Animated.WithAnimatedValue<ViewStyle> = {
     transform: [
       {
         scale: iconPulse.interpolate({
@@ -287,7 +288,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
     ],
   };
 
-  const decorMotionStyle = {
+  const decorMotionStyle: Animated.WithAnimatedValue<ViewStyle> = {
     opacity: decorOpacity.interpolate({
       inputRange: [0, 1],
       outputRange: [1, 0.78],

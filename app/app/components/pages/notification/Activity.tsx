@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -13,7 +13,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { del, get, post, put } from '../../../api';
+import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
+import { getCachedSession } from '../../../../services/offlineStorage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 
 type NotificationType = 'hydration' | 'medication' | 'general';
@@ -125,7 +126,9 @@ const getTone = (item: Pick<NotificationItem | ReminderItem, 'type' | 'status'>)
 export default function Activity() {
   const params = useLocalSearchParams();
   const router = useRouter();
-  const token = (params?.token as string) || undefined;
+  const routeToken = (params?.token as string) || undefined;
+  const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const token = routeToken || cachedToken;
   const insets = useSafeAreaInsets();
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -137,6 +140,31 @@ export default function Activity() {
   const [error, setError] = useState<string | null>(null);
   const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
   const [noticeModal, setNoticeModal] = useState<{ title: string; message: string } | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    if (routeToken) {
+      setOfflineMode(false);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    getCachedSession().then((session) => {
+      if (!mounted) return;
+      if (session?.token) {
+        setCachedToken(session.token);
+        setOfflineMode(true);
+      } else {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [routeToken, router]);
 
   const normalizeNotifications = useCallback((payload: any): NotificationItem[] => {
     const arr = Array.isArray(payload) ? payload : payload?.data;
@@ -191,13 +219,20 @@ export default function Activity() {
       setStats(statsRes || null);
       setMedicationFallbacks(normalizeMedicationFallbacks(medicationRes));
       setError(null);
+      setOfflineMode(false);
     } catch (err) {
-      setNotifications([]);
-      setStats(null);
-      setMedicationFallbacks([]);
+      if (isAuthError(err)) {
+        router.replace('/login');
+        return;
+      }
+      if (isNetworkError(err)) {
+        setOfflineMode(true);
+        setError('Offline mode - changes will sync when connected.');
+        return;
+      }
       setError(getErrorMessage(err, 'Could not load notifications from the backend.'));
     }
-  }, [normalizeMedicationFallbacks, normalizeNotifications, token]);
+  }, [normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -389,6 +424,13 @@ export default function Activity() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
+        {offlineMode ? (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
+            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+          </View>
+        ) : null}
+
         <View style={styles.counterRow}>
           {counters.map(counter => (
             <View key={counter.key} style={styles.counterCard}>
@@ -422,7 +464,7 @@ export default function Activity() {
           {loading ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="small" color="#2563EB" />
-              <Text style={styles.loadingText}>Loading notifications...</Text>
+              <Text style={styles.loadingText}>Loading Notifications...</Text>
             </View>
           ) : upcomingReminders.length > 0 ? (
             upcomingReminders.map(renderReminder)
@@ -616,6 +658,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginBottom: 12,
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 10,
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '800',
   },
   counterCard: {
     flex: 1,

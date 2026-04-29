@@ -14,9 +14,10 @@
     "android": {
       "package": "com.intakesync.app",
       "edgeToEdgeEnabled": true,
+      "usesCleartextTraffic": true,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/mainlogo.png",
+        "foregroundImage": "./assets/images/foregroundapp.png",
         "backgroundColor": "#1E3A8A"
       },
       "permissions": [
@@ -41,7 +42,16 @@
       ],
       "expo-web-browser",
       "expo-audio",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/hydration_reminder.wav",
+            "./assets/sounds/medication_reminder.wav"
+          ]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
