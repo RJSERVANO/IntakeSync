@@ -52,6 +52,17 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
   const { width, height } = Dimensions.get('window');
   const flatListRef = useRef<FlatList>(null);
   const getStartedScale = useRef(new Animated.Value(0)).current;
+  const getStartedPressScale = useRef(new Animated.Value(1)).current;
+  const getStartedBreathScale = useRef(new Animated.Value(1)).current;
+  const iconFloat = useRef(new Animated.Value(0)).current;
+  const iconPulse = useRef(new Animated.Value(0)).current;
+  const rippleScale = useRef(new Animated.Value(0)).current;
+  const rippleOpacity = useRef(new Animated.Value(0)).current;
+  const decorDrift = useRef(new Animated.Value(0)).current;
+  const decorOpacity = useRef(new Animated.Value(0)).current;
+  const dashboardBarOne = useRef(new Animated.Value(0.72)).current;
+  const dashboardBarTwo = useRef(new Animated.Value(0.56)).current;
+  const dashboardBarThree = useRef(new Animated.Value(0.84)).current;
   const personOpacity = useRef(new Animated.Value(1)).current;
   const personTranslate = useRef(new Animated.Value(0)).current;
 
@@ -123,6 +134,93 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
     }
   }, [splashFinished, getStartedScale]);
 
+  useEffect(() => {
+    if (!splashFinished) return undefined;
+
+    const floatLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(iconFloat, { toValue: 1, duration: 2200, useNativeDriver: true }),
+        Animated.timing(iconFloat, { toValue: 0, duration: 2200, useNativeDriver: true }),
+      ])
+    );
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(iconPulse, { toValue: 1, duration: 1900, useNativeDriver: true }),
+        Animated.timing(iconPulse, { toValue: 0, duration: 1900, useNativeDriver: true }),
+      ])
+    );
+    const rippleLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(rippleScale, { toValue: 1, duration: 2100, useNativeDriver: true }),
+          Animated.timing(rippleOpacity, { toValue: 1, duration: 650, useNativeDriver: true }),
+        ]),
+        Animated.timing(rippleOpacity, { toValue: 0, duration: 950, useNativeDriver: true }),
+        Animated.timing(rippleScale, { toValue: 0, duration: 1, useNativeDriver: true }),
+      ])
+    );
+    const decorLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(decorDrift, { toValue: 1, duration: 3600, useNativeDriver: true }),
+          Animated.timing(decorOpacity, { toValue: 1, duration: 3600, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(decorDrift, { toValue: 0, duration: 3600, useNativeDriver: true }),
+          Animated.timing(decorOpacity, { toValue: 0, duration: 3600, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    const ctaLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(getStartedBreathScale, { toValue: 1.025, duration: 1800, useNativeDriver: true }),
+        Animated.timing(getStartedBreathScale, { toValue: 1, duration: 1800, useNativeDriver: true }),
+      ])
+    );
+    const barLoop = Animated.loop(
+      Animated.sequence([
+        Animated.stagger(180, [
+          Animated.timing(dashboardBarOne, { toValue: 1, duration: 720, useNativeDriver: true }),
+          Animated.timing(dashboardBarTwo, { toValue: 1, duration: 720, useNativeDriver: true }),
+          Animated.timing(dashboardBarThree, { toValue: 1, duration: 720, useNativeDriver: true }),
+        ]),
+        Animated.stagger(160, [
+          Animated.timing(dashboardBarOne, { toValue: 0.68, duration: 760, useNativeDriver: true }),
+          Animated.timing(dashboardBarTwo, { toValue: 0.52, duration: 760, useNativeDriver: true }),
+          Animated.timing(dashboardBarThree, { toValue: 0.78, duration: 760, useNativeDriver: true }),
+        ]),
+      ])
+    );
+
+    floatLoop.start();
+    pulseLoop.start();
+    rippleLoop.start();
+    decorLoop.start();
+    ctaLoop.start();
+    barLoop.start();
+
+    return () => {
+      floatLoop.stop();
+      pulseLoop.stop();
+      rippleLoop.stop();
+      decorLoop.stop();
+      ctaLoop.stop();
+      barLoop.stop();
+    };
+  }, [
+    dashboardBarOne,
+    dashboardBarThree,
+    dashboardBarTwo,
+    decorDrift,
+    decorOpacity,
+    getStartedBreathScale,
+    iconFloat,
+    iconPulse,
+    rippleOpacity,
+    rippleScale,
+    splashFinished,
+  ]);
+
   const onGetStarted = () => {
     // Animate the person (last screen visual) to fade and move up
     Animated.parallel([
@@ -131,6 +229,83 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
     ]).start(() => {
       onFinish && onFinish();
     });
+  };
+
+  const animateGetStartedPress = (toValue: number) => {
+    Animated.spring(getStartedPressScale, {
+      toValue,
+      useNativeDriver: true,
+      speed: 22,
+      bounciness: 4,
+    }).start();
+  };
+
+  const getFeatureAccent = (decor: string) => {
+    if (decor === 'pills') {
+      return {
+        glow: 'rgba(239, 68, 68, 0.16)',
+        inner: '#FEF2F2',
+        border: 'rgba(254, 202, 202, 0.95)',
+        icon: '#DC2626',
+      };
+    }
+    if (decor === 'dashboard') {
+      return {
+        glow: 'rgba(34, 211, 238, 0.18)',
+        inner: '#ECFEFF',
+        border: 'rgba(165, 243, 252, 0.88)',
+        icon: '#155E75',
+      };
+    }
+    return {
+      glow: 'rgba(14, 165, 233, 0.22)',
+      inner: '#E0F2FE',
+      border: 'rgba(125, 211, 252, 0.95)',
+      icon: '#0284C7',
+    };
+  };
+
+  const iconFloatStyle = {
+    transform: [
+      {
+        translateY: iconFloat.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -7],
+        }),
+      },
+    ],
+  };
+
+  const iconPulseStyle = {
+    transform: [
+      {
+        scale: iconPulse.interpolate({
+          inputRange: [0, 1],
+          outputRange: [1, 1.045],
+        }),
+      },
+    ],
+  };
+
+  const decorMotionStyle = {
+    opacity: decorOpacity.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 0.78],
+    }),
+    transform: [
+      {
+        translateY: decorDrift.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, -8],
+        }),
+      },
+      {
+        translateX: decorDrift.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0, 6],
+        }),
+      },
+    ],
   };
 
   // Splash
@@ -198,8 +373,8 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
   return (
     <View style={styles.bg}>
       {/* Decorative background shapes for onboarding */}
-      <View style={styles.decorShapeOne} />
-      <View style={styles.decorShapeTwo} />
+      <Animated.View style={[styles.decorShapeOne, decorMotionStyle]} />
+      <Animated.View style={[styles.decorShapeTwo, decorMotionStyle]} />
       <TouchableOpacity
         style={[styles.skipButton, { top: Math.max(insets.top + 10, 24) }]}
         onPress={onFinish}
@@ -220,51 +395,101 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
           }
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 50 }}
-        renderItem={({ item }) => (
-          <View
-            style={[
-              styles.onboardingScreen,
-              {
-                width,
-                minHeight: height,
-                paddingTop: Math.max(insets.top + 56, 88),
-                paddingBottom: Math.max(insets.bottom + 26, 34),
-              },
-            ]}
-          >
+        renderItem={({ item }) => {
+          const accent = getFeatureAccent(item.bgDecor);
+          return (
+            <View
+              style={[
+                styles.onboardingScreen,
+                {
+                  width,
+                  minHeight: height,
+                  paddingTop: Math.max(insets.top + 56, 88),
+                  paddingBottom: Math.max(insets.bottom + 26, 34),
+                },
+              ]}
+            >
             {/* Per-screen rich decorations */}
             {item.bgDecor === 'water' && (
               <>
-                <View style={styles.waveTop} />
-                <View style={styles.waveBottom} />
+                <Animated.View style={[styles.waveTop, decorMotionStyle]} />
+                <Animated.View style={[styles.waveBottom, decorMotionStyle]} />
               </>
             )}
             {item.bgDecor === 'pills' && (
               <>
-                <View style={styles.pillLarge} />
-                <View style={styles.pillSmall} />
+                <Animated.View style={[styles.pillLarge, decorMotionStyle]} />
+                <Animated.View style={[styles.pillSmall, decorMotionStyle]} />
               </>
             )}
             {item.bgDecor === 'dashboard' && (
               <>
-                <View style={styles.chartBarLeft} />
-                <View style={styles.chartBarRight} />
+                <Animated.View style={[styles.chartBarLeft, decorMotionStyle]} />
+                <Animated.View style={[styles.chartBarRight, decorMotionStyle]} />
               </>
             )}
 
             {/* Content wrapper to center main content */}
             <View style={styles.slideContentWrapper}>
-              <View style={styles.iconCircle}>
-                <Ionicons name={item.icon} size={42} color="#1e3a8b" />
-              </View>
+              <Animated.View style={[styles.iconCircle, iconFloatStyle]}>
+                {item.bgDecor === 'water' ? (
+                  <Animated.View
+                    style={[
+                      styles.iconRipple,
+                      {
+                        opacity: rippleOpacity.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, 0.26],
+                        }),
+                        transform: [
+                          {
+                            scale: rippleScale.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0.82, 1.28],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                ) : null}
+                <View style={[styles.iconGlowLayer, { backgroundColor: accent.glow }]} />
+                <Animated.View style={[styles.iconInnerCircle, { backgroundColor: accent.inner, borderColor: accent.border }, iconPulseStyle]}>
+                  {item.bgDecor === 'dashboard' ? (
+                    <View style={styles.dashboardIconBars}>
+                      {[dashboardBarOne, dashboardBarTwo, dashboardBarThree].map((barAnim, index) => (
+                        <Animated.View
+                          key={index}
+                          style={[
+                            styles.dashboardIconBar,
+                            index === 0 && styles.dashboardIconBarSmall,
+                            index === 2 && styles.dashboardIconBarTall,
+                            {
+                              transform: [{ scaleY: barAnim }],
+                            },
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  ) : (
+                    <Ionicons name={item.icon} size={46} color={accent.icon} />
+                  )}
+                </Animated.View>
+              </Animated.View>
               <Text style={styles.onboardingTitle}>{item.title}</Text>
               <Text style={styles.onboardingDescription}>{item.description}</Text>
               
               {/* Visible progress/next cue */}
               <View style={styles.nextCueRow}>
-                <View style={[styles.nextDot, { opacity: currentPage === 0 ? 1 : 0.3 }]} />
-                <View style={[styles.nextDot, { opacity: currentPage === 1 ? 1 : 0.3 }]} />
-                <View style={[styles.nextDot, { opacity: currentPage === 2 ? 1 : 0.3 }]} />
+                {onboardingScreens.map((_, idx) => (
+                  <Animated.View
+                    key={idx}
+                    style={[
+                      styles.nextDot,
+                      currentPage === idx && styles.nextDotActive,
+                    ]}
+                  />
+                ))}
               </View>
 
               {/* Last screen: interactive visual + animated button */}
@@ -285,19 +510,24 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
                   style={{
                     transform: [
                       { scale: getStartedScale.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) },
+                      { scale: getStartedBreathScale },
+                      { scale: getStartedPressScale },
                     ],
                     opacity: getStartedScale,
                     marginTop: 20,
                   }}
                 >
-                  <TouchableOpacity style={styles.getStartedBtnHigh} onPress={onGetStarted}>
+                  <TouchableOpacity
+                    style={styles.getStartedBtnPremium}
+                    onPress={onGetStarted}
+                    onPressIn={() => animateGetStartedPress(0.96)}
+                    onPressOut={() => animateGetStartedPress(1)}
+                    activeOpacity={0.88}
+                  >
                     <View style={styles.getStartedContent}>
-                      <Text style={styles.getStartedText}>Get Started</Text>
-                      <View style={styles.getStartedArrowBadge}>
-                        <View style={styles.getStartedArrowIcon}>
-                          <View style={styles.getStartedArrowShaft} />
-                          <View style={styles.getStartedArrowHead} />
-                        </View>
+                      <Text style={styles.getStartedTextPremium}>Get Started</Text>
+                      <View style={styles.getStartedIconBadge}>
+                        <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
                       </View>
                     </View>
                   </TouchableOpacity>
@@ -305,8 +535,9 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
                 </View>
               )}
             </View>
-          </View>
-        )}
+            </View>
+          );
+        }}
       />
     </View>
   );
@@ -384,33 +615,81 @@ const styles = StyleSheet.create({
     width: 104,
     height: 104,
     borderRadius: 52,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.98)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 26,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.55)',
+    borderColor: 'rgba(255,255,255,0.72)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.22,
+    shadowRadius: 20,
+    elevation: 8,
+    overflow: 'hidden',
+  },
+  iconGlowLayer: {
+    position: 'absolute',
+    width: 118,
+    height: 118,
+    borderRadius: 59,
+    opacity: 1,
+  },
+  iconRipple: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    borderWidth: 2,
+    borderColor: '#60A5FA',
+    backgroundColor: 'rgba(96,165,250,0.14)',
+  },
+  iconInnerCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  dashboardIconBars: {
+    width: 44,
+    height: 42,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 5,
+    borderBottomWidth: 3,
+    borderBottomColor: '#155E75',
+    paddingBottom: 4,
+  },
+  dashboardIconBar: {
+    width: 8,
+    height: 30,
+    borderRadius: 4,
+    backgroundColor: '#155E75',
+  },
+  dashboardIconBarSmall: {
+    height: 22,
+  },
+  dashboardIconBarTall: {
+    height: 36,
   },
   onboardingTitle: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 30,
+    fontWeight: '900',
     color: '#fff',
     textAlign: 'center',
     minHeight: 38,
   },
   onboardingDescription: {
-    fontSize: 16,
+    fontSize: 17,
     color: 'rgba(255,255,255,0.9)',
     textAlign: 'center',
     marginTop: 12,
-    lineHeight: 22,
+    lineHeight: 24,
     minHeight: 48,
-    maxWidth: 290,
+    maxWidth: 300,
   },
   getStartedBtn: {
     backgroundColor: '#fff',
@@ -530,7 +809,12 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+  },
+  nextDotActive: {
+    width: 20,
+    opacity: 1,
   },
   lastScreenBlock: {
     marginTop: 28,
@@ -547,19 +831,19 @@ const styles = StyleSheet.create({
     width: 1,
     height: 36,
   },
-  getStartedBtnHigh: {
-    minWidth: 176,
-    backgroundColor: '#fff',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  getStartedBtnPremium: {
+    minWidth: 190,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.35)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 16,
+    elevation: 8,
   },
   getStartedContent: {
     flexDirection: 'row',
@@ -567,37 +851,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
   },
-  getStartedArrowBadge: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#E8F0FF',
+  getStartedTextPremium: {
+    color: '#1E3A8A',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  getStartedIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  getStartedArrowIcon: {
-    width: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  getStartedArrowShaft: {
-    width: 10,
-    height: 2.5,
-    borderRadius: 2,
-    backgroundColor: '#1e3a8b',
-    position: 'absolute',
-    left: 1,
-  },
-  getStartedArrowHead: {
-    width: 7,
-    height: 7,
-    borderTopWidth: 2.5,
-    borderRightWidth: 2.5,
-    borderColor: '#1e3a8b',
-    transform: [{ rotate: '45deg' }],
-    position: 'absolute',
-    right: 1,
   },
 });

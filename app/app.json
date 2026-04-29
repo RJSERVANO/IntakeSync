@@ -12,12 +12,17 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.intakesync.app",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/mainlogo.png",
         "backgroundColor": "#1E3A8A"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "output": "static",
@@ -41,6 +46,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "00292cd7-8aa4-4e9b-8ad4-1e88334e9776"
+      }
+    },
+    "owner": "reinand_servano"
   }
 }

@@ -79,7 +79,7 @@ export default function ProfileDetails() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>Profile Details</Text>
           <Text style={styles.headerSubtitle}>View and update your account and hydration profile.</Text>
@@ -197,16 +197,20 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingBottom: 10,
     backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: 'transparent',
   },
   iconButton: {
-    width: 32,
+    width: 38,
     height: 38,
+    borderRadius: 19,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -216,15 +220,15 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 22,
-    fontWeight: '900',
+    fontWeight: '800',
     color: '#0F172A',
   },
   headerSubtitle: {
     color: '#64748B',
-    fontSize: 13,
-    fontWeight: '600',
-    lineHeight: 18,
-    marginTop: 3,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    marginTop: 2,
   },
   section: {
     marginBottom: 24,

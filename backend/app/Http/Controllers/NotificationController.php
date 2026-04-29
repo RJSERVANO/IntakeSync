@@ -18,8 +18,13 @@ class NotificationController extends Controller
     {
         $user = $request->user();
         
+        $limit = max(1, min((int) $request->query('limit', 80), 150));
+
         $notifications = NotificationModel::where('user_id', $user->id)
+            ->where('status', '!=', 'cleared')
             ->orderBy('scheduled_time', 'desc')
+            ->orderBy('created_at', 'desc')
+            ->limit($limit)
             ->get();
 
         return response()->json($notifications);
@@ -31,12 +36,15 @@ class NotificationController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'type' => 'required|in:hydration,medication',
+            'type' => 'required|in:hydration,medication,general',
             'title' => 'required|string|max:255',
-            'body' => 'required|string|max:500',
-            'scheduled_time' => 'required|date',
-            'status' => 'required|in:scheduled,delivered,missed,completed',
+            'body' => 'required_without:message|string|max:500',
+            'message' => 'required_without:body|string|max:500',
+            'scheduled_time' => 'required_without:scheduled_at|date',
+            'scheduled_at' => 'required_without:scheduled_time|date',
+            'status' => 'required|in:scheduled,delivered,missed,completed,snoozed,cleared',
             'data' => 'nullable|array',
+            'metadata' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -49,10 +57,10 @@ class NotificationController extends Controller
             'user_id' => $user->id,
             'type' => $request->type,
             'title' => $request->title,
-            'body' => $request->body,
-            'scheduled_time' => $request->scheduled_time,
+            'body' => $request->body ?? $request->message,
+            'scheduled_time' => $request->scheduled_time ?? $request->scheduled_at,
             'status' => $request->status,
-            'data' => $request->data ? json_encode($request->data) : null,
+            'data' => $request->metadata ?? $request->data,
         ]);
 
         return response()->json($notification, 201);
@@ -64,9 +72,13 @@ class NotificationController extends Controller
     public function update(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'status' => 'sometimes|in:scheduled,delivered,missed,completed',
-            'scheduled_time' => 'sometimes|date',
+            'status' => 'sometimes|in:scheduled,delivered,missed,completed,snoozed,cleared',
+            'scheduled_time' => 'sometimes|required_without:scheduled_at|date',
+            'scheduled_at' => 'sometimes|required_without:scheduled_time|date',
+            'opened_at' => 'sometimes|nullable|date',
+            'read_at' => 'sometimes|nullable|date',
             'data' => 'nullable|array',
+            'metadata' => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
@@ -87,11 +99,17 @@ class NotificationController extends Controller
         if ($request->has('status')) {
             $updateData['status'] = $request->status;
         }
-        if ($request->has('scheduled_time')) {
-            $updateData['scheduled_time'] = $request->scheduled_time;
+        if ($request->has('scheduled_time') || $request->has('scheduled_at')) {
+            $updateData['scheduled_time'] = $request->scheduled_time ?? $request->scheduled_at;
         }
-        if ($request->has('data')) {
-            $updateData['data'] = $request->data ? json_encode($request->data) : null;
+        if ($request->has('opened_at') && Schema::hasColumn('notifications', 'opened_at')) {
+            $updateData['opened_at'] = $request->opened_at ? Carbon::parse($request->opened_at) : Carbon::now();
+        }
+        if ($request->has('read_at') && Schema::hasColumn('notifications', 'read_at')) {
+            $updateData['read_at'] = $request->read_at ? Carbon::parse($request->read_at) : Carbon::now();
+        }
+        if ($request->has('data') || $request->has('metadata')) {
+            $updateData['data'] = $request->metadata ?? $request->data;
         }
 
         $notification->update($updateData);
@@ -158,11 +176,16 @@ class NotificationController extends Controller
     {
         $user = $request->user();
 
-        $deleted = NotificationModel::where('user_id', $user->id)->delete();
+        try {
+            $affected = NotificationModel::where('user_id', $user->id)
+                ->update(['status' => 'cleared']);
+        } catch (\Throwable $e) {
+            $affected = NotificationModel::where('user_id', $user->id)->delete();
+        }
 
         return response()->json([
             'message' => 'Notifications cleared',
-            'deleted' => $deleted,
+            'cleared' => $affected,
         ]);
     }
 
@@ -189,7 +212,7 @@ class NotificationController extends Controller
         $notification = NotificationModel::create([
             'user_id' => $user->id,
             'type' => 'hydration',
-            'title' => 'Time to hydrate 💧',
+            'title' => 'Time to hydrate',
             'body' => "{$amountMl}ml suggested to stay hydrated",
             'scheduled_time' => $scheduledTime,
             'status' => 'scheduled',
@@ -223,7 +246,7 @@ class NotificationController extends Controller
         $dosage = $request->dosage;
         $scheduledTime = Carbon::parse($request->scheduled_time);
         
-        $title = $dosage ? "Take {$dosage} {$medicationName} 💊" : "Take {$medicationName} 💊";
+        $title = $dosage ? "Take {$dosage} {$medicationName}" : "Take {$medicationName}";
         $body = "Time for your medication at " . $scheduledTime->format('g:i A');
 
         $notification = NotificationModel::create([
@@ -270,10 +293,20 @@ class NotificationController extends Controller
 
         $newScheduledTime = Carbon::now()->addMinutes($minutes);
         
-        $notification->update([
+        $updateData = [
             'scheduled_time' => $newScheduledTime,
-            'status' => 'scheduled',
-        ]);
+            'status' => 'snoozed',
+        ];
+        if (Schema::hasColumn('notifications', 'opened_at')) {
+            $updateData['opened_at'] = Carbon::now();
+        }
+
+        try {
+            $notification->update($updateData);
+        } catch (\Throwable $e) {
+            $updateData['status'] = 'scheduled';
+            $notification->update($updateData);
+        }
 
         return response()->json($notification);
     }
@@ -308,7 +341,7 @@ class NotificationController extends Controller
             NotificationModel::create([
                 'user_id' => $user->id,
                 'type' => 'hydration',
-                'title' => 'Time to hydrate 💧',
+                'title' => 'Time to hydrate',
                 'body' => ($data['amount'] ?? 200) . "ml suggested to stay hydrated",
                 'scheduled_time' => $nextScheduledTime,
                 'status' => 'scheduled',
@@ -392,14 +425,52 @@ class NotificationController extends Controller
     public function getStats(Request $request)
     {
         $user = $request->user();
-        
+        $today = Carbon::today();
+        $tomorrow = Carbon::tomorrow();
+        $now = Carbon::now();
+
+        $notifications = NotificationModel::where('user_id', $user->id)
+            ->where('status', '!=', 'cleared');
+
+        $todayNotifications = (clone $notifications)
+            ->whereBetween('scheduled_time', [$today, $tomorrow])
+            ->get();
+
+        $scheduledToday = $todayNotifications
+            ->whereIn('status', ['scheduled', 'upcoming'])
+            ->filter(fn ($notification) => Carbon::parse($notification->scheduled_time)->gt($now))
+            ->count();
+
+        $alerts = (clone $notifications)
+            ->whereIn('status', ['missed', 'skipped', 'failed', 'needs_attention'])
+            ->count();
+
+        $completed = (clone $notifications)
+            ->where('status', 'completed')
+            ->count();
+
+        $unreadQuery = (clone $notifications);
+        if (Schema::hasColumn('notifications', 'opened_at')) {
+            $unreadQuery->whereNull('opened_at');
+        } elseif (Schema::hasColumn('notifications', 'read_at')) {
+            $unreadQuery->whereNull('read_at');
+        }
+
         $stats = [
-            'total' => NotificationModel::where('user_id', $user->id)->count(),
-            'scheduled' => NotificationModel::where('user_id', $user->id)->where('status', 'scheduled')->count(),
-            'completed' => NotificationModel::where('user_id', $user->id)->where('status', 'completed')->count(),
-            'missed' => NotificationModel::where('user_id', $user->id)->where('status', 'missed')->count(),
-            'hydration_total' => NotificationModel::where('user_id', $user->id)->where('type', 'hydration')->count(),
-            'medication_total' => NotificationModel::where('user_id', $user->id)->where('type', 'medication')->count(),
+            'unread' => $unreadQuery->count(),
+            'scheduled_today' => $scheduledToday,
+            'alerts' => $alerts,
+            'by_type' => [
+                'hydration' => (clone $notifications)->where('type', 'hydration')->count(),
+                'medication' => (clone $notifications)->where('type', 'medication')->count(),
+                'general' => (clone $notifications)->where('type', 'general')->count(),
+            ],
+            'done_today' => $completed,
+            'due_later' => $scheduledToday,
+            'needs_attention' => $alerts,
+            'completed' => $completed,
+            'upcoming' => $scheduledToday,
+            'missed' => $alerts,
         ];
 
         return response()->json($stats);

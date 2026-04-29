@@ -882,8 +882,14 @@ export default function Hydration() {
           <Text style={styles.title}>Beverage</Text>
           <Text style={styles.headerSubtitle}>{fmt(totalToday())} / {fmt(goal)} ml today</Text>
         </View>
-        <TouchableOpacity onPress={changeGoal} style={styles.headerIconButton} activeOpacity={0.8}>
-          <Ionicons name="options-outline" size={20} color="#1E3A8A" />
+        <TouchableOpacity
+          onPress={changeGoal}
+          style={styles.headerIconButton}
+          activeOpacity={0.8}
+          accessibilityLabel="Change hydration goal"
+          accessibilityRole="button"
+        >
+          <Ionicons name="flag-outline" size={20} color="#1E3A8A" />
         </TouchableOpacity>
       </View>
 

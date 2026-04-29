@@ -80,6 +80,7 @@ export default function Home() {
   const [patterns, setPatterns] = useState<any[]>([]);
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
   const [upcomingMedications, setUpcomingMedications] = useState<any[]>([]);
+  const [notificationStats, setNotificationStats] = useState<any>(null);
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -249,6 +250,14 @@ export default function Home() {
             })
             .catch(() => {
               setTimeline([]);
+            });
+
+          api.get('/notifications/stats', token as string, 3000)
+            .then((statsData) => {
+              setNotificationStats(statsData || null);
+            })
+            .catch(() => {
+              setNotificationStats(null);
             });
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
@@ -504,7 +513,9 @@ export default function Home() {
     : 0;
   const recentUpdates = timeline.slice(0, 2);
   const missedCount = timeline.filter((item) => item.status === 'missed').length;
-  const notificationCount = timeline.filter((item) => item.status === 'missed' || item.status === 'pending').length;
+  const notificationCount = notificationStats
+    ? Math.max(0, Number(notificationStats.unread ?? 0) + Number(notificationStats.alerts ?? notificationStats.needs_attention ?? 0))
+    : timeline.filter((item) => item.status === 'missed' || item.status === 'pending').length;
   const nextMedication = upcomingMedications[0] || null;
 
   const getMedicationName = (medication: any) => (
@@ -1152,15 +1163,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingBottom: 10,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
     borderBottomColor: 'transparent',
     zIndex: 10,
   },
   headerElevated: {
-    borderBottomColor: '#DBEAFE',
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E2E8F0',
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
@@ -1175,35 +1187,35 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '800',
     color: '#1E3A8A',
   },
   menuButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#EFF6FF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#BFDBFE',
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     marginLeft: 12,
   },
   notificationButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#EFF6FF',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#BFDBFE',
     position: 'relative',
   },
   notificationBadge: {
@@ -1227,9 +1239,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   profileAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#1E3A8A',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1244,7 +1256,7 @@ const styles = StyleSheet.create({
   avatarText: {
     color: 'white',
     fontWeight: '800',
-    fontSize: 18,
+    fontSize: 14,
   },
   welcomeSection: {
     paddingTop: 16,

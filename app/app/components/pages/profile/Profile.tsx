@@ -120,7 +120,7 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 18) }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View>
           <Text style={styles.headerTitle}>Profile</Text>
           <Text style={styles.headerSubtitle}>Manage your account, preferences, and reminders.</Text>
@@ -283,21 +283,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingBottom: 10,
     backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: 'transparent',
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: '900',
+    fontSize: 22,
+    fontWeight: '800',
     color: '#0F172A',
   },
   headerSubtitle: {
     color: '#64748B',
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+    lineHeight: 17,
   },
   profileHeader: {
     backgroundColor: '#FFFFFF',

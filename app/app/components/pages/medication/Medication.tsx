@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, ActivityIndicator } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, ActivityIndicator } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
@@ -852,6 +852,56 @@ export default function Medication() {
     setTimes((t) => t.filter((_, i) => i !== idx));
   }
 
+  function getTimeKey(value: string | Date) {
+    const date = value instanceof Date ? value : new Date(value);
+    return `${date.getHours()}:${date.getMinutes()}`;
+  }
+
+  function sortTimesChronologically(values: string[]) {
+    return [...values].sort((a, b) => {
+      const first = new Date(a);
+      const second = new Date(b);
+      return (first.getHours() * 60 + first.getMinutes()) - (second.getHours() * 60 + second.getMinutes());
+    });
+  }
+
+  function formatReminderTime(date: Date) {
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  function setTempTimeParts(nextParts: { hour24?: number; minute?: number }) {
+    const current = tempTime || new Date();
+    const next = new Date(current);
+    if (typeof nextParts.hour24 === 'number') next.setHours(nextParts.hour24);
+    if (typeof nextParts.minute === 'number') next.setMinutes(nextParts.minute);
+    next.setSeconds(0, 0);
+    setTempTime(next);
+  }
+
+  function addOrUpdateReminderTime(date: Date) {
+    if (!date || Number.isNaN(date.getTime())) {
+      Alert.alert('Validation', 'Please select a valid reminder time.');
+      return false;
+    }
+
+    const nextIso = date.toISOString();
+    const nextKey = getTimeKey(date);
+    const duplicateIndex = times.findIndex((time, index) => index !== pickerIndex && getTimeKey(time) === nextKey);
+
+    if (duplicateIndex >= 0) {
+      Alert.alert('Duplicate time', `${formatReminderTime(date)} is already in your reminder list.`);
+      return false;
+    }
+
+    const nextTimes = pickerIndex === null
+      ? [...times, nextIso]
+      : times.map((time, index) => index === pickerIndex ? nextIso : time);
+
+    setTimes(sortTimesChronologically(nextTimes));
+    setPickerIndex(null);
+    return true;
+  }
+
   function openScheduleSheet(activeField: 'start' | 'end' = 'start') {
     const draftStart = startDate || todayDateString();
     const draftEnd = endDate || '';
@@ -1388,7 +1438,7 @@ export default function Medication() {
 
   if (loading) {
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Loading medications...</Text>
         </View>
@@ -1406,9 +1456,14 @@ export default function Medication() {
   const calendarDays = buildCalendarDays(calendarMonth);
   const activeDateString = tempActiveDateField === 'start' ? tempStartDate : tempEndDate;
   const activeDateLabel = tempActiveDateField === 'start' ? formatDateDetail(tempStartDate) : (tempEndDate ? formatDateDetail(tempEndDate) : 'No end date');
+  const selectedTime = tempTime || new Date();
+  const selectedHour24 = selectedTime.getHours();
+  const selectedHour12 = selectedHour24 === 0 ? 12 : (selectedHour24 > 12 ? selectedHour24 - 12 : selectedHour24);
+  const selectedMinute = selectedTime.getMinutes();
+  const selectedPeriod = selectedHour24 < 12 ? 'AM' : 'PM';
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <Animated.ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -1679,226 +1734,251 @@ export default function Medication() {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
             <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
               <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
-            <Text style={styles.label}>Name</Text>
-            <View>
-              <TextInput
-                value={name}
-                onChangeText={(text) => {
-                  setName(text);
-                  if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) setSelectedOtcMedicine(null);
-                }}
-                style={styles.input}
-                placeholder="e.g., Vitamin C, Biogesic, Neozep"
-                onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
-              />
+            <View style={styles.formCard}>
+              <Text style={styles.formSectionTitle}>Medicine Details</Text>
+              <Text style={styles.label}>Name</Text>
+              <View>
+                <TextInput
+                  value={name}
+                  onChangeText={(text) => {
+                    setName(text);
+                    if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) setSelectedOtcMedicine(null);
+                  }}
+                  style={styles.input}
+                  placeholder="e.g., Vitamin C, Biogesic, Neozep"
+                  onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
+                />
 
-              {/* Medicine Suggestions in Modal */}
-              {showMedicineSuggestions && medicineSuggestions.length > 0 && (
-                <View style={styles.modalSuggestionsContainer}>
-                  <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
-                    {medicineSuggestions.map((medicine: OtcMedicineSuggestion) => (
-                      <TouchableOpacity
-                        key={String(medicine.id || medicine.name)}
-                        style={styles.modalSuggestionItem}
-                        onPress={() => {
-                          setName(medicine.name);
-                          setSelectedOtcMedicine(medicine);
-                          setDosage(medicine.dosage_text || medicine.dosage || dosage);
-                          setShowMedicineSuggestions(false);
+                {/* Medicine Suggestions in Modal */}
+                {showMedicineSuggestions && medicineSuggestions.length > 0 && (
+                  <View style={styles.modalSuggestionsContainer}>
+                    <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
+                      {medicineSuggestions.map((medicine: OtcMedicineSuggestion) => (
+                        <TouchableOpacity
+                          key={String(medicine.id || medicine.name)}
+                          style={styles.modalSuggestionItem}
+                          onPress={() => {
+                            setName(medicine.name);
+                            setSelectedOtcMedicine(medicine);
+                            setDosage(medicine.dosage_text || medicine.dosage || dosage);
+                            setShowMedicineSuggestions(false);
 
-                          const smartTimes = buildTimesForMedicine(medicine);
-                          if (smartTimes.length > 0) setTimes(smartTimes);
-                        }}
-                      >
-                        <View style={styles.modalSuggestionIcon}>
-                          <Ionicons name="medkit" size={19} color="#FFFFFF" />
-                        </View>
-                        <View style={styles.modalSuggestionContent}>
-                          <Text style={styles.modalSuggestionName}>{medicine.name}</Text>
-                          <Text style={styles.modalSuggestionDetails}>
-                            {[medicine.generic_name || medicine.brand, medicine.category].filter(Boolean).join(' - ')}
-                          </Text>
-                          {(medicine.dosage_text || medicine.dosage) && (
-                            <Text style={styles.modalSuggestionDosage}>Label guidance: {medicine.dosage_text || medicine.dosage}</Text>
-                          )}
-                          <Text style={styles.modalSuggestionSafety}>{medicine.warnings || OTC_SAFETY_COPY}</Text>
-                        </View>
-                        <Ionicons name="add-circle" size={20} color="#1E3A8A" />
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
+                            const smartTimes = buildTimesForMedicine(medicine);
+                            if (smartTimes.length > 0) setTimes(smartTimes);
+                          }}
+                        >
+                          <View style={styles.modalSuggestionIcon}>
+                            <Ionicons name="medkit" size={19} color="#FFFFFF" />
+                          </View>
+                          <View style={styles.modalSuggestionContent}>
+                            <Text style={styles.modalSuggestionName}>{medicine.name}</Text>
+                            <Text style={styles.modalSuggestionDetails}>
+                              {[medicine.generic_name || medicine.brand, medicine.category].filter(Boolean).join(' - ')}
+                            </Text>
+                            {(medicine.dosage_text || medicine.dosage) && (
+                              <Text style={styles.modalSuggestionDosage}>Label guidance: {medicine.dosage_text || medicine.dosage}</Text>
+                            )}
+                            <Text style={styles.modalSuggestionSafety}>{medicine.warnings || OTC_SAFETY_COPY}</Text>
+                          </View>
+                          <Ionicons name="add-circle" size={20} color="#1E3A8A" />
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+
+              {selectedOtcMedicine && (
+                <View style={styles.selectedMedicineCard}>
+                  <View style={styles.selectedMedicineIcon}>
+                    <Ionicons name="medkit-outline" size={16} color="#1E3A8A" />
+                  </View>
+                  <View style={styles.selectedMedicineCopy}>
+                    <Text style={styles.selectedMedicineTitle}>{selectedOtcMedicine.name}</Text>
+                    <Text style={styles.selectedMedicineMeta}>
+                      {[selectedOtcMedicine.generic_name || selectedOtcMedicine.brand, selectedOtcMedicine.category].filter(Boolean).join(' - ') || 'OTC medicine selected'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              <Text style={styles.label}>Dosage</Text>
+              <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" />
+            </View>
+
+            <View style={styles.formCard}>
+              <Text style={styles.formSectionTitle}>Reminder Times</Text>
+              <Text style={styles.label}>Times</Text>
+              <View style={styles.addTimeButtonRow}>
+                <TouchableOpacity
+                  style={styles.addTimeButton}
+                  onPress={()=>{
+                    setPickerIndex(null);
+                    setTempTime(new Date());
+                    setTimeModalVisible(true);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add-circle-outline" size={18} color="#1E3A8A" />
+                  <Text style={styles.addTimeText}>Add time</Text>
+                </TouchableOpacity>
+              </View>
+
+              {times.length === 0 ? (
+                <Text style={styles.emptyTimeHelper}>No reminder times yet. Add at least one time to receive reminders.</Text>
+              ) : (
+                <View style={styles.timeChipGrid}>
+                  {times.map((t, idx) => (
+                    <View key={idx} style={styles.timeRowModal}>
+                      <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
+                      <View style={styles.timeChipActions}>
+                        <TouchableOpacity onPress={() => {
+                          setPickerIndex(idx);
+                          setTempTime(new Date(t));
+                          setTimeModalVisible(true);
+                        }} style={styles.smallBtn}>
+                          <Ionicons name="create" size={16} color="#1E3A8A" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => removeTime(idx)} style={styles.smallBtn}>
+                          <Ionicons name="trash" size={16} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
                 </View>
               )}
             </View>
 
-            <Text style={styles.label}>Dosage</Text>
-            <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" />
-
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={styles.label}>Times</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <TouchableOpacity onPress={()=>{
-                  setPickerIndex(null);
-                  setTempTime(new Date());
-                    setTimeModalVisible(true);
-                }}>
-                  <Text style={styles.addTimeText}>Add time</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => {
-                  // quick add current time
-                  const now = new Date();
-                  const iso = now.toISOString();
-                  if (pickerIndex === null) setTimes((t) => [...t, iso]); else setTimes((t) => t.map((x,i)=> i===pickerIndex ? iso : x));
-                  setPickerIndex(null);
-                }} style={{ marginLeft: 12 }}>
-                  <Text style={[styles.addTimeText, { fontWeight: '700' }]}>Now</Text>
+            <View style={styles.formCard}>
+              <Text style={styles.formSectionTitle}>Reminder Schedule</Text>
+              <View style={styles.rowBetween}>
+                <Text style={styles.label}>Reminder</Text>
+                <TouchableOpacity onPress={() => setReminder(r => !r)} style={[styles.toggle, reminder && styles.toggleOn]}>
+                  <View style={[styles.toggleKnob, reminder && { transform: [{ translateX: 16 }] }]} />
                 </TouchableOpacity>
               </View>
-            </View>
 
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {times.map((t, idx) => (
-                <View key={idx} style={styles.timeRowModal}>
-                  <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
-                  <View style={{ flexDirection: 'row' }}>
-                     <TouchableOpacity onPress={() => {
-                       setPickerIndex(idx);
-                       setTempTime(new Date(t));
-                       setTimeModalVisible(true);
-                     }} style={styles.smallBtn}>
-                      <Ionicons name="create" size={16} color="#1E3A8A" />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeTime(idx)} style={styles.smallBtn}>
-                      <Ionicons name="trash" size={16} color="#EF4444" />
-                    </TouchableOpacity>
+              {/* Advanced Scheduling */}
+              <Text style={styles.label}>Schedule</Text>
+              <Text style={styles.scheduleHelperText}>Choose when reminders start and optionally end.</Text>
+
+              <TouchableOpacity style={styles.scheduleCard} onPress={() => openScheduleSheet('start')} activeOpacity={0.85}>
+              <View style={styles.scheduleRow}>
+                 <TouchableOpacity
+                   style={styles.dateButton}
+                   onPress={() => openScheduleSheet('start')}
+                   activeOpacity={0.7}
+                 >
+                   <View style={styles.dateButtonIcon}>
+                     <Ionicons name="calendar" size={15} color="#1E3A8A" />
+                   </View>
+                   <View style={styles.dateButtonCopy}>
+                     <Text style={styles.dateButtonLabel}>Start</Text>
+                     <Text style={styles.dateButtonText}>{formatDateLabel(startDate)}</Text>
+                   </View>
+                   <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                 </TouchableOpacity>
+
+                 <TouchableOpacity
+                   style={styles.dateButton}
+                   onPress={() => openScheduleSheet('end')}
+                   activeOpacity={0.7}
+                 >
+                   <View style={styles.dateButtonIcon}>
+                     <Ionicons name="calendar-clear" size={15} color="#1E3A8A" />
+                   </View>
+                   <View style={styles.dateButtonCopy}>
+                     <Text style={styles.dateButtonLabel}>End</Text>
+                     <Text style={styles.dateButtonText}>{endDate ? formatDateLabel(endDate) : 'No end date'}</Text>
+                   </View>
+                   <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+                 </TouchableOpacity>
+              </View>
+              </TouchableOpacity>
+
+              <Text style={styles.label}>Frequency</Text>
+              <View style={styles.frequencyContainer}>
+                {['daily', 'weekly', 'monthly', 'custom'].map((freq) => (
+                  <TouchableOpacity
+                    key={freq}
+                    style={[
+                      styles.frequencyButton,
+                      frequency === freq && styles.frequencyButtonActive
+                    ]}
+                    onPress={() => setFrequency(freq as any)}
+                  >
+                    <Text style={[
+                      styles.frequencyButtonText,
+                      frequency === freq && styles.frequencyButtonTextActive
+                    ]}>
+                      {freq.charAt(0).toUpperCase() + freq.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {frequency === 'weekly' && (
+                <View style={styles.daysContainer}>
+                  <Text style={styles.label}>Days of Week</Text>
+                  <View style={styles.daysRow}>
+                    {[0, 1, 2, 3, 4, 5, 6].map((day) => (
+                      <TouchableOpacity
+                        key={day}
+                        style={[
+                          styles.dayButton,
+                          daysOfWeek.includes(day) && styles.dayButtonActive
+                        ]}
+                        onPress={() => toggleDayOfWeek(day)}
+                      >
+                        <Text style={[
+                          styles.dayButtonText,
+                          daysOfWeek.includes(day) && styles.dayButtonTextActive
+                        ]}>
+                          {getDayName(day)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
                   </View>
                 </View>
-              ))}
+              )}
             </View>
 
-            <View style={styles.rowBetween}>
-              <Text style={styles.label}>Reminder</Text>
-              <TouchableOpacity onPress={() => setReminder(r => !r)} style={[styles.toggle, reminder && styles.toggleOn]}>
-                <View style={[styles.toggleKnob, reminder && { transform: [{ translateX: 16 }] }]} />
-              </TouchableOpacity>
-            </View>
+            <View style={styles.formCard}>
+              <Text style={styles.formSectionTitle}>Additional Details</Text>
+              <Text style={styles.label}>Notes</Text>
+              <TextInput
+                value={notes}
+                onChangeText={setNotes}
+                style={[styles.input, styles.notesInput]}
+                placeholder="Add notes about this medication..."
+                multiline
+                numberOfLines={3}
+              />
 
-            {/* Advanced Scheduling */}
-            <Text style={styles.label}>Schedule</Text>
-
-            <TouchableOpacity style={styles.scheduleCard} onPress={() => openScheduleSheet('start')} activeOpacity={0.85}>
-            <View style={styles.scheduleRow}>
-               <TouchableOpacity
-                 style={styles.dateButton}
-                 onPress={() => openScheduleSheet('start')}
-                 activeOpacity={0.7}
-               >
-                 <View style={styles.dateButtonIcon}>
-                   <Ionicons name="calendar" size={15} color="#1E3A8A" />
-                 </View>
-                 <View style={styles.dateButtonCopy}>
-                   <Text style={styles.dateButtonLabel}>Start</Text>
-                   <Text style={styles.dateButtonText}>{formatDateLabel(startDate)}</Text>
-                 </View>
-                 <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-               </TouchableOpacity>
-
-               <TouchableOpacity
-                 style={styles.dateButton}
-                 onPress={() => openScheduleSheet('end')}
-                 activeOpacity={0.7}
-               >
-                 <View style={styles.dateButtonIcon}>
-                   <Ionicons name="calendar-clear" size={15} color="#1E3A8A" />
-                 </View>
-                 <View style={styles.dateButtonCopy}>
-                   <Text style={styles.dateButtonLabel}>End</Text>
-                   <Text style={styles.dateButtonText}>{endDate ? formatDateLabel(endDate) : 'No end date'}</Text>
-                 </View>
-                 <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-               </TouchableOpacity>
-            </View>
-            </TouchableOpacity>
-
-            <Text style={styles.label}>Frequency</Text>
-            <View style={styles.frequencyContainer}>
-              {['daily', 'weekly', 'monthly', 'custom'].map((freq) => (
-                <TouchableOpacity
-                  key={freq}
-                  style={[
-                    styles.frequencyButton,
-                    frequency === freq && styles.frequencyButtonActive
-                  ]}
-                  onPress={() => setFrequency(freq as any)}
-                >
-                  <Text style={[
-                    styles.frequencyButtonText,
-                    frequency === freq && styles.frequencyButtonTextActive
-                  ]}>
-                    {freq.charAt(0).toUpperCase() + freq.slice(1)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {frequency === 'weekly' && (
-              <View style={styles.daysContainer}>
-                <Text style={styles.label}>Days of Week</Text>
-                <View style={styles.daysRow}>
-                  {[0, 1, 2, 3, 4, 5, 6].map((day) => (
-                    <TouchableOpacity
-                      key={day}
-                      style={[
-                        styles.dayButton,
-                        daysOfWeek.includes(day) && styles.dayButtonActive
-                      ]}
-                      onPress={() => toggleDayOfWeek(day)}
-                    >
-                      <Text style={[
-                        styles.dayButtonText,
-                        daysOfWeek.includes(day) && styles.dayButtonTextActive
-                      ]}>
-                        {getDayName(day)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+              <Text style={styles.label}>Color</Text>
+              <View style={styles.colorContainer}>
+                {['#1E3A8A', '#DC2626', '#059669', '#D97706', '#7C3AED', '#DB2777'].map((colorOption) => (
+                  <TouchableOpacity
+                    key={colorOption}
+                    style={[
+                      styles.colorButton,
+                      { backgroundColor: colorOption },
+                      color === colorOption && styles.colorButtonActive
+                    ]}
+                    onPress={() => {
+                      console.log('Color button pressed:', colorOption);
+                      setColor(colorOption);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    {color === colorOption && (
+                      <View style={styles.colorCheck}>
+                        <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                ))}
               </View>
-            )}
-
-            <Text style={styles.label}>Notes</Text>
-            <TextInput
-              value={notes}
-              onChangeText={setNotes}
-              style={[styles.input, styles.notesInput]}
-              placeholder="Add notes about this medication..."
-              multiline
-              numberOfLines={3}
-            />
-
-            <Text style={styles.label}>Color</Text>
-            <View style={styles.colorContainer}>
-              {['#1E3A8A', '#DC2626', '#059669', '#D97706', '#7C3AED', '#DB2777'].map((colorOption) => (
-                <TouchableOpacity
-                  key={colorOption}
-                  style={[
-                    styles.colorButton,
-                    { backgroundColor: colorOption },
-                    color === colorOption && styles.colorButtonActive
-                  ]}
-                  onPress={() => {
-                    console.log('Color button pressed:', colorOption);
-                    setColor(colorOption);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  {color === colorOption && (
-                    <View style={styles.colorCheck}>
-                      <Ionicons name="checkmark" size={16} color="#FFFFFF" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-              ))}
             </View>
 
             <TouchableOpacity onPress={saveMedication} style={styles.saveBtn}>
@@ -1914,36 +1994,40 @@ export default function Medication() {
                <TouchableWithoutFeedback onPress={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
                 <View style={styles.timeModalBackdrop} />
               </TouchableWithoutFeedback>
-              <Animated.View style={[styles.timeModalContent, { opacity: MODAL_ANIM, transform: [{ translateY: MODAL_ANIM.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }]}>
+              <Animated.View style={[styles.timeModalContent, { marginBottom: Math.max(insets.bottom, 12), opacity: MODAL_ANIM, transform: [{ translateY: MODAL_ANIM.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }] }]}>
                 <Text style={styles.timeModalTitle}>Select time</Text>
+                <View style={styles.timePreviewPill}>
+                  <Text style={styles.timePreviewLabel}>Selected time</Text>
+                  <Text style={styles.timeModalPreview}>{formatReminderTime(selectedTime)}</Text>
+                </View>
                  <View style={styles.timePickerContainer}>
                    {/* Hour Picker (1-12) */}
                    <View style={styles.timePickerColumn}>
                      <Text style={styles.timePickerLabel}>Hour</Text>
-                     <ScrollView style={styles.timePickerScroll} showsVerticalScrollIndicator={false}>
+                     <ScrollView
+                       style={styles.timePickerScroll}
+                       contentContainerStyle={styles.timePickerScrollContent}
+                       contentOffset={{ x: 0, y: Math.max((selectedHour12 - 3) * 42, 0) }}
+                       showsVerticalScrollIndicator={false}
+                     >
                        {Array.from({ length: 12 }, (_, i) => {
                          const hour = i + 1; // 1-12
-                         const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
-                         const currentHour12 = currentHour24 === 0 ? 12 : (currentHour24 > 12 ? currentHour24 - 12 : currentHour24);
                          return (
                            <TouchableOpacity
                              key={hour}
-                             style={[styles.timePickerOption, currentHour12 === hour && styles.timePickerOptionSelected]}
+                             style={[styles.timePickerOption, selectedHour12 === hour && styles.timePickerOptionSelected]}
                              onPress={() => {
-                               const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
-                               const isAM = currentHour24 < 12;
+                               const isAM = selectedHour24 < 12;
                                let newHour24;
                                if (hour === 12) {
                                  newHour24 = isAM ? 0 : 12; // 12 AM = 0, 12 PM = 12
                                } else {
                                  newHour24 = isAM ? hour : hour + 12; // AM = same, PM = +12
                                }
-                               const now = new Date();
-                               const newTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), newHour24, 0);
-                               setTempTime(newTime);
+                               setTempTimeParts({ hour24: newHour24 });
                              }}
                            >
-                             <Text style={[styles.timePickerOptionText, currentHour12 === hour && styles.timePickerOptionTextSelected]}>
+                             <Text style={[styles.timePickerOptionText, selectedHour12 === hour && styles.timePickerOptionTextSelected]}>
                                {hour}
                              </Text>
                            </TouchableOpacity>
@@ -1952,30 +2036,52 @@ export default function Medication() {
                         </ScrollView>
                       </View>
 
+                   {/* Minute Picker */}
+                   <View style={styles.timePickerColumn}>
+                     <Text style={styles.timePickerLabel}>Minute</Text>
+                     <ScrollView
+                       style={styles.timePickerScroll}
+                       contentContainerStyle={styles.timePickerScrollContent}
+                       contentOffset={{ x: 0, y: Math.max((selectedMinute - 2) * 42, 0) }}
+                       showsVerticalScrollIndicator={false}
+                     >
+                       {Array.from({ length: 60 }, (_, minute) => (
+                         <TouchableOpacity
+                           key={minute}
+                           style={[styles.timePickerOption, selectedMinute === minute && styles.timePickerOptionSelected]}
+                           onPress={() => setTempTimeParts({ minute })}
+                         >
+                           <Text style={[styles.timePickerOptionText, selectedMinute === minute && styles.timePickerOptionTextSelected]}>
+                             {`${minute}`.padStart(2, '0')}
+                           </Text>
+                         </TouchableOpacity>
+                       ))}
+                     </ScrollView>
+                   </View>
+
                    {/* AM/PM Picker */}
                    <View style={styles.timePickerColumn}>
-                     <Text style={styles.timePickerLabel}>Period</Text>
-                     <ScrollView style={styles.timePickerScroll} showsVerticalScrollIndicator={false}>
+                     <Text style={styles.timePickerLabel}>AM/PM</Text>
+                     <ScrollView
+                       style={styles.timePickerScroll}
+                       contentContainerStyle={styles.timePickerScrollContent}
+                       contentOffset={{ x: 0, y: selectedPeriod === 'PM' ? 18 : 0 }}
+                       showsVerticalScrollIndicator={false}
+                     >
                        {['AM', 'PM'].map((period) => {
-                         const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
-                         const isAM = currentHour24 < 12;
-                         const isSelected = (period === 'AM' && isAM) || (period === 'PM' && !isAM);
+                         const isSelected = selectedPeriod === period;
                          return (
                            <TouchableOpacity
                              key={period}
                              style={[styles.timePickerOption, isSelected && styles.timePickerOptionSelected]}
                              onPress={() => {
-                               const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
-                               const currentHour12 = currentHour24 === 0 ? 12 : (currentHour24 > 12 ? currentHour24 - 12 : currentHour24);
                                let newHour24;
-                               if (currentHour12 === 12) {
+                               if (selectedHour12 === 12) {
                                  newHour24 = period === 'AM' ? 0 : 12; // 12 AM = 0, 12 PM = 12
                                } else {
-                                 newHour24 = period === 'AM' ? currentHour12 : currentHour12 + 12; // AM = same, PM = +12
+                                 newHour24 = period === 'AM' ? selectedHour12 : selectedHour12 + 12; // AM = same, PM = +12
                                }
-                               const now = new Date();
-                               const newTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), newHour24, 0);
-                               setTempTime(newTime);
+                               setTempTimeParts({ hour24: newHour24 });
                              }}
                            >
                              <Text style={[styles.timePickerOptionText, isSelected && styles.timePickerOptionTextSelected]}>
@@ -1987,22 +2093,14 @@ export default function Medication() {
                         </ScrollView>
                       </View>
                             </View>
-                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
-                   <TouchableOpacity style={[styles.secondaryBtn, { marginRight: 8 }]} onPress={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
-                        <Text style={styles.secondaryBtnText}>Cancel</Text>
+                 <View style={styles.timeModalActions}>
+                   <TouchableOpacity style={styles.timeCancelButton} onPress={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
+                        <Text style={styles.timeCancelButtonText}>Cancel</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity style={styles.primarySmallBtn} onPress={() => {
-                     if (tempTime) {
-                       if (pickerIndex === null) {
-                         setTimes((t) => [...t, tempTime.toISOString()]);
-                       } else {
-                         setTimes((t) => t.map((x,i)=> i===pickerIndex ? tempTime.toISOString() : x));
-                        setPickerIndex(null);
-                       }
-                     }
-                     setTimeModalVisible(false);
+                      <TouchableOpacity style={styles.timeAddButton} onPress={() => {
+                     if (addOrUpdateReminderTime(selectedTime)) setTimeModalVisible(false);
                       }}>
-                        <Text style={styles.primarySmallBtnText}>Add</Text>
+                        <Text style={styles.timeAddButtonText}>Add</Text>
                       </TouchableOpacity>
                     </View>
                 </Animated.View>
@@ -2333,23 +2431,24 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 104 },
 
   // Header
-  headerSection: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 14, backgroundColor: '#F8FAFC', zIndex: 10 },
+  headerSection: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 10, backgroundColor: '#F8FAFC', zIndex: 10, borderBottomWidth: 1, borderBottomColor: 'transparent' },
   headerSectionElevated: {
     shadowColor: '#1E3A8A',
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: '#DBEAFE',
+    backgroundColor: '#FFFFFF',
+    borderBottomColor: '#E2E8F0',
   },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerTitle: { fontSize: 22, fontWeight: '900', color: '#0F172A' },
-  headerSubtitle: { fontSize: 12, color: '#64748B', marginTop: 4, lineHeight: 17, fontWeight: '700' },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#0F172A' },
+  headerSubtitle: { fontSize: 12, color: '#64748B', marginTop: 2, lineHeight: 17, fontWeight: '700' },
   exportButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#EFF6FF',
     paddingHorizontal: 10,
+    minHeight: 38,
     paddingVertical: 7,
     borderRadius: 999,
     gap: 5,
@@ -2678,7 +2777,7 @@ const styles = StyleSheet.create({
   },
   modalClose: { padding: 8, backgroundColor: '#EFF6FF', borderRadius: 999 },
   modalTitle: { fontSize: 18, fontWeight: '900', color: '#0F172A' },
-  modalBody: { padding: 20, paddingBottom: 34 },
+  modalBody: { padding: 16, paddingBottom: 48 },
 
   // Bottom Sheets
   sheetWrapper: { flex: 1, justifyContent: 'flex-end' },
@@ -2795,6 +2894,20 @@ const styles = StyleSheet.create({
   statsEmptyText: { marginTop: 8, color: '#64748B', fontSize: 12, fontWeight: '800' },
 
   // Form Elements
+  formCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    padding: 14,
+    marginBottom: 14,
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  formSectionTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A', marginBottom: 2 },
   label: { fontSize: 12, fontWeight: '900', color: '#475569', marginBottom: 7, marginTop: 14, textTransform: 'uppercase' },
   input: {
     backgroundColor: '#FFFFFF',
@@ -2813,9 +2926,67 @@ const styles = StyleSheet.create({
     fontWeight: '600'
   },
   notesInput: { height: 78, textAlignVertical: 'top' },
+  selectedMedicineCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    padding: 10,
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  selectedMedicineIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 9,
+  },
+  selectedMedicineCopy: { flex: 1, minWidth: 0 },
+  selectedMedicineTitle: { fontSize: 13, fontWeight: '900', color: '#0F172A' },
+  selectedMedicineMeta: { fontSize: 11, fontWeight: '700', color: '#64748B', marginTop: 2 },
 
   // Time Management
-  addTimeText: { color: '#1E3A8A', fontWeight: '900', fontSize: 13 },
+  timesHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  addTimeButtonRow: { alignItems: 'center', marginTop: 2, marginBottom: 12 },
+  addTimeButton: {
+    minWidth: 178,
+    minHeight: 46,
+    borderRadius: 16,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  addTimeText: { color: '#1E3A8A', fontWeight: '900', fontSize: 14 },
+  emptyTimeHelper: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    textAlign: 'center',
+  },
+  timeChipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   timeRowModal: {
     backgroundColor: '#FFFFFF',
     paddingVertical: 9,
@@ -2835,10 +3006,11 @@ const styles = StyleSheet.create({
     elevation: 1
   },
   timeTextModal: { fontWeight: '900', color: '#0F172A', fontSize: 14 },
+  timeChipActions: { flexDirection: 'row', marginLeft: 4 },
   smallBtn: { marginLeft: 6, padding: 7, borderRadius: 8, backgroundColor: '#EFF6FF' },
 
   // Toggle
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 12, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#DBEAFE', paddingHorizontal: 12, paddingVertical: 10 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 10, backgroundColor: '#F8FAFC', borderRadius: 14, borderWidth: 1, borderColor: '#DBEAFE', paddingHorizontal: 12, paddingVertical: 10 },
   toggle: { width: 50, height: 30, borderRadius: 15, backgroundColor: '#E5E7EB', justifyContent: 'center', padding: 3 },
   toggleOn: { backgroundColor: '#2563EB' },
   toggleKnob: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'white', transform: [{ translateX: 0 }] },
@@ -2852,6 +3024,7 @@ const styles = StyleSheet.create({
     padding: 0,
     marginBottom: 12,
   },
+  scheduleHelperText: { color: '#64748B', fontSize: 12, fontWeight: '700', lineHeight: 17, marginTop: -2, marginBottom: 10 },
   scheduleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   dateButton: {
     flex: 1,
@@ -3027,20 +3200,40 @@ const styles = StyleSheet.create({
   timeModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.42)' },
   timeModalContent: {
     backgroundColor: '#FFFFFF',
-    marginHorizontal: 24,
-    borderRadius: 20,
-    padding: 18,
+    marginHorizontal: 16,
+    borderRadius: 26,
+    paddingHorizontal: 16,
+    paddingTop: 20,
+    paddingBottom: 16,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowRadius: 14,
-    elevation: 12
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 14
   },
-  timeModalTitle: { fontSize: 18, fontWeight: '900', color: '#0F172A', marginBottom: 8 },
-  timeModalPreview: { fontSize: 24, fontWeight: '900', color: '#1E3A8A', marginBottom: 16 },
-  timeModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  timeModalTitle: { fontSize: 19, fontWeight: '900', color: '#0F172A', marginBottom: 12 },
+  timePreviewLabel: { fontSize: 10, fontWeight: '900', color: '#64748B', textTransform: 'uppercase', marginBottom: 3, letterSpacing: 0 },
+  timePreviewPill: {
+    minWidth: 126,
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    marginBottom: 16,
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  timeModalPreview: { fontSize: 25, fontWeight: '900', color: '#1E3A8A' },
+  timeModalWrapper: { flex: 1, justifyContent: 'flex-end', alignItems: 'stretch' },
 
   // Wheel Picker
   pickerLabel: {
@@ -3258,20 +3451,28 @@ const styles = StyleSheet.create({
   timePickerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
-    height: 210,
-    gap: 10
+    width: '100%',
+    marginBottom: 16,
+    height: 244,
+    gap: 8
   },
   timePickerColumn: {
     flex: 1,
     backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    padding: 8,
+    borderRadius: 18,
+    paddingHorizontal: 7,
+    paddingTop: 10,
+    paddingBottom: 8,
     borderWidth: 1,
-    borderColor: '#DBEAFE'
+    borderColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
   },
   timePickerLabel: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '900',
     color: '#475569',
     textAlign: 'center',
@@ -3279,26 +3480,66 @@ const styles = StyleSheet.create({
   },
   timePickerScroll: {
     flex: 1,
-    maxHeight: 160
+    maxHeight: 190
+  },
+  timePickerScrollContent: {
+    paddingVertical: 3,
   },
   timePickerOption: {
-    paddingVertical: 9,
-    paddingHorizontal: 4,
-    borderRadius: 10,
+    minHeight: 38,
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    borderRadius: 13,
     marginVertical: 2,
-    alignItems: 'center'
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   timePickerOptionSelected: {
-    backgroundColor: '#2563EB'
+    backgroundColor: '#2563EB',
+    shadowColor: '#2563EB',
+    shadowOpacity: 0.2,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
   timePickerOptionText: {
     fontSize: 14,
-    color: '#334155',
+    color: '#64748B',
     fontWeight: '800'
   },
   timePickerOptionTextSelected: {
     color: 'white',
-    fontWeight: '700'
+    fontWeight: '900'
+  },
+  timeModalActions: { flexDirection: 'row', alignItems: 'center', marginTop: 2, width: '100%', gap: 10 },
+  timeCancelButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeCancelButtonText: { color: '#334155', fontWeight: '900', fontSize: 13 },
+  timeAddButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 15,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  timeAddButtonText: {
+    color: 'white',
+    fontWeight: '900',
+    fontSize: 13,
   },
   dateInput: {
     backgroundColor: 'white',

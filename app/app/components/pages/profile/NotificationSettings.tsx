@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { notificationService } from '../../../../services/notificationService';
+import { get, post } from '../../../api';
 
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
 
@@ -21,8 +23,13 @@ const DEFAULT_PREFS: NotificationPrefs = {
 
 export default function NotificationSettings() {
   const insets = useSafeAreaInsets();
+  const { token } = useLocalSearchParams();
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
   const [loading, setLoading] = useState(true);
+  const [notificationRecordCount, setNotificationRecordCount] = useState<number | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [clearModalVisible, setClearModalVisible] = useState(false);
+  const [noticeModal, setNoticeModal] = useState<{ title: string; message: string } | null>(null);
 
   useEffect(() => {
     loadSettings();
@@ -41,6 +48,23 @@ export default function NotificationSettings() {
       setLoading(false);
     }
   };
+
+  const loadNotificationStats = useCallback(async () => {
+    if (!token) return;
+    try {
+      const stats = await get('/notifications/stats', token as string, 3000);
+      const byType = stats?.by_type ?? {};
+      const total = Number(byType.hydration ?? 0) + Number(byType.medication ?? 0) + Number(byType.general ?? 0);
+      setNotificationRecordCount(Number.isFinite(total) ? total : null);
+    } catch (error) {
+      console.log('Notification record stats load error:', error);
+      setNotificationRecordCount(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    loadNotificationStats();
+  }, [loadNotificationStats]);
 
   const persist = async (next: NotificationPrefs) => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -74,6 +98,49 @@ export default function NotificationSettings() {
 
   const reminderDisabled = !prefs.allowNotifications;
 
+  const markAllAsRead = async () => {
+    if (!token || actionBusy) return;
+    setActionBusy(true);
+    try {
+      await post('/notifications/mark-all-read', {}, token as string);
+      await loadNotificationStats();
+      setNoticeModal({
+        title: 'All caught up',
+        message: 'Unread notification records were marked as read.',
+      });
+    } catch (error) {
+      console.log('Mark all notifications read error:', error);
+      setNoticeModal({
+        title: 'Could not update',
+        message: 'Notification records could not be marked read. Please try again.',
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const clearNotifications = async () => {
+    if (!token || actionBusy) return;
+    setActionBusy(true);
+    try {
+      await post('/notifications/clear', {}, token as string);
+      setClearModalVisible(false);
+      await loadNotificationStats();
+      setNoticeModal({
+        title: 'Notifications cleared',
+        message: 'Only notification records were cleared. Beverage logs and medication history remain.',
+      });
+    } catch (error) {
+      console.log('Clear notifications error:', error);
+      setNoticeModal({
+        title: 'Could not clear',
+        message: 'Notification records could not be cleared. Please try again.',
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
@@ -87,7 +154,7 @@ export default function NotificationSettings() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View style={styles.headerText}>
           <Text style={styles.title}>Notifications</Text>
           <Text style={styles.subtitle}>Manage reminders for hydration and medication schedules.</Text>
@@ -152,7 +219,79 @@ export default function NotificationSettings() {
             Preferences are saved on this device. Actual reminder scheduling depends on the existing reminder system.
           </Text>
         </View>
+
+        <Text style={styles.sectionTitle}>Notification Records</Text>
+        <View style={styles.card}>
+          {notificationRecordCount === 0 ? (
+            <View style={styles.recordEmptyRow}>
+              <Ionicons name="notifications-off-outline" size={20} color="#94A3B8" />
+              <Text style={styles.recordEmptyText}>No notification records to manage.</Text>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={[styles.recordActionRow, actionBusy && styles.disabledRow]}
+                onPress={markAllAsRead}
+                disabled={actionBusy || !token}
+                activeOpacity={0.82}
+              >
+                <View style={styles.recordActionIcon}>
+                  <Ionicons name="checkmark-done" size={20} color="#059669" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Mark all read</Text>
+                  <Text style={styles.settingDescription}>Clear unread state on notification records.</Text>
+                </View>
+              </TouchableOpacity>
+              <View style={styles.divider} />
+              <TouchableOpacity
+                style={[styles.recordActionRow, actionBusy && styles.disabledRow]}
+                onPress={() => setClearModalVisible(true)}
+                disabled={actionBusy || !token}
+                activeOpacity={0.82}
+              >
+                <View style={[styles.recordActionIcon, styles.dangerActionIcon]}>
+                  <Ionicons name="trash-outline" size={20} color="#DC2626" />
+                </View>
+                <View style={styles.settingContent}>
+                  <Text style={styles.settingTitle}>Clear notifications</Text>
+                  <Text style={styles.settingDescription}>Hide notification records from the Notifications list.</Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+        <Text style={styles.recordHelper}>Only notification records are affected. Beverage logs and medication history remain.</Text>
       </ScrollView>
+
+      <Modal visible={clearModalVisible} transparent animationType="fade" onRequestClose={() => setClearModalVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.detailModal}>
+            <Text style={styles.modalTitle}>Clear notifications?</Text>
+            <Text style={styles.modalMessage}>This removes notification records from this list. Beverage logs and medication history will remain.</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.cancelButton} onPress={() => setClearModalVisible(false)}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.clearButton} onPress={clearNotifications} disabled={actionBusy}>
+                <Text style={styles.clearButtonText}>{actionBusy ? 'Clearing...' : 'Clear'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={Boolean(noticeModal)} transparent animationType="fade" onRequestClose={() => setNoticeModal(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.detailModal}>
+            <Text style={styles.modalTitle}>{noticeModal?.title}</Text>
+            <Text style={styles.modalMessage}>{noticeModal?.message}</Text>
+            <TouchableOpacity style={styles.primaryModalButton} onPress={() => setNoticeModal(null)}>
+              <Text style={styles.primaryModalText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -202,7 +341,7 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: 20,
-    paddingTop: 18,
+    paddingTop: 14,
     paddingBottom: 56,
   },
   loadingContainer: {
@@ -218,38 +357,40 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 20,
-    paddingBottom: 14,
+    paddingBottom: 10,
     backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: 'transparent',
   },
   headerText: {
     flex: 1,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '900',
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: '800',
     color: '#0F172A',
   },
   subtitle: {
-    marginTop: 4,
-    fontSize: 13,
-    lineHeight: 18,
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
     color: '#64748B',
     fontWeight: '600',
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: '900',
     color: '#0F172A',
-    marginTop: 22,
-    marginBottom: 10,
+    marginTop: 18,
+    marginBottom: 8,
   },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     overflow: 'hidden',
@@ -262,17 +403,17 @@ const styles = StyleSheet.create({
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 15,
-    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 10,
   },
   disabledRow: {
     opacity: 0.72,
   },
   settingIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#EFF6FF',
@@ -282,14 +423,15 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   settingTitle: {
-    fontSize: 15,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: '900',
     color: '#0F172A',
     marginBottom: 3,
   },
   settingDescription: {
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 12,
+    lineHeight: 17,
     color: '#64748B',
     fontWeight: '600',
   },
@@ -299,24 +441,126 @@ const styles = StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: '#E2E8F0',
-    marginLeft: 70,
+    marginLeft: 62,
   },
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
     backgroundColor: '#EFF6FF',
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#DBEAFE',
-    padding: 14,
-    marginTop: 22,
+    padding: 12,
+    marginTop: 18,
   },
   infoText: {
     flex: 1,
     color: '#1E40AF',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  recordActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 10,
+  },
+  recordActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ECFDF5',
+  },
+  dangerActionIcon: {
+    backgroundColor: '#FEF2F2',
+  },
+  recordEmptyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  recordEmptyText: {
+    flex: 1,
+    color: '#64748B',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+  },
+  recordHelper: {
+    color: '#64748B',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
+    marginTop: 7,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'flex-end',
+    padding: 16,
+  },
+  detailModal: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 16,
+  },
+  modalTitle: {
+    color: '#0F172A',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '900',
+  },
+  modalMessage: {
+    color: '#334155',
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: '700',
+    marginTop: 8,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 18,
+  },
+  cancelButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+  },
+  cancelText: {
+    color: '#334155',
+    fontWeight: '900',
+  },
+  clearButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: '#DC2626',
+  },
+  clearButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+  },
+  primaryModalButton: {
+    alignSelf: 'flex-end',
+    marginTop: 18,
+    backgroundColor: '#2563EB',
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+  },
+  primaryModalText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
   },
 });

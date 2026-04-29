@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Platform, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, usePathname, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,6 +29,24 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
 
   const activeTab = getActiveTab();
 
+  const bottomPadding =
+    Platform.OS === 'ios'
+      ? Math.min(Math.max(insets.bottom, 8), 18)
+      : Math.min(Math.max(insets.bottom, 4), 10);
+
+  const getIconName = (key: string, isActive: boolean) => {
+    const icons: Record<string, { active: string; inactive: string }> = {
+      home: { active: 'home', inactive: 'home-outline' },
+      hydration: { active: 'water', inactive: 'water-outline' },
+      medication: { active: 'medkit', inactive: 'medkit-outline' },
+      notification: { active: 'notifications', inactive: 'notifications-outline' },
+      profile: { active: 'person', inactive: 'person-outline' },
+    };
+
+    const icon = icons[key] ?? icons.home;
+    return isActive ? icon.active : icon.inactive;
+  };
+
   const navigationItems = [
     { 
       key: 'home', 
@@ -50,8 +68,8 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     },
     { 
       key: 'notification', 
-      icon: 'pulse', // UPDATED: Changed to 'pulse' (Activity Line)
-      label: 'Activity',
+      icon: 'notifications',
+      label: 'Alerts',
       route: '/components/pages/notification/Notification'
     },
     { 
@@ -64,8 +82,6 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
 
   const handleNavigation = (item: typeof navigationItems[0]) => {
     try {
-      console.log('BottomNavigation: token=', token);
-      console.log('BottomNavigation: navigating to', item.route);
       if (item.key === 'home') {
         router.push({ pathname: item.route, params: { token } } as any);
       } else {
@@ -78,7 +94,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
 
   return (
     // allow touches to pass through areas not occupied by the nav
-    <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 6) }]} pointerEvents="box-none">
+    <View style={[styles.bottomNav, { paddingBottom: bottomPadding }]} pointerEvents="box-none">
       {navigationItems.map((item) => (
         <TouchableOpacity
           key={item.key}
@@ -87,9 +103,9 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
           activeOpacity={0.82}
         >
           <Ionicons
-            name={item.icon as any}
-            size={activeTab === item.key ? 20 : 18}
-            color={activeTab === item.key ? '#FFFFFF' : '#CBD5F5'}
+            name={getIconName(item.key, activeTab === item.key) as any}
+            size={activeTab === item.key ? 22 : 21}
+            color={activeTab === item.key ? '#FFFFFF' : '#A0B4E0'}
           />
           <Text style={[
             styles.navLabel,
@@ -108,10 +124,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1E3A8A',
-    paddingTop: 6,
-    paddingHorizontal: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#DBEAFE',
+    paddingTop: 8,
+    paddingHorizontal: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255,255,255,0.08)',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     position: 'absolute',
@@ -128,25 +144,31 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 38,
-    paddingVertical: 4,
-    paddingHorizontal: 2,
-    borderRadius: 12,
+    minHeight: 48,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRadius: 24,
   },
   activeNavItem: {
-    backgroundColor: '#3B82F6',
+    backgroundColor: '#2563EB',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
   },
   navLabel: {
     fontSize: 10,
-    color: '#E0E7FF',
+    color: '#A0B4E0',
     marginTop: 2,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   activeNavLabel: {
     color: '#FFFFFF',
-    fontWeight: '900',
+    fontWeight: '800',
   },
 });
 

@@ -59,7 +59,7 @@ export default function PrivacySecurity() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View style={styles.headerCopy}>
           <Text style={styles.title}>Privacy & Security</Text>
           <Text style={styles.subtitle}>Manage account security and privacy information.</Text>
@@ -212,27 +212,27 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     paddingHorizontal: 20,
-    paddingBottom: 22,
+    paddingBottom: 10,
     backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: 'transparent',
   },
   headerCopy: {
     flex: 1,
   },
   title: {
-    fontSize: 24,
-    fontWeight: '900',
+    fontSize: 22,
+    fontWeight: '800',
     color: '#0F172A',
   },
   subtitle: {
-    marginTop: 4,
+    marginTop: 2,
     color: '#64748B',
-    fontWeight: '600',
-    fontSize: 13,
-    lineHeight: 18,
+    fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 17,
   },
   sectionTitle: {
     fontSize: 16,

@@ -22,7 +22,7 @@ Route::get('medicines/{id}', [OtcMedicineController::class, 'show']);
 // Admin endpoints (no auth required for admin panel)
 Route::get('hydration/stats', [App\Http\Controllers\HydrationController::class, 'stats']);
 Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getAdminStats']);
-Route::get('notifications/stats', [App\Http\Controllers\NotificationController::class, 'getAdminStats']);
+Route::get('admin/notifications/stats', [App\Http\Controllers\NotificationController::class, 'getAdminStats']);
 Route::get('admin/dashboard-stats', [App\Http\Controllers\AdminController::class, 'getDashboardStats']);
 
 // simple token guard middleware inline: expects header 'Authorization: Bearer {token}'
@@ -68,6 +68,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
 
     // Notification endpoints
     Route::get('notifications', [App\Http\Controllers\NotificationController::class, 'index']);
+    Route::get('notifications/stats', [App\Http\Controllers\NotificationController::class, 'getStats']);
     Route::get('notifications/today-timeline', [App\Http\Controllers\NotificationController::class, 'getTodayTimeline']);
     Route::post('notifications', [App\Http\Controllers\NotificationController::class, 'store']);
     Route::post('notifications/mark-all-read', [App\Http\Controllers\NotificationController::class, 'markAllAsRead']);
