@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import EditProfileModal from './EditProfileModal';
 import ProfileInfoList from './ProfileInfoList';
 import useUser from '../../../../hooks/useUser';
-import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface UserDetails {
   name: string;
@@ -15,24 +15,16 @@ interface UserDetails {
   gender?: string;
   address?: string;
   nickname?: string;
-  emergency_contact?: string;
-  emergency_contact_name?: string;
-  emergency_contact_phone?: string;
-  first_medication_time?: string;
-  end_of_day_time?: string;
-  wake_up_time?: string;
-  breakfast_time?: string;
-  lunch_time?: string;
-  dinner_time?: string;
   climate?: string;
   exercise_frequency?: string;
   weight?: number;
   weight_unit?: string;
-  age?: number;
+  hydration_goal?: number;
+  daily_hydration_goal?: number;
+  daily_goal_ml?: number;
 }
 
 export default function ProfileDetails() {
-  const router = useRouter();
   const { token } = useLocalSearchParams();
   const { user: fetchedUser, setUser: setFetchedUser, loading } = useUser(token as string | undefined);
   const insets = useSafeAreaInsets();
@@ -41,7 +33,6 @@ export default function ProfileDetails() {
   const user = fetchedUser as unknown as UserDetails | null;
 
   const [modalVisible, setModalVisible] = React.useState(false);
-  const [showEmergencyContactName, setShowEmergencyContactName] = React.useState(false);
 
   const openEditModal = () => setModalVisible(true);
   const closeEditModal = () => setModalVisible(false);
@@ -49,19 +40,6 @@ export default function ProfileDetails() {
   const handleSaved = (updated: any) => {
     // update shared user state
     setFetchedUser((prev: any) => ({ ...(prev || {}), ...(updated || {}) }));
-  };
-
-  const formatTime = (time: string | undefined) => {
-    if (!time) return 'Not set';
-    // If time is in HH:mm format, format it nicely
-    if (time.includes(':')) {
-      const [hours, minutes] = time.split(':');
-      const hour = parseInt(hours);
-      const ampm = hour >= 12 ? 'PM' : 'AM';
-      const displayHour = hour % 12 || 12;
-      return `${displayHour}:${minutes} ${ampm}`;
-    }
-    return time;
   };
 
   const formatClimate = (climate: string | undefined) => {
@@ -74,37 +52,9 @@ export default function ProfileDetails() {
     return exercise.charAt(0).toUpperCase() + exercise.slice(1) + ' exercise';
   };
 
-  const formatGender = (gender: string | undefined) => {
-    if (!gender) return 'Not set';
-    return gender.charAt(0).toUpperCase() + gender.slice(1);
-  };
-
-  const formatEmergencyContact = (
-    contact?: string,
-    contactName?: string,
-    contactPhone?: string,
-  ) => {
-    if (contactName && contactPhone) return `${contactName} (${contactPhone})`;
-    if (contactName) return contactName;
-    if (contactPhone) return contactPhone;
-    if (contact) return contact;
-    return null;
-  };
-
-  const calculateAge = (dateOfBirth?: string): string | null => {
-    if (!dateOfBirth) return null;
-    try {
-      const birthDate = new Date(dateOfBirth);
-      const today = new Date();
-      let age = today.getFullYear() - birthDate.getFullYear();
-      const monthDiff = today.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      return `${age} years old`;
-    } catch {
-      return null;
-    }
+  const getHydrationGoal = () => {
+    const goal = Number(user?.daily_hydration_goal || user?.daily_goal_ml || user?.hydration_goal || 0);
+    return goal > 0 ? `${goal} ml` : 'Not set';
   };
 
   if (loading) {
@@ -128,27 +78,30 @@ export default function ProfileDetails() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={[]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerTitle}>Profile Details</Text>
+          <Text style={styles.headerSubtitle}>View and update your account and hydration profile.</Text>
+        </View>
+        <TouchableOpacity style={styles.iconButton} onPress={openEditModal}>
+          <Ionicons name="create-outline" size={22} color="#2563EB" />
+        </TouchableOpacity>
+      </View>
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Profile Details</Text>
-          <TouchableOpacity style={styles.backButton} onPress={openEditModal}>
-            <Ionicons name="create-outline" size={24} color="#1E3A8A" />
-          </TouchableOpacity>
-        </View>
-
         {/* Personal Information Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Information</Text>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionBadge}>
+              <Ionicons name="person-outline" size={17} color="#2563EB" />
+            </View>
+            <Text style={styles.sectionTitle}>Account Information</Text>
+          </View>
           <ProfileInfoList
             sections={[
               {
@@ -157,41 +110,33 @@ export default function ProfileDetails() {
                   { label: 'Nickname', value: user.nickname },
                   { label: 'Email', value: user.email },
                   { label: 'Phone', value: user.phone },
-                  { label: 'Gender', value: formatGender(user.gender) },
                   { label: 'Date of Birth', value: user.date_of_birth },
-                  { label: 'Age', value: calculateAge(user.date_of_birth) },
                   { label: 'Address', value: user.address },
                 ],
               },
             ]}
           />
-
-          {/* Emergency Contact Custom Display */}
-          <View style={[styles.card, { marginTop: 12 }]}>
-            <TouchableOpacity 
-              style={styles.infoRow}
-              onPress={() => setShowEmergencyContactName(!showEmergencyContactName)}
-            >
-              <Text style={styles.infoLabel}>Emergency Contact</Text>
-              <Text style={styles.infoValue}>
-                {showEmergencyContactName 
-                  ? (user.emergency_contact_name || 'Not set')
-                  : (user.emergency_contact_phone || 'Not set')
-                }
-              </Text>
-            </TouchableOpacity>
-          </View>
         </View>
 
         {/* Health Information Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Health Information</Text>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionBadge}>
+              <Ionicons name="water-outline" size={17} color="#2563EB" />
+            </View>
+            <Text style={styles.sectionTitle}>Hydration Profile</Text>
+          </View>
           <View style={styles.card}>
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Weight</Text>
               <Text style={styles.infoValue}>
                 {user.weight ? `${user.weight} ${user.weight_unit || 'kg'}` : 'Not set'}
               </Text>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Weight Unit</Text>
+              <Text style={styles.infoValue}>{user.weight_unit || 'Not set'}</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.infoRow}>
@@ -203,59 +148,10 @@ export default function ProfileDetails() {
               <Text style={styles.infoLabel}>Climate</Text>
               <Text style={styles.infoValue}>{formatClimate(user.climate)}</Text>
             </View>
-          </View>
-        </View>
-
-        {/* Daily Routine Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Daily Routine</Text>
-          <View style={styles.card}>
-            <View style={styles.infoRow}>
-              <Ionicons name="sunny-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Wake Up Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.wake_up_time)}</Text>
-              </View>
-            </View>
             <View style={styles.divider} />
             <View style={styles.infoRow}>
-              <Ionicons name="medical-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>First Medication Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.first_medication_time)}</Text>
-              </View>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Ionicons name="restaurant-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Breakfast Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.breakfast_time)}</Text>
-              </View>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Ionicons name="restaurant-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Lunch Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.lunch_time)}</Text>
-              </View>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Ionicons name="restaurant-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Dinner Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.dinner_time)}</Text>
-              </View>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Ionicons name="moon-outline" size={20} color="#1E3A8A" style={styles.icon} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>End of Day Time</Text>
-                <Text style={styles.infoValue}>{formatTime(user.end_of_day_time)}</Text>
-              </View>
+              <Text style={styles.infoLabel}>Hydration Goal</Text>
+              <Text style={styles.infoValue}>{getHydrationGoal()}</Text>
             </View>
           </View>
         </View>
@@ -277,7 +173,7 @@ export default function ProfileDetails() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
   },
   loadingContainer: {
     flex: 1,
@@ -300,49 +196,71 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 24,
+    paddingBottom: 14,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'white',
+  iconButton: {
+    width: 32,
+    height: 38,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  headerSubtitle: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+    marginTop: 3,
   },
   section: {
     marginBottom: 24,
     paddingHorizontal: 20,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  sectionHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
     marginBottom: 12,
   },
-  card: {
-    backgroundColor: 'white',
+  sectionBadge: {
+    width: 32,
+    height: 32,
     borderRadius: 16,
-    padding: 20,
-    shadowColor: '#000',
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
-    elevation: 4,
+    elevation: 1,
   },
   infoRow: {
     flexDirection: 'row',
@@ -360,15 +278,15 @@ const styles = StyleSheet.create({
   },
   infoLabel: {
     fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
+    color: '#64748B',
+    fontWeight: '700',
     flex: 0.5,
     marginRight: 8,
   },
   infoValue: {
     fontSize: 14,
-    color: '#1F2937',
-    fontWeight: '600',
+    color: '#0F172A',
+    fontWeight: '800',
     textAlign: 'right',
     flex: 0.5,
     flexWrap: 'wrap',

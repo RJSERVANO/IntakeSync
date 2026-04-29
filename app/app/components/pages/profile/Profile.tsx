@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,6 +14,8 @@ export default function Profile() {
   const { token } = useLocalSearchParams();
   const { user, loading, reload } = useUser(token as string | undefined);
   const [avatarModalVisible, setAvatarModalVisible] = React.useState(false);
+  const [signOutVisible, setSignOutVisible] = React.useState(false);
+  const [signingOut, setSigningOut] = React.useState(false);
   const [selectedAvatar, setSelectedAvatar] = React.useState<SelectedAvatar | null>(null);
   const insets = useSafeAreaInsets();
   const avatarSource = getAvatarSource(selectedAvatar);
@@ -62,6 +64,14 @@ export default function Profile() {
       icon: 'help-circle-outline',
       action: () => router.push({ pathname: '/components/pages/profile/HelpSupport', params: { token } } as any)
     },
+    {
+      id: 8,
+      title: 'Sign Out',
+      subtitle: 'Log out of your account',
+      icon: 'log-out-outline',
+      destructive: true,
+      action: () => setSignOutVisible(true),
+    },
   ];
 
   const retryFetch = () => {
@@ -70,6 +80,19 @@ export default function Profile() {
 
   const getInitials = (name: string = '') => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
+  };
+
+  const confirmSignOut = async () => {
+    try {
+      setSigningOut(true);
+      await api.post('/logout', {}, token as string);
+    } catch (err) {
+      console.log('Logout error:', err);
+    } finally {
+      setSigningOut(false);
+      setSignOutVisible(false);
+      router.replace({ pathname: '/login' } as any);
+    }
   };
 
   if (loading) {
@@ -98,7 +121,10 @@ export default function Profile() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 18) }]}>
-        <Text style={styles.headerTitle}>Profile</Text>
+        <View>
+          <Text style={styles.headerTitle}>Profile</Text>
+          <Text style={styles.headerSubtitle}>Manage your account, preferences, and reminders.</Text>
+        </View>
       </View>
 
       <ScrollView
@@ -129,19 +155,25 @@ export default function Profile() {
               <Text style={styles.avatarHintText}>Customize avatar</Text>
             </View>
           </View>
-          <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          <View style={styles.profileChevronBadge}>
+            <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+          </View>
         </TouchableOpacity>
 
         {/* Quick Info Cards */}
         <View style={styles.quickInfoContainer}>
           <View style={styles.infoCard}>
-            <Ionicons name="call-outline" size={20} color="#1E3A8A" />
+            <View style={styles.infoIconBadge}>
+              <Ionicons name="call-outline" size={18} color="#2563EB" />
+            </View>
             <Text style={styles.infoLabel}>Phone</Text>
             <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
           </View>
           
           <View style={styles.infoCard}>
-            <Ionicons name="calendar-outline" size={20} color="#1E3A8A" />
+            <View style={styles.infoIconBadge}>
+              <Ionicons name="calendar-outline" size={18} color="#2563EB" />
+            </View>
             <Text style={styles.infoLabel}>Date of Birth</Text>
             <Text style={styles.infoValue}>{user.dateOfBirth || 'Not set'}</Text>
           </View>
@@ -150,51 +182,25 @@ export default function Profile() {
         {/* Removed onboarding preview - profile details moved to Personal Information page */}
 
         {/* Profile Options */}
+        <Text style={styles.optionsTitle}>Account & Preferences</Text>
         <View style={styles.optionsContainer}>
           {profileOptions.map((option) => (
-            <TouchableOpacity key={option.id} style={styles.optionItem} onPress={option.action}>
-              <View style={styles.optionIcon}>
-                <Ionicons name={option.icon as any} size={24} color="#1E3A8A" />
+            <TouchableOpacity key={option.id} activeOpacity={0.72} style={styles.optionItem} onPress={option.action}>
+              <View style={[styles.optionIcon, option.destructive && styles.optionIconDanger]}>
+                <Ionicons name={option.icon as any} size={21} color={option.destructive ? '#EF4444' : '#2563EB'} />
               </View>
               <View style={styles.optionContent}>
-                <Text style={styles.optionTitle}>{option.title}</Text>
+                <Text style={[styles.optionTitle, option.destructive && styles.optionTitleDanger]}>{option.title}</Text>
                 <Text style={styles.optionSubtitle}>{option.subtitle}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              {!option.destructive ? (
+                <View style={styles.chevronBadge}>
+                  <Ionicons name="chevron-forward" size={17} color="#94A3B8" />
+                </View>
+              ) : null}
             </TouchableOpacity>
           ))}
         </View>
-
-        {/* Emergency contact moved to Personal Information page */}
-
-        {/* Logout Button */}
-        <TouchableOpacity 
-          style={styles.logoutButton}
-          onPress={() => {
-            Alert.alert(
-              'Sign Out',
-              'Are you sure you want to sign out of your account?',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Sign Out',
-                  style: 'destructive',
-                  onPress: async () => {
-                    try {
-                      await api.post('/logout', {}, token as string);
-                    } catch (err) {
-                      console.log('Logout error:', err);
-                    }
-                    router.replace({ pathname: '/login' } as any);
-                  }
-                }
-              ]
-            );
-          }}
-        >
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-          <Text style={styles.logoutText}>Sign Out</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       <Modal
@@ -205,7 +211,7 @@ export default function Profile() {
       >
         <View style={styles.sheetOverlay}>
           <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={() => setAvatarModalVisible(false)} />
-          <View style={styles.avatarSheet}>
+          <View style={[styles.avatarSheet, { paddingBottom: Math.max(insets.bottom + 16, 28) }]}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeader}>
               <View style={styles.sheetPreview}>
@@ -224,6 +230,32 @@ export default function Profile() {
             <TouchableOpacity style={styles.sheetDoneButton} onPress={() => setAvatarModalVisible(false)}>
               <Text style={styles.sheetDoneText}>Done</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        transparent
+        animationType="fade"
+        visible={signOutVisible}
+        onRequestClose={() => setSignOutVisible(false)}
+      >
+        <View style={styles.confirmOverlay}>
+          <TouchableOpacity style={styles.confirmBackdrop} activeOpacity={1} onPress={() => setSignOutVisible(false)} />
+          <View style={[styles.confirmSheet, { paddingBottom: Math.max(insets.bottom + 16, 24) }]}>
+            <View style={styles.signOutBadge}>
+              <Ionicons name="log-out-outline" size={24} color="#EF4444" />
+            </View>
+            <Text style={styles.confirmTitle}>Sign out?</Text>
+            <Text style={styles.confirmMessage}>{"You'll need to log in again to access your account."}</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.confirmCancel} onPress={() => setSignOutVisible(false)} disabled={signingOut}>
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.confirmDestructive, signingOut && styles.disabled]} onPress={confirmSignOut} disabled={signingOut}>
+                <Text style={styles.confirmDestructiveText}>{signingOut ? 'Signing Out...' : 'Sign Out'}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -261,10 +293,16 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0F172A',
   },
+  headerSubtitle: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 4,
+  },
   profileHeader: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 14,
+    borderRadius: 22,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 14,
@@ -277,6 +315,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 14,
     elevation: 3,
+    overflow: 'hidden',
   },
   avatarContainer: {
     position: 'relative',
@@ -290,6 +329,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+    borderWidth: 3,
+    borderColor: '#DBEAFE',
   },
   avatarImage: {
     width: '100%',
@@ -334,7 +375,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     gap: 5,
     marginTop: 9,
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#DBEAFE',
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 5,
@@ -352,7 +393,7 @@ const styles = StyleSheet.create({
   infoCard: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 18,
     minHeight: 104,
     paddingHorizontal: 14,
     paddingVertical: 15,
@@ -364,6 +405,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 1,
+  },
+  infoIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
   },
   infoLabel: {
     fontSize: 12,
@@ -379,7 +430,7 @@ const styles = StyleSheet.create({
   },
   optionsContainer: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 20,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -390,25 +441,40 @@ const styles = StyleSheet.create({
     elevation: 1,
     overflow: 'hidden',
   },
+  optionsTitle: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginBottom: 10,
+    marginLeft: 2,
+  },
   optionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 15,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
+    minHeight: 72,
   },
   optionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#EFF6FF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 13,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  optionIconDanger: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
   },
   optionContent: {
     flex: 1,
+    minWidth: 0,
   },
   optionTitle: {
     fontSize: 15,
@@ -416,33 +482,36 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     marginBottom: 2,
   },
+  optionTitleDanger: {
+    color: '#EF4444',
+  },
   optionSubtitle: {
     fontSize: 13,
     color: '#64748B',
     fontWeight: '600',
+    lineHeight: 18,
   },
-  logoutButton: {
-    flexDirection: 'row',
+  chevronBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 13,
-    marginTop: 2,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    shadowColor: '#EF4444',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    marginLeft: 10,
   },
-  logoutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#EF4444',
-    marginLeft: 8,
+  profileChevronBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 10,
   },
   sheetOverlay: {
     flex: 1,
@@ -521,6 +590,79 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',
+  },
+  confirmOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(15, 23, 42, 0.46)',
+  },
+  confirmBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  confirmSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 20,
+    paddingTop: 22,
+    alignItems: 'center',
+  },
+  signOutBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  confirmTitle: {
+    fontSize: 21,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginBottom: 6,
+  },
+  confirmMessage: {
+    color: '#64748B',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 18,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    gap: 10,
+    alignSelf: 'stretch',
+  },
+  confirmCancel: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  confirmDestructive: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+  },
+  confirmCancelText: {
+    color: '#475569',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  confirmDestructiveText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  disabled: {
+    opacity: 0.6,
   },
   loadingContainer: {
     flex: 1,

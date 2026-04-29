@@ -8,6 +8,17 @@ use App\Models\OtcMedicine;
 
 class OtcMedicineSeeder extends Seeder
 {
+    private const SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
+
+    private const EXCLUDED_NON_OTC_OR_UNSAFE = [
+        'Mefenamic Acid',
+        'Dolfenal',
+        'Ponstan',
+        'Lomotil',
+        'Zonrox Bleach',
+        'Sudafed',
+    ];
+
     /**
      * Run the database seeds.
      */
@@ -16,8 +27,58 @@ class OtcMedicineSeeder extends Seeder
         $medicines = $this->getMedicines();
 
         foreach ($medicines as $medicine) {
-            OtcMedicine::create($medicine);
+            if (in_array($medicine['name'], self::EXCLUDED_NON_OTC_OR_UNSAFE, true)) {
+                continue;
+            }
+
+            $medicine = $this->withSafetyMetadata($medicine);
+            OtcMedicine::updateOrCreate(
+                ['name' => $medicine['name'], 'brand' => $medicine['brand'] ?? null],
+                $medicine
+            );
         }
+    }
+
+    private function withSafetyMetadata(array $medicine): array
+    {
+        $dosage = $medicine['dosage'] ?? null;
+        $schedule = $this->inferSchedule($dosage ?? '');
+
+        return array_merge([
+            'is_otc' => true,
+            'requires_prescription' => false,
+            'common_use' => $medicine['description'] ?? null,
+            'dosage_text' => $dosage,
+            'interval_hours' => $schedule['interval_hours'],
+            'max_daily_doses' => $schedule['max_daily_doses'],
+            'warnings' => self::SAFETY_COPY,
+        ], $medicine);
+    }
+
+    private function inferSchedule(string $dosage): array
+    {
+        $lower = strtolower($dosage);
+        $interval = null;
+        $maxDoses = null;
+
+        if (preg_match('/every\s+(\d+)(?:-\d+)?\s*(?:hour|hr)/', $lower, $matches)) {
+            $interval = (int) $matches[1];
+            $maxDoses = $interval > 0 ? max(1, min(6, (int) floor(24 / $interval))) : null;
+        } elseif (str_contains($lower, 'once') || str_contains($lower, 'daily')) {
+            $interval = 24;
+            $maxDoses = 1;
+        } elseif (str_contains($lower, 'twice') || str_contains($lower, '2 times')) {
+            $interval = 12;
+            $maxDoses = 2;
+        } elseif (str_contains($lower, '3 times') || str_contains($lower, 'three times')) {
+            $interval = 8;
+            $maxDoses = 3;
+        }
+
+        return [
+            'interval_hours' => $interval,
+            'max_daily_doses' => $maxDoses,
+        ];
     }
 
     private function getMedicines()

@@ -25,13 +25,18 @@ class MedicationController extends Controller
             'times' => 'nullable|array',
             'times.*' => 'date',
             'reminder' => 'boolean',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after:start_date',
+            'start_date' => 'nullable|date|after_or_equal:today',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
             'frequency' => 'nullable|string|in:daily,weekly,monthly,custom',
             'days_of_week' => 'nullable|array',
             'days_of_week.*' => 'integer|between:0,6',
             'notes' => 'nullable|string|max:500',
             'color' => 'nullable|string|max:7',
+            'otc_medicine_id' => 'nullable|integer',
+            'otc_metadata' => 'nullable|array',
+        ], [
+            'start_date.after_or_equal' => 'Start date cannot be in the past. Please select today or a future date.',
+            'end_date.after_or_equal' => 'End date cannot be before the start date.',
         ]);
 
         $data['user_id'] = $user->id;
@@ -50,6 +55,7 @@ class MedicationController extends Controller
 
     public function show(Request $request, Medication $medication)
     {
+        $this->authorizeForUser($request->user(), 'view', $medication);
         return response()->json($medication);
     }
 
@@ -63,13 +69,31 @@ class MedicationController extends Controller
             'times.*' => 'date',
             'reminder' => 'boolean',
             'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after:start_date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
             'frequency' => 'nullable|string|in:daily,weekly,monthly,custom',
             'days_of_week' => 'nullable|array',
             'days_of_week.*' => 'integer|between:0,6',
             'notes' => 'nullable|string|max:500',
             'color' => 'nullable|string|max:7',
+            'otc_medicine_id' => 'nullable|integer',
+            'otc_metadata' => 'nullable|array',
+        ], [
+            'end_date.after_or_equal' => 'End date cannot be before the start date.',
         ]);
+        if (array_key_exists('start_date', $data)) {
+            $requestedStart = \Carbon\Carbon::parse($data['start_date'])->toDateString();
+            $currentStart = $medication->start_date ? \Carbon\Carbon::parse($medication->start_date)->toDateString() : null;
+
+            if ($requestedStart !== $currentStart && \Carbon\Carbon::parse($requestedStart)->lt(now()->startOfDay())) {
+                return response()->json([
+                    'message' => 'Start date cannot be in the past. Please select today or a future date.',
+                    'errors' => [
+                        'start_date' => ['Start date cannot be in the past. Please select today or a future date.'],
+                    ],
+                ], 422);
+            }
+        }
+
         $medication->update($data);
         Log::debug('Medication updated', ['medication_id' => $medication->id]);
         return response()->json($medication);
@@ -249,6 +273,7 @@ class MedicationController extends Controller
 
         foreach ($medications as $med) {
             if (!$med->reminder) continue;
+            if (!$this->isMedicationScheduledOnDate($med, $now)) continue;
 
             $times = $med->times ?? [];
             $stats['total_reminders_today'] += count($times);
@@ -295,6 +320,23 @@ class MedicationController extends Controller
         }
 
         return response()->json($stats);
+    }
+
+    private function isMedicationScheduledOnDate(Medication $medication, \Carbon\Carbon $date): bool
+    {
+        if ($medication->start_date && \Carbon\Carbon::parse($medication->start_date)->startOfDay()->gt($date->copy()->endOfDay())) {
+            return false;
+        }
+
+        if ($medication->end_date && \Carbon\Carbon::parse($medication->end_date)->endOfDay()->lt($date->copy()->startOfDay())) {
+            return false;
+        }
+
+        if ($medication->frequency === 'weekly' && is_array($medication->days_of_week) && count($medication->days_of_week) > 0) {
+            return in_array((int) $date->dayOfWeek, array_map('intval', $medication->days_of_week), true);
+        }
+
+        return true;
     }
 
     /**

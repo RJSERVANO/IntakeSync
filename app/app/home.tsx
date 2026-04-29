@@ -33,6 +33,30 @@ interface QuickStatus {
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 
+const resolveHydrationGoal = (hydrationData: any, fallback = 2000) => {
+  const goal = Number(
+    hydrationData?.daily_goal_ml ??
+    hydrationData?.daily_hydration_goal ??
+    hydrationData?.hydration_goal ??
+    hydrationData?.goal ??
+    fallback
+  );
+
+  return Number.isFinite(goal) && goal > 0 ? goal : fallback;
+};
+
+const resolveHydrationTotal = (hydrationData: any) => Number(hydrationData?.today_total ?? 0) || 0;
+
+const resolveHydrationPercentage = (hydrationData: any, goal: number) => {
+  const percentage = Number(hydrationData?.percentage);
+  if (Number.isFinite(percentage)) {
+    return Math.round(percentage);
+  }
+
+  const total = resolveHydrationTotal(hydrationData);
+  return goal > 0 ? Math.round((total / goal) * 100) : 0;
+};
+
 export default function Home() {
   const insets = useSafeAreaInsets();
   const { token } = useLocalSearchParams();
@@ -184,7 +208,9 @@ export default function Home() {
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
             const stats = results[2].status === 'fulfilled' ? results[2].value : null;
             
-            const hydrationPercentage = hydrationData ? Math.round(hydrationData?.percentage || 0) : 0;
+            const hydrationGoal = resolveHydrationGoal(hydrationData);
+            const hydrationTotal = resolveHydrationTotal(hydrationData);
+            const hydrationPercentage = hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0;
             const hydrationEntries = Array.isArray(hydrationData?.entries) ? hydrationData.entries : null;
             const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
             const medicationsTaken = stats?.completed_today || 0;
@@ -195,8 +221,8 @@ export default function Home() {
             setQuickStatus({
               medicationsLeft,
               hydrationPercentage,
-              hydrationTotal: hydrationData?.today_total || 0,
-              hydrationGoal: hydrationData?.goal || 2000,
+              hydrationTotal,
+              hydrationGoal,
               medicationsTaken,
               medicationsTotal
             });
@@ -287,14 +313,16 @@ export default function Home() {
           ]);
           
           if (hydrationRes) {
-            const hydrationPercentage = Math.round(hydrationRes.percentage || 0);
+            const hydrationGoal = resolveHydrationGoal(hydrationRes, quickStatus.hydrationGoal || 2000);
+            const hydrationTotal = resolveHydrationTotal(hydrationRes);
+            const hydrationPercentage = resolveHydrationPercentage(hydrationRes, hydrationGoal);
             setHydrationEntries(Array.isArray(hydrationRes.entries) ? hydrationRes.entries : null);
             
             setQuickStatus(prev => ({
               ...prev,
               hydrationPercentage,
-              hydrationTotal: hydrationRes.today_total || 0,
-              hydrationGoal: hydrationRes.goal || prev.hydrationGoal || 2000
+              hydrationTotal,
+              hydrationGoal
             }));
           }
           
@@ -314,7 +342,7 @@ export default function Home() {
       };
       
       refreshHydrationData();
-    }, [token, loading])
+    }, [token, loading, quickStatus.hydrationGoal])
   );
 
   // Real-time hydration polling - refresh every 10 seconds
@@ -333,7 +361,9 @@ export default function Home() {
         const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
         const stats = results[2].status === 'fulfilled' ? results[2].value : null;
         
-        const hydrationPercentage = hydrationData ? Math.round(hydrationData?.percentage || 0) : 0;
+        const hydrationGoal = resolveHydrationGoal(hydrationData);
+        const hydrationTotal = resolveHydrationTotal(hydrationData);
+        const hydrationPercentage = hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0;
         const hydrationEntries = Array.isArray(hydrationData?.entries) ? hydrationData.entries : null;
         const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
         const medicationsTaken = stats?.completed_today || 0;
@@ -341,14 +371,14 @@ export default function Home() {
         setHydrationEntries(hydrationEntries);
         setUpcomingMedications(Array.isArray(upcoming) ? upcoming : []);
         
-        setQuickStatus({
+        setQuickStatus(prev => ({
           medicationsLeft,
           hydrationPercentage,
-          hydrationTotal: hydrationData?.today_total || 0,
-          hydrationGoal: hydrationData?.goal || 2000,
+          hydrationTotal,
+          hydrationGoal: hydrationData ? hydrationGoal : prev.hydrationGoal || 2000,
           medicationsTaken,
           medicationsTotal
-        });
+        }));
         
         console.log('Real-time update: Hydration', hydrationPercentage + '%', 'Medications:', medicationsTaken + '/' + medicationsTotal);
       } catch (error) {
@@ -454,7 +484,7 @@ export default function Home() {
     : null;
 
   const getAwareness = (field: 'caffeine_level' | 'sugar_level') => {
-    if (!todayHydrationEntries) return null;
+    if (!todayHydrationEntries || todayHydrationEntries.length === 0) return null;
     const score = todayHydrationEntries.reduce((sum, entry) => {
       const amount = Number(entry?.amount_ml || entry?.logged_ml || 0);
       return sum + levelValue(entry?.[field]) * (amount / 250);
@@ -474,6 +504,7 @@ export default function Home() {
     : 0;
   const recentUpdates = timeline.slice(0, 2);
   const missedCount = timeline.filter((item) => item.status === 'missed').length;
+  const notificationCount = timeline.filter((item) => item.status === 'missed' || item.status === 'pending').length;
   const nextMedication = upcomingMedications[0] || null;
 
   const getMedicationName = (medication: any) => (
@@ -504,22 +535,36 @@ export default function Home() {
     return 'You are on track today';
   })();
 
-  const awarenessScore = (awareness: ReturnType<typeof getAwareness>) => {
-    if (!awareness) return 100;
-    if (awareness.level === 'high') return 55;
-    if (awareness.level === 'medium') return 75;
-    if (awareness.level === 'low') return 90;
-    return 100;
-  };
-
   const beverageScore = Math.min(100, Math.max(0, quickStatus.hydrationPercentage));
-  const medicationScore = quickStatus.medicationsTotal > 0 ? medicationPercent : 100;
-  const todayScore = Math.round((beverageScore + medicationScore + awarenessScore(caffeineAwareness) + awarenessScore(sugarAwareness)) / 4);
-  const todayScoreColor = todayScore >= 90 ? '#10B981' : todayScore >= 70 ? '#2563EB' : todayScore >= 40 ? '#F97316' : '#EF4444';
-  const hydrationBreakdown = quickStatus.hydrationPercentage >= 90 ? 'Good' : quickStatus.hydrationPercentage >= 50 ? 'Fair' : 'Low';
-  const medicationBreakdown = quickStatus.medicationsTotal === 0 ? 'Clear' : medicationPercent >= 80 ? 'Good' : 'Low';
-  const sugarBreakdown = levelLabel(sugarAwareness?.level ?? 'none');
-  const todayScoreBreakdown = `Hydration: ${hydrationBreakdown} | Meds: ${medicationBreakdown} | Sugar: ${sugarBreakdown}`;
+  const medicationScore = medicationPercent;
+  const hasHydrationData =
+    quickStatus.hydrationTotal > 0 ||
+    (Array.isArray(todayHydrationEntries) && todayHydrationEntries.length > 0);
+  const hasMedicationData = quickStatus.medicationsTotal > 0;
+  const hasTodayScoreData = hasHydrationData || hasMedicationData;
+  const scoreParts: number[] = [];
+  if (hasHydrationData) scoreParts.push(beverageScore);
+  if (hasMedicationData) scoreParts.push(medicationScore);
+  let beveragePenalty = 0;
+  if (caffeineAwareness?.level === 'medium') beveragePenalty += 5;
+  if (caffeineAwareness?.level === 'high') beveragePenalty += 10;
+  if (sugarAwareness?.level === 'medium') beveragePenalty += 5;
+  if (sugarAwareness?.level === 'high') beveragePenalty += 10;
+  const todayScore = scoreParts.length
+    ? Math.max(0, Math.round((scoreParts.reduce((sum, value) => sum + value, 0) / scoreParts.length) - beveragePenalty))
+    : null;
+  const todayScoreTextColor = todayScore === null
+    ? '#64748B'
+    : todayScore >= 90 ? '#10B981' : todayScore >= 70 ? '#2563EB' : todayScore >= 40 ? '#F97316' : '#EF4444';
+  const todayScoreBorderColor = todayScore === null ? '#CBD5E1' : todayScoreTextColor;
+  const hydrationBreakdown = hasHydrationData
+    ? `Hydration: ${quickStatus.hydrationPercentage >= 90 ? 'Good' : quickStatus.hydrationPercentage >= 50 ? 'Fair' : 'Low'}`
+    : 'Hydration: No logs';
+  const medicationBreakdown = hasMedicationData
+    ? `Meds: ${medicationPercent >= 80 ? 'Good' : 'Needs attention'}`
+    : 'Meds: No reminders';
+  const sugarBreakdown = sugarAwareness ? `Sugar: ${levelLabel(sugarAwareness.level)}` : null;
+  const todayScoreBreakdown = [hydrationBreakdown, medicationBreakdown, sugarBreakdown].filter(Boolean).join(' | ');
   const beveragePaceHint = quickStatus.hydrationPercentage >= 90 ? 'On track' : quickStatus.hydrationPercentage >= 50 ? 'Good pace' : 'You are behind today';
   const safeInsight = (() => {
     if (missedCount > 0) return 'You usually miss afternoon logs. Try logging after meals.';
@@ -538,6 +583,10 @@ export default function Home() {
       </Text>
     )
   );
+
+  const handleNotificationPress = () => {
+    router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any);
+  };
 
   const renderBeverageMini = (
     title: string,
@@ -579,12 +628,27 @@ export default function Home() {
           <Text style={styles.headerTitle}>IntakeSync</Text>
         </View>
           
-        <TouchableOpacity 
-          style={styles.profileAvatar}
-          onPress={() => router.push({ pathname: '/components/pages/profile/Profile', params: { token } } as any)}
-        >
-          {renderHeaderAvatar()}
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.notificationButton}
+            onPress={handleNotificationPress}
+            activeOpacity={0.82}
+          >
+            <Ionicons name="notifications-outline" size={22} color="#1E3A8A" />
+            {notificationCount > 0 && (
+              <View style={styles.notificationBadge}>
+                <Text style={styles.notificationBadgeText}>{notificationCount > 9 ? '9+' : notificationCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.profileAvatar}
+            onPress={() => router.push({ pathname: '/components/pages/profile/Profile', params: { token } } as any)}
+          >
+            {renderHeaderAvatar()}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -599,7 +663,7 @@ export default function Home() {
 
           {/* Welcome Section */}
           <View style={styles.welcomeSection}>
-            <Text style={styles.welcomeText}>{displayName ? `${greetingPrefix}, ${displayName}` : 'Welcome back'}</Text>
+            <Text style={styles.welcomeText} numberOfLines={2}>{displayName ? `${greetingPrefix}, ${displayName}` : 'Welcome back'}</Text>
             <Text style={styles.welcomeSubtext}>Here is your routine summary for today.</Text>
           <View>
             <View style={styles.searchContainer}>
@@ -708,10 +772,19 @@ export default function Home() {
               <Text style={styles.nextActionText} numberOfLines={3}>{nextAction}</Text>
             </View>
 
-            <View style={[styles.smartCard, styles.scoreCard, { borderColor: todayScoreColor, borderLeftColor: todayScoreColor }]}>
+            <View style={[styles.smartCard, styles.scoreCard, { borderColor: todayScoreBorderColor, borderLeftColor: todayScoreBorderColor }]}>
               <Text style={styles.smartCardLabel}>Today Score</Text>
-              <Text style={[styles.scoreValue, { color: todayScoreColor }]}>{todayScore}%</Text>
-              <Text style={styles.scoreHelper} numberOfLines={2}>{todayScoreBreakdown}</Text>
+              {hasTodayScoreData && todayScore !== null ? (
+                <>
+                  <Text style={[styles.scoreValue, { color: todayScoreTextColor }]}>{todayScore}%</Text>
+                  <Text style={styles.scoreHelper} numberOfLines={2}>{todayScoreBreakdown}</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.scoreEmptyValue, { color: todayScoreTextColor }]}>No score yet</Text>
+                  <Text style={styles.scoreHelper} numberOfLines={2}>Log beverages or medication activity to start.</Text>
+                </>
+              )}
             </View>
           </View>
 
@@ -752,9 +825,9 @@ export default function Home() {
                   // Refresh hydration data immediately
                   const hydrationRes = await api.get('/hydration', token as string);
                   if (hydrationRes) {
-                    const hydrationPercentage = Math.round(hydrationRes.percentage || 0);
-                    const todayTotal = hydrationRes.today_total || 0;
-                    const goal = hydrationRes.goal || 2000;
+                    const goal = resolveHydrationGoal(hydrationRes, quickStatus.hydrationGoal || 2000);
+                    const todayTotal = resolveHydrationTotal(hydrationRes);
+                    const hydrationPercentage = resolveHydrationPercentage(hydrationRes, goal);
                     setHydrationEntries(Array.isArray(hydrationRes.entries) ? hydrationRes.entries : null);
                     
                     setQuickStatus(prev => ({
@@ -827,7 +900,7 @@ export default function Home() {
                 </Text>
               </View>
               <View style={[styles.widgetIcon, styles.medicationIcon]}>
-                <Ionicons name="checkmark-done-circle" size={25} color="#F97316" />
+                <Ionicons name="medkit-outline" size={24} color="#EF4444" />
               </View>
             </View>
             <View style={styles.metricRow}>
@@ -839,8 +912,7 @@ export default function Home() {
                   router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any);
                 }}
               >
-                <Ionicons name="medical" size={14} color="#FFFFFF" />
-                <Text style={styles.quickActionText}>Add</Text>
+                <Text style={styles.quickActionText}>+ Add</Text>
               </Pressable>
             </View>
             {nextMedication && (
@@ -853,7 +925,7 @@ export default function Home() {
                 styles.progressBar, 
                 { 
                   width: `${medicationPercent}%`, 
-                  backgroundColor: '#F97316' 
+                  backgroundColor: '#EF4444' 
                 }
               ]} />
             </View>
@@ -1099,6 +1171,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flex: 1,
+    minWidth: 0,
   },
   headerTitle: {
     fontSize: 20,
@@ -1114,6 +1188,43 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#DBEAFE',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginLeft: 12,
+  },
+  notificationButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    position: 'relative',
+  },
+  notificationBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#EF4444',
+    borderWidth: 2,
+    borderColor: '#F8F9FA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notificationBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
   },
   profileAvatar: {
     width: 50,
@@ -1136,8 +1247,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   welcomeSection: {
-    paddingTop: 18,
-    marginBottom: 18,
+    paddingTop: 16,
+    marginBottom: 16,
   },
   welcomeRow: {
     flexDirection: 'row',
@@ -1146,10 +1257,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   welcomeText: {
-    fontSize: 30,
-    fontWeight: '800',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '900',
     color: '#1F2937',
-    marginBottom: 6,
+    marginBottom: 4,
   },
   welcomeKicker: {
     fontSize: 13,
@@ -1158,10 +1270,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   welcomeSubtext: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#64748B',
-    lineHeight: 20,
-    marginBottom: 14,
+    lineHeight: 18,
+    marginBottom: 12,
   },
   tierBadge: {
     flexDirection: 'row',
@@ -1341,6 +1453,13 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#1E3A8A',
     marginTop: 4,
+  },
+  scoreEmptyValue: {
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '900',
+    marginTop: 10,
+    marginBottom: 4,
   },
   scoreHelper: {
     fontSize: 11,
@@ -1534,7 +1653,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 0,
+    gap: 14,
+    marginTop: 2,
+    marginBottom: 6,
   },
   metricRow: {
     flexDirection: 'row',
@@ -1543,21 +1664,21 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   medicationMetric: {
-    color: '#F97316',
+    color: '#EF4444',
   },
   medicationCard: {
-    borderColor: '#FED7AA',
+    borderColor: '#FECACA',
     borderLeftWidth: 4,
-    borderLeftColor: '#F97316',
+    borderLeftColor: '#EF4444',
   },
   medicationIcon: {
-    backgroundColor: 'rgba(249, 115, 22, 0.1)',
-    borderColor: '#FED7AA',
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
   },
   addMedicationHint: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#F97316',
+    color: '#EF4444',
     marginTop: 2,
   },
   widgetIcon: {
@@ -1767,23 +1888,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#2563EB',
-    paddingVertical: 5,
-    paddingHorizontal: 12,
+    minHeight: 36,
+    minWidth: 88,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     borderRadius: 999,
     justifyContent: 'center',
-    gap: 4,
     marginTop: 0,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+    elevation: 2,
   },
   medicationAddChip: {
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F97316',
-    paddingVertical: 5,
-    paddingHorizontal: 12,
+    backgroundColor: '#EF4444',
+    minHeight: 36,
+    minWidth: 82,
+    paddingVertical: 8,
+    paddingHorizontal: 17,
     borderRadius: 999,
     justifyContent: 'center',
-    gap: 4,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+    elevation: 2,
   },
   chipPressed: {
     transform: [{ scale: 0.97 }],
@@ -1791,8 +1924,8 @@ const styles = StyleSheet.create({
   },
   quickActionText: {
     color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '800',
   },
   nextMedicationText: {
     fontSize: 13,

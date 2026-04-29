@@ -35,7 +35,7 @@ class OtcMedicineController extends Controller
         $category = $request->input('category');
         $ageGroup = $request->input('age_group');
 
-        $query = OtcMedicine::query();
+        $query = OtcMedicine::query()->otcOnly();
 
         if ($category) {
             $query->where('category', $category);

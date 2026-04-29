@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface FAQItem {
@@ -11,40 +10,53 @@ interface FAQItem {
 }
 
 export default function HelpSupport() {
-  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
+
+  const showPrivacyPolicy = () => {
+    Alert.alert(
+      'IntakeSync Privacy Policy',
+      'IntakeSync is a self-monitoring app for beverage tracking, hydration goals, and medication reminder support.\n\nIt may store account/profile information and app activity needed for app features. Data is used to support functionality such as reminders, summaries, and preferences.\n\nIntakeSync does not provide medical diagnosis, treatment, or professional medical advice. Users are responsible for reviewing medication instructions from healthcare professionals.'
+    );
+  };
+
+  const showTerms = () => {
+    Alert.alert(
+      'IntakeSync Terms of Service',
+      'IntakeSync is for personal organization and self-monitoring. It does not replace professional healthcare advice.\n\nUsers should consult a qualified professional for medical concerns and are responsible for the accuracy of information they enter.\n\nReminder notifications may depend on device permissions and settings and may not always be delivered. Use of the app means accepting these limitations.'
+    );
+  };
 
   const faqItems: FAQItem[] = [
     {
       id: '1',
       question: 'How do I add medications?',
-      answer: 'Go to Medical History and tap "Add Medication". Enter the medication name, dosage, frequency, and reason. Your medications will be saved and you\'ll get reminders.',
+      answer: 'Open the Medication tab and add the medicine details and reminder schedule you want to track.',
     },
     {
       id: '2',
-      question: 'Can I edit my profile picture?',
-      answer: 'Yes! Tap the camera icon on your profile picture to upload a new photo from your gallery or take a new one with your camera.',
+      question: 'How do I track beverages?',
+      answer: 'Open the Beverage tab, choose a beverage type, and log the amount you drank.',
     },
     {
       id: '3',
-      question: 'How do notifications work?',
-      answer: 'You can customize notifications in Settings > Notifications. Choose which reminders you want to receive for medications, hydration, and health tips.',
+      question: 'How is my hydration goal shown?',
+      answer: 'Your hydration goal appears in hydration-related screens and can be adjusted from your profile information when supported.',
     },
     {
       id: '4',
-      question: 'Is my health data private?',
-      answer: 'Yes, your health data is encrypted and stored securely. We never share your information with third parties without your consent.',
+      question: 'How do notifications work?',
+      answer: 'Open Profile > Notifications to allow notifications and choose which reminder preferences to keep on. Reminder delivery depends on device permission and the existing reminder setup.',
     },
     {
       id: '5',
-      question: 'How do I change my password?',
-      answer: 'Go to Privacy & Security and tap "Change Password". Enter your current password and your new password.',
+      question: 'How do I edit my profile?',
+      answer: 'Open Profile > Personal Information, then tap the edit icon to update account and hydration profile details.',
     },
     {
       id: '6',
-      question: 'Can I delete my account?',
-      answer: 'Yes, you can delete your account in Privacy & Security settings. This action cannot be undone and will permanently delete all your data.',
+      question: 'How do I change my password?',
+      answer: 'Open Profile > Privacy & Security and choose Change Password.',
     },
   ];
 
@@ -52,107 +64,75 @@ export default function HelpSupport() {
     {
       id: '1',
       title: 'Email Support',
-      description: 'support@aquatab.com',
+      description: 'support@intakesync.local',
       icon: 'mail-outline',
-      action: () => Linking.openURL('mailto:support@aquatab.com'),
+      action: () => Alert.alert('Info', 'Email support is not available yet.'),
     },
     {
       id: '2',
-      title: 'Call Us',
-      description: '+1 (555) 123-4567',
-      icon: 'call-outline',
-      action: () => Linking.openURL('tel:+15551234567'),
+      title: 'Privacy Policy',
+      description: 'Information page',
+      icon: 'document-text-outline',
+      action: showPrivacyPolicy,
     },
     {
       id: '3',
-      title: 'Live Chat',
-      description: 'Chat with our team (9 AM - 6 PM EST)',
-      icon: 'chatbubbles-outline',
-      action: () => Alert.alert('Live Chat', 'Our support team is online now!'),
-    },
-    {
-      id: '4',
-      title: 'FAQ',
-      description: 'Browse common questions',
-      icon: 'help-circle-outline',
-      action: () => setExpandedFAQ(expandedFAQ ? null : '1'),
+      title: 'Terms of Service',
+      description: 'Information page',
+      icon: 'shield-checkmark-outline',
+      action: showTerms,
     },
   ];
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={[styles.header, { paddingTop: insets.top || 12 }]}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
+        <View style={styles.headerCopy}>
           <Text style={styles.title}>Help & Support</Text>
-          <View style={styles.spacer} />
+          <Text style={styles.subtitle}>Find answers about IntakeSync features and account settings.</Text>
         </View>
+      </View>
 
-        <View style={styles.content}>
-          {/* Quick Support */}
-          <Text style={styles.sectionTitle}>Quick Support</Text>
-          {supportChannels.map((channel) => (
-            <TouchableOpacity key={channel.id} style={styles.supportCard} onPress={channel.action}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionTitle}>Support</Text>
+        <View style={styles.card}>
+          {supportChannels.map((channel, index) => (
+            <TouchableOpacity key={channel.id} style={styles.supportRow} onPress={channel.action}>
               <View style={styles.supportIcon}>
-                <Ionicons name={channel.icon as any} size={24} color="#1E3A8A" />
+                <Ionicons name={channel.icon as any} size={20} color="#2563EB" />
               </View>
               <View style={styles.supportContent}>
                 <Text style={styles.supportTitle}>{channel.title}</Text>
                 <Text style={styles.supportDescription}>{channel.description}</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+              <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+              {index < supportChannels.length - 1 ? <View style={styles.absoluteDivider} /> : null}
             </TouchableOpacity>
           ))}
+        </View>
 
-          {/* FAQ Section */}
-          <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Frequently Asked Questions</Text>
-          {faqItems.map((item) => (
-            <TouchableOpacity
-              key={item.id}
-              style={styles.faqItem}
-              onPress={() => setExpandedFAQ(expandedFAQ === item.id ? null : item.id)}
-            >
-              <View style={styles.faqHeader}>
-                <Text style={styles.faqQuestion}>{item.question}</Text>
-                <Ionicons
-                  name={expandedFAQ === item.id ? 'chevron-up' : 'chevron-down'}
-                  size={20}
-                  color="#1E3A8A"
-                />
-              </View>
-              {expandedFAQ === item.id && (
-                <Text style={styles.faqAnswer}>{item.answer}</Text>
-              )}
-            </TouchableOpacity>
-          ))}
-
-          {/* Info Cards */}
-          <View style={styles.infoCard}>
-            <Ionicons name="document-text-outline" size={24} color="#1E3A8A" />
-            <View style={styles.infoContent}>
-              <Text style={styles.infoTitle}>Privacy Policy</Text>
-              <TouchableOpacity onPress={() => Linking.openURL('https://aquatab.com/privacy')}>
-                <Text style={styles.infoLink}>Read our privacy policy</Text>
-              </TouchableOpacity>
+        <Text style={[styles.sectionTitle, styles.faqTitle]}>Frequently Asked Questions</Text>
+        {faqItems.map((item) => (
+          <TouchableOpacity
+            key={item.id}
+            style={styles.faqItem}
+            onPress={() => setExpandedFAQ(expandedFAQ === item.id ? null : item.id)}
+          >
+            <View style={styles.faqHeader}>
+              <Text style={styles.faqQuestion}>{item.question}</Text>
+              <Ionicons
+                name={expandedFAQ === item.id ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color="#2563EB"
+              />
             </View>
-          </View>
+            {expandedFAQ === item.id ? <Text style={styles.faqAnswer}>{item.answer}</Text> : null}
+          </TouchableOpacity>
+        ))}
 
-          <View style={styles.infoCard}>
-            <Ionicons name="shield-checkmark-outline" size={24} color="#1E3A8A" />
-            <View style={styles.infoContent}>
-              <Text style={styles.infoTitle}>Terms of Service</Text>
-              <TouchableOpacity onPress={() => Linking.openURL('https://aquatab.com/terms')}>
-                <Text style={styles.infoLink}>Read our terms of service</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={styles.versionCard}>
-            <Text style={styles.versionText}>App Version 1.0.0</Text>
-            <Text style={styles.buildText}>Build 001</Text>
-          </View>
+        <View style={styles.versionCard}>
+          <Text style={styles.versionText}>IntakeSync</Text>
+          <Text style={styles.buildText}>App Version 1.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -162,130 +142,147 @@ export default function HelpSupport() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
   },
   scrollView: {
     flex: 1,
   },
+  content: {
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 56,
+  },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 16,
+    paddingBottom: 22,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  headerCopy: {
+    flex: 1,
   },
   title: {
     fontSize: 24,
-    fontWeight: '700',
-    color: '#1F2937',
+    fontWeight: '900',
+    color: '#0F172A',
   },
-  spacer: {
-    width: 24,
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
+  subtitle: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 4,
+    lineHeight: 18,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 12,
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginBottom: 10,
   },
-  supportCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 12,
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  supportRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
   },
   supportIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#EBF8FF',
-    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#EFF6FF',
     alignItems: 'center',
-    marginRight: 12,
+    justifyContent: 'center',
   },
   supportContent: {
     flex: 1,
+    minWidth: 0,
   },
   supportTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 2,
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginBottom: 3,
   },
   supportDescription: {
     fontSize: 13,
-    color: '#6B7280',
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  absoluteDivider: {
+    position: 'absolute',
+    left: 70,
+    right: 0,
+    bottom: 0,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  faqTitle: {
+    marginTop: 24,
   },
   faqItem: {
-    backgroundColor: 'white',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 12,
+    paddingVertical: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 7,
+    elevation: 1,
   },
   faqHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
   },
   faqQuestion: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginRight: 12,
+    fontWeight: '900',
+    color: '#0F172A',
+    lineHeight: 20,
   },
   faqAnswer: {
     fontSize: 14,
-    color: '#6B7280',
+    color: '#475569',
     marginTop: 12,
     lineHeight: 20,
-  },
-  infoCard: {
-    backgroundColor: '#EBF8FF',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginTop: 16,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  infoContent: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  infoTitle: {
-    fontSize: 14,
     fontWeight: '600',
-    color: '#1E3A8A',
-    marginBottom: 4,
-  },
-  infoLink: {
-    fontSize: 13,
-    color: '#1E3A8A',
-    textDecorationLine: 'underline',
   },
   versionCard: {
     alignItems: 'center',
-    paddingVertical: 20,
-    marginTop: 20,
+    paddingVertical: 22,
   },
   versionText: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginBottom: 4,
+    fontSize: 15,
+    color: '#0F172A',
+    fontWeight: '900',
   },
   buildText: {
+    marginTop: 4,
     fontSize: 12,
-    color: '#9CA3AF',
+    color: '#94A3B8',
+    fontWeight: '700',
   },
 });

@@ -51,7 +51,8 @@ const DetailModal: React.FC<DetailModalProps> = ({
 };
 
 interface InsightsData {
-  healthScore: number;
+  healthScore: number | null;
+  hasData: boolean;
   hydrationAvg: number | null;
   medicationAdherence: number | null;
   missedDoses: number;
@@ -61,7 +62,7 @@ interface InsightsData {
   beverageDaysWithLogs: number;
   beverageLogs: any[];
   medicationEvents: any[];
-  weeklyData: { day: string; score: number; status: 'good' | 'warning' }[];
+  weeklyData: { day: string; date?: string; score: number | null; hasData: boolean; status: 'good' | 'warning' | 'empty' }[];
 }
 
 const clampScore = (score: number) => Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
@@ -100,14 +101,31 @@ const formatMissedDoses = (missed: number, scheduled: number) => {
   return `${safeMissed} missed dose${safeMissed === 1 ? '' : 's'}`;
 };
 
-const getScoreMessage = (score: number) => {
+const getScoreMessage = (score: number | null) => {
+  if (score === null) return 'No score yet';
   if (score <= 39) return 'Needs attention';
-  if (score <= 69) return 'Some progress today';
+  if (score <= 69) return 'Some progress';
   if (score <= 89) return 'Good routine progress';
-  return 'Excellent routine consistency';
+  return 'Strong routine consistency';
 };
 
-const getScoreColor = (score: number) => {
+const buildEmptyWeek = (): InsightsData['weeklyData'] => {
+  const start = getWeekStart();
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return {
+      day: ['S', 'M', 'T', 'W', 'T', 'F', 'S'][index],
+      date: date.toISOString().slice(0, 10),
+      score: null,
+      hasData: false,
+      status: 'empty' as const,
+    };
+  });
+};
+
+const getScoreColor = (score: number | null) => {
+  if (score === null) return '#64748B';
   if (score <= 39) return '#EF4444';
   if (score <= 69) return '#F59E0B';
   if (score <= 89) return '#2563EB';
@@ -124,55 +142,43 @@ const getRoutineTips = (
   const hasMedicationData = scheduledDoses > 0 && medicationAdherence !== null;
   const beverageLow = hasBeverageData && hydrationAvg < 1200;
   const medicationNeedsAttention = hasMedicationData && (medicationAdherence < 70 || missedDoses > 0);
+  const tips: { label: string; text: string; color: string; icon: string }[] = [];
 
   if (!hasBeverageData && !hasMedicationData) {
     return {
-      color: '#F59E0B',
+      color: '#2563EB',
       bg: '#FFFBEB',
-      icon: 'bulb',
-      tips: ['Log your activity regularly to get better insights.'],
-    };
-  }
-
-  if ((!hasBeverageData || !hasMedicationData) && !beverageLow && !medicationNeedsAttention) {
-    return {
-      color: '#F59E0B',
-      bg: '#FFFBEB',
-      icon: 'bulb',
-      tips: ['Log your activity regularly to get better insights.'],
-    };
-  }
-
-  if (!beverageLow && !medicationNeedsAttention && hasBeverageData && hasMedicationData) {
-    return {
-      color: '#10B981',
-      bg: '#ECFDF5',
-      icon: 'checkmark-circle',
-      tips: ['Great consistency. Keep your routine steady.'],
-    };
-  }
-
-  if (beverageLow && medicationNeedsAttention) {
-    return {
-      color: '#F97316',
-      bg: '#FFF7ED',
-      icon: 'notifications',
+      icon: 'sparkles',
       tips: [
-        'Log beverages after meals or keep water visible.',
-        'Check reminder settings and review schedule times.',
+        { label: 'Beverage', text: 'Log beverages for a few days to unlock trends.', color: '#2563EB', icon: 'water-outline' },
+        { label: 'Medication', text: 'Add medication reminders to track adherence.', color: '#EF4444', icon: 'medkit-outline' },
       ],
     };
   }
 
+  if (!hasBeverageData) {
+    tips.push({ label: 'Beverage', text: 'Log beverages after meals or routine breaks.', color: '#2563EB', icon: 'water-outline' });
+  }
+  if (beverageLow) {
+    tips.push({ label: 'Beverage', text: 'Use the Beverage tab to record water, coffee, juice, or other drinks.', color: '#2563EB', icon: 'water-outline' });
+  }
+  if (!hasMedicationData) {
+    tips.push({ label: 'Medication', text: 'Medication insights appear after reminders are scheduled.', color: '#EF4444', icon: 'medkit-outline' });
+  }
+  if (missedDoses > 0) {
+    tips.push({ label: 'Medication', text: 'Review reminder times and check off doses when taken.', color: '#EF4444', icon: 'time-outline' });
+  } else if (medicationNeedsAttention) {
+    tips.push({ label: 'Medication', text: 'Mark doses as taken when completed.', color: '#EF4444', icon: 'checkmark-circle-outline' });
+  }
+  if (tips.length === 0) {
+    tips.push({ label: 'Consistency', text: 'Your routine looks consistent this week. Keep logging regularly.', color: '#10B981', icon: 'checkmark-circle-outline' });
+  }
+
   return {
-    color: medicationNeedsAttention ? '#F97316' : '#2563EB',
-    bg: medicationNeedsAttention ? '#FFF7ED' : '#EFF6FF',
-    icon: medicationNeedsAttention ? 'notifications' : 'water',
-    tips: [
-      beverageLow
-        ? 'Log beverages after meals or keep water visible.'
-        : 'Check reminder settings and review schedule times.',
-    ],
+    color: tips.some((tip) => tip.color === '#EF4444') ? '#EF4444' : '#2563EB',
+    bg: tips.some((tip) => tip.color === '#EF4444') ? '#FEF2F2' : '#EFF6FF',
+    icon: tips.some((tip) => tip.color === '#EF4444') ? 'alert-circle-outline' : 'list-circle-outline',
+    tips: tips.slice(0, 4),
   };
 };
 
@@ -181,7 +187,7 @@ export default function InsightsScreen() {
   const [loading, setLoading] = useState<boolean>(true);
   const [insightsData, setInsightsData] = useState<InsightsData | null>(null);
   const [summaryPeriod, setSummaryPeriod] = useState<'weekly' | 'monthly'>('weekly');
-  const [detailModal, setDetailModal] = useState<'beverage' | 'medication' | null>(null);
+  const [detailModal, setDetailModal] = useState<'score' | 'beverage' | 'medication' | null>(null);
 
   const fetchInsightsData = useCallback(async () => {
     try {
@@ -192,23 +198,30 @@ export default function InsightsScreen() {
       ]);
 
       if (weeklyReport) {
-        const overallScore = clampScore(weeklyReport.overall_score ?? 0);
+        const hasReportData = Boolean(weeklyReport.has_data);
+        const overallScore = weeklyReport.overall_score !== null && weeklyReport.overall_score !== undefined
+          ? clampScore(weeklyReport.overall_score)
+          : null;
         const hasMedicationRate = weeklyReport.medications?.adherence_rate !== undefined && weeklyReport.medications?.adherence_rate !== null;
         const medicationAdherence = hasMedicationRate ? clampScore(weeklyReport.medications.adherence_rate) : null;
         const scheduledDoses = Math.max(0, Number(weeklyReport.medications?.scheduled ?? 0));
         const completedDoses = Math.max(0, Number(weeklyReport.medications?.completed ?? 0));
-        const missedDoses = scheduledDoses > 0 ? Math.max(0, Math.min(scheduledDoses, scheduledDoses - completedDoses)) : 0;
-        const rawBeverageLogs = Array.isArray(hydrationData?.entries) ? hydrationData.entries : [];
+        const missedDoses = scheduledDoses > 0
+          ? Math.max(0, Number(weeklyReport.medications?.missed ?? scheduledDoses - completedDoses))
+          : 0;
+        const rawBeverageLogs = Array.isArray(weeklyReport.hydration?.logs)
+          ? weeklyReport.hydration.logs
+          : Array.isArray(hydrationData?.entries) ? hydrationData.entries : [];
         const beverageLogs = rawBeverageLogs.filter((entry: any) => isCurrentWeek(getEntryTime(entry)));
         const beverageTotal = beverageLogs.reduce((sum: number, entry: any) => sum + Number(entry?.amount_ml || entry?.logged_ml || 0), 0);
-        const beverageDaysWithLogs = new Set(beverageLogs.map((entry: any) => new Date(getEntryTime(entry)).toDateString())).size;
-        const hasHydrationTotal = beverageLogs.length > 0 || (weeklyReport.hydration?.total_ml !== undefined && weeklyReport.hydration?.total_ml !== null);
-        const hydrationAvg = beverageLogs.length > 0
+        const beverageDaysWithLogs = Number(weeklyReport.hydration?.days_with_logs ?? new Set(beverageLogs.map((entry: any) => new Date(getEntryTime(entry)).toDateString())).size);
+        const hydrationAvg = weeklyReport.hydration?.daily_average_ml !== undefined && weeklyReport.hydration?.daily_average_ml !== null
+          ? Math.round(Number(weeklyReport.hydration.daily_average_ml))
+          : beverageLogs.length > 0
           ? Math.round(beverageTotal / 7)
-          : hasHydrationTotal
-            ? Math.round(Number(weeklyReport.hydration.total_ml || 0) / 7)
-            : null;
+          : null;
         const medicationSources = [
+          weeklyReport.medications?.events,
           weeklyReport.medications?.recent,
           weeklyReport.medications?.history,
           weeklyReport.medications?.entries,
@@ -226,14 +239,17 @@ export default function InsightsScreen() {
         const weeklyData = Array.isArray(rawDailyData)
           ? rawDailyData
               .map((item: any) => {
-                const score = clampScore(item?.score ?? item?.overall_score ?? item?.routine_score);
+                const rawScore = item?.score ?? item?.overall_score ?? item?.routine_score;
+                const score = rawScore !== null && rawScore !== undefined ? clampScore(rawScore) : null;
                 const entryTime = getEntryTime(item);
                 if (entryTime && !isCurrentWeek(entryTime)) return null;
                 const label = String(item?.day ?? item?.label ?? item?.date ?? '').slice(0, 3) || '';
                 return label ? {
                   day: label.slice(0, 1).toUpperCase(),
+                  date: item?.date,
                   score,
-                  status: score >= 75 ? ('good' as const) : ('warning' as const),
+                  hasData: Boolean(item?.has_data ?? score !== null),
+                  status: score === null ? ('empty' as const) : score >= 75 ? ('good' as const) : ('warning' as const),
                 } : null;
               })
               .filter(Boolean)
@@ -241,6 +257,7 @@ export default function InsightsScreen() {
 
         setInsightsData({
           healthScore: overallScore,
+          hasData: hasReportData || overallScore !== null,
           hydrationAvg,
           medicationAdherence,
           missedDoses,
@@ -250,14 +267,15 @@ export default function InsightsScreen() {
           beverageDaysWithLogs,
           beverageLogs,
           medicationEvents,
-          weeklyData: weeklyData as InsightsData['weeklyData'],
+          weeklyData: weeklyData.length ? weeklyData as InsightsData['weeklyData'] : buildEmptyWeek(),
         });
       } else {
         const rawBeverageLogs = Array.isArray(hydrationData?.entries) ? hydrationData.entries : [];
         const beverageLogs = rawBeverageLogs.filter((entry: any) => isCurrentWeek(getEntryTime(entry)));
         const beverageTotal = beverageLogs.reduce((sum: number, entry: any) => sum + Number(entry?.amount_ml || entry?.logged_ml || 0), 0);
         setInsightsData({
-          healthScore: 0,
+          healthScore: null,
+          hasData: beverageLogs.length > 0,
           hydrationAvg: beverageLogs.length > 0 ? Math.round(beverageTotal / 7) : null,
           medicationAdherence: null,
           missedDoses: 0,
@@ -267,14 +285,15 @@ export default function InsightsScreen() {
           beverageDaysWithLogs: new Set(beverageLogs.map((entry: any) => new Date(getEntryTime(entry)).toDateString())).size,
           beverageLogs,
           medicationEvents: [],
-          weeklyData: [],
+          weeklyData: buildEmptyWeek(),
         });
       }
     } catch (err) {
       console.error('Error fetching insights:', err);
       // Set fallback data on error
       setInsightsData({
-        healthScore: 0,
+        healthScore: null,
+        hasData: false,
         hydrationAvg: null,
         medicationAdherence: null,
         missedDoses: 0,
@@ -284,7 +303,7 @@ export default function InsightsScreen() {
         beverageDaysWithLogs: 0,
         beverageLogs: [],
         medicationEvents: [],
-        weeklyData: [],
+        weeklyData: buildEmptyWeek(),
       });
     }
   }, [token]);
@@ -333,6 +352,7 @@ export default function InsightsScreen() {
   const hasBeverageData = insights.hydrationAvg !== null;
   const hasMedicationData = hasMedicationSchedule && insights.medicationAdherence !== null;
   const routineTips = getRoutineTips(insights.hydrationAvg, insights.medicationAdherence, insights.missedDoses, insights.scheduledDoses);
+  const weeklyHasData = insights.weeklyData.some((item) => item.hasData);
 
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
@@ -345,17 +365,24 @@ export default function InsightsScreen() {
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Hero Card - Routine Score */}
-        <View style={styles.heroCard}>
-          <View style={[styles.scoreCircle, { borderColor: scoreColor }]}>
-            <Text style={[styles.scoreValue, { color: scoreColor }]}>{insights.healthScore}</Text>
-            <Text style={styles.scoreMax}>/100</Text>
+        <TouchableOpacity activeOpacity={0.82} style={styles.heroCard} onPress={() => setDetailModal('score')}>
+          <View style={[styles.scoreCircle, { borderColor: insights.healthScore === null ? '#CBD5E1' : scoreColor }]}>
+            <Text style={[insights.healthScore === null ? styles.scoreEmptyText : styles.scoreValue, { color: scoreColor }]}>
+              {insights.healthScore === null ? 'No score' : insights.healthScore}
+            </Text>
+            {insights.healthScore !== null && <Text style={styles.scoreMax}>/100</Text>}
           </View>
           <View style={styles.heroCopy}>
             <Text style={styles.heroKicker}>Routine Score</Text>
             <Text style={styles.heroTitle}>{getScoreMessage(insights.healthScore)}</Text>
-            <Text style={styles.heroSubtitle}>Based on your activity this week.</Text>
+            <Text style={styles.heroSubtitle}>
+              {insights.healthScore === null
+                ? 'Start logging to build routine insights.'
+                : 'Based on logged beverage activity and medication check-ins.'}
+            </Text>
           </View>
-        </View>
+          <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+        </TouchableOpacity>
 
         <View style={styles.segmentedControl}>
           <TouchableOpacity
@@ -397,11 +424,11 @@ export default function InsightsScreen() {
           <TouchableOpacity activeOpacity={0.78} style={[styles.highlightCard, styles.medicationHighlight]} onPress={() => setDetailModal('medication')}>
             <View style={styles.highlightHeader}>
               <View style={[styles.highlightIconCircle, styles.medicationIconCircle]}>
-                <Ionicons name="checkmark-done-circle" size={18} color="#F97316" />
+                <Ionicons name="medkit-outline" size={17} color="#EF4444" />
               </View>
               <Text style={styles.highlightTitle} numberOfLines={2}>Medication Adherence</Text>
             </View>
-            <Text style={[styles.highlightValue, { color: '#F97316' }]}>
+            <Text style={[styles.highlightValue, { color: '#EF4444' }]}>
               {hasMedicationData ? `${insights.medicationAdherence}%` : '-'}
             </Text>
             <Text style={styles.highlightLabel}>adherence</Text>
@@ -420,13 +447,16 @@ export default function InsightsScreen() {
                 <View style={[styles.tipIconCircle, { backgroundColor: `${routineTips.color}18` }]}>
                   <Ionicons name={routineTips.icon as any} size={20} color={routineTips.color} />
                 </View>
-                <Text style={[styles.patternTitle, { color: routineTips.color }]}>Helpful Tips</Text>
+                <Text style={[styles.patternTitle, { color: routineTips.color }]}>Action Plan</Text>
               </View>
               <View style={styles.tipsList}>
                 {routineTips.tips.map((tip) => (
-                  <View key={tip} style={styles.tipRow}>
-                    <Ionicons name="checkmark-circle" size={16} color={routineTips.color} />
-                    <Text style={styles.tipText}>{tip}</Text>
+                  <View key={tip.text} style={styles.tipRow}>
+                    <View style={[styles.tipBadge, { backgroundColor: `${tip.color}14`, borderColor: `${tip.color}33` }]}>
+                      <Ionicons name={tip.icon as any} size={14} color={tip.color} />
+                      <Text style={[styles.tipBadgeText, { color: tip.color }]}>{tip.label}</Text>
+                    </View>
+                    <Text style={styles.tipText}>{tip.text}</Text>
                   </View>
                 ))}
               </View>
@@ -437,15 +467,20 @@ export default function InsightsScreen() {
         <View style={styles.chartCard}>
           <Text style={styles.chartTitle}>{summaryPeriod === 'weekly' ? 'Weekly Summary' : 'Monthly Summary'}</Text>
           {summaryPeriod === 'monthly' ? (
-            <View style={styles.placeholderCard}>
+            <View style={styles.monthlyPlaceholder}>
+              <View style={styles.monthGrid}>
+                {Array.from({ length: 12 }, (_, index) => (
+                  <View key={index} style={styles.monthDot} />
+                ))}
+              </View>
               <Ionicons name="calendar-outline" size={22} color="#2563EB" />
               <Text style={styles.placeholderText}>Monthly trends will appear after more logged activity.</Text>
             </View>
-          ) : insights.weeklyData.length > 0 ? (
-            <View style={styles.chartContainer}>
+          ) : (
+            <View style={[styles.chartContainer, !weeklyHasData && styles.chartContainerWithEmptyCopy]}>
               {insights.weeklyData.map((item, index) => {
-                const barHeight = (item.score / 100) * 96;
-                const barColor = item.status === 'good' ? '#10B981' : '#F59E0B';
+                const barHeight = item.score === null ? 8 : Math.max(10, (item.score / 100) * 96);
+                const barColor = item.status === 'empty' ? '#CBD5E1' : item.status === 'good' ? '#10B981' : '#F59E0B';
                 
                 return (
                   <View key={index} style={styles.chartBar}>
@@ -453,15 +488,16 @@ export default function InsightsScreen() {
                       <View style={[styles.bar, { height: barHeight, backgroundColor: barColor }]} />
                     </View>
                     <Text style={styles.dayLabel}>{item.day}</Text>
-                    <Text style={styles.scoreLabel}>{item.score}</Text>
+                    <Text style={styles.scoreLabel}>{item.score === null ? '-' : item.score}</Text>
                   </View>
                 );
               })}
-            </View>
-          ) : (
-            <View style={styles.placeholderCard}>
-              <Ionicons name="bar-chart-outline" size={22} color="#2563EB" />
-              <Text style={styles.placeholderText}>Start logging daily to unlock your weekly trends.</Text>
+              {!weeklyHasData && (
+                <View style={styles.chartEmptyCopy}>
+                  <Text style={styles.emptyChartTitle}>No weekly trends yet</Text>
+                  <Text style={styles.emptyChartText}>Log beverages or medication check-ins to build your weekly pattern.</Text>
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -469,6 +505,52 @@ export default function InsightsScreen() {
         {/* Bottom Padding */}
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <DetailModal
+        visible={detailModal === 'score'}
+        onClose={() => setDetailModal(null)}
+        title="Routine Score"
+        color={scoreColor}
+        icon="analytics-outline"
+      >
+        <Text style={styles.modalRecommendation}>
+          This score summarizes your logged beverage activity and medication check-ins for the selected period.
+        </Text>
+        <Text style={styles.modalSectionLabel}>Contributors</Text>
+        <View style={styles.contributorList}>
+          <View style={styles.contributorRow}>
+            <Ionicons name="water-outline" size={16} color="#2563EB" />
+            <Text style={styles.modalListText}>
+              Beverage logging{hasBeverageData ? `: ${insights.beverageDaysWithLogs} day${insights.beverageDaysWithLogs === 1 ? '' : 's'} with logs` : ': no logs yet'}
+            </Text>
+          </View>
+          <View style={styles.contributorRow}>
+            <Ionicons name="medkit-outline" size={16} color="#EF4444" />
+            <Text style={styles.modalListText}>
+              Medication adherence{hasMedicationSchedule ? `: ${insights.completedDoses} of ${insights.scheduledDoses} check-ins completed` : ': no schedule data yet'}
+            </Text>
+          </View>
+          {hasMedicationSchedule && (
+            <View style={styles.contributorRow}>
+              <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+              <Text style={styles.modalListText}>Missed doses: {insights.missedDoses}</Text>
+            </View>
+          )}
+          <View style={styles.contributorRow}>
+            <Ionicons name="calendar-outline" size={16} color="#64748B" />
+            <Text style={styles.modalListText}>
+              Logging consistency: {insights.weeklyData.filter((item) => item.hasData).length} of 7 days have activity
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.modalSectionLabel}>Suggested actions</Text>
+        {routineTips.tips.map((tip) => (
+          <View key={`modal-${tip.text}`} style={styles.modalListRow}>
+            <Ionicons name={tip.icon as any} size={16} color={tip.color} />
+            <Text style={styles.modalListText}>{tip.text}</Text>
+          </View>
+        ))}
+      </DetailModal>
 
       <DetailModal
         visible={detailModal === 'beverage'}
@@ -507,8 +589,8 @@ export default function InsightsScreen() {
         visible={detailModal === 'medication'}
         onClose={() => setDetailModal(null)}
         title="Medication Adherence"
-        color="#F97316"
-        icon="checkmark-done-circle"
+        color="#EF4444"
+        icon="medkit-outline"
       >
         <Text style={styles.modalSectionLabel}>This week</Text>
         <View style={styles.modalStatGrid}>
@@ -589,7 +671,7 @@ const styles = StyleSheet.create({
   heroCard: {
     backgroundColor: 'white',
     borderRadius: 18,
-    padding: 18,
+    padding: 16,
     marginBottom: 14,
     alignItems: 'center',
     flexDirection: 'row',
@@ -615,6 +697,12 @@ const styles = StyleSheet.create({
     fontSize: 36,
     fontWeight: '800',
     color: '#1E3A8A',
+  },
+  scoreEmptyText: {
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   scoreMax: {
     fontSize: 16,
@@ -643,21 +731,31 @@ const styles = StyleSheet.create({
   },
   segmentedControl: {
     flexDirection: 'row',
-    backgroundColor: '#EAF2FF',
-    borderRadius: 14,
-    padding: 4,
-    marginBottom: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 999,
+    padding: 5,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   segmentButton: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 10,
+    borderRadius: 999,
   },
   segmentButtonActive: {
     backgroundColor: '#2563EB',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 2,
   },
   segmentText: {
     fontSize: 13,
@@ -676,7 +774,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'white',
     borderRadius: 16,
-    padding: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#1E3A8A',
@@ -684,7 +782,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
-    minHeight: 152,
+    minHeight: 126,
     overflow: 'hidden',
   },
   beverageHighlight: {
@@ -693,20 +791,20 @@ const styles = StyleSheet.create({
   },
   medicationHighlight: {
     borderLeftWidth: 4,
-    borderLeftColor: '#F97316',
-    borderColor: '#FED7AA',
-    shadowColor: '#F97316',
+    borderLeftColor: '#EF4444',
+    borderColor: '#FECACA',
+    shadowColor: '#EF4444',
   },
   highlightHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
+    gap: 7,
+    marginBottom: 8,
   },
   highlightIconCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -716,8 +814,8 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
   },
   medicationIconCircle: {
-    backgroundColor: '#FFF7ED',
-    borderColor: '#FED7AA',
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
   },
   highlightTitle: {
     flex: 1,
@@ -727,15 +825,15 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   highlightValue: {
-    fontSize: 27,
+    fontSize: 24,
     fontWeight: '800',
     color: '#1F2937',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   highlightLabel: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#9CA3AF',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   trendContainer: {
     flexDirection: 'row',
@@ -749,7 +847,7 @@ const styles = StyleSheet.create({
   },
   missedText: {
     fontSize: 12,
-    color: '#EF4444',
+    color: '#B91C1C',
     fontWeight: '700',
     lineHeight: 16,
     flexShrink: 1,
@@ -813,12 +911,24 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   tipRow: {
+    gap: 7,
+    paddingVertical: 2,
+  },
+  tipBadge: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  tipBadgeText: {
+    fontSize: 11,
+    fontWeight: '900',
   },
   tipText: {
-    flex: 1,
     fontSize: 13,
     color: '#475569',
     lineHeight: 19,
@@ -864,6 +974,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
+    position: 'relative',
+  },
+  chartContainerWithEmptyCopy: {
+    paddingBottom: 78,
   },
   chartBar: {
     flex: 1,
@@ -876,7 +990,10 @@ const styles = StyleSheet.create({
   },
   bar: {
     width: 32,
-    borderRadius: 8,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    borderBottomLeftRadius: 4,
+    borderBottomRightRadius: 4,
   },
   dayLabel: {
     fontSize: 13,
@@ -898,6 +1015,50 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+  },
+  monthlyPlaceholder: {
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  monthGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    width: 66,
+    justifyContent: 'center',
+  },
+  monthDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#CBD5E1',
+  },
+  chartEmptyCopy: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  emptyChartTitle: {
+    color: '#1F2937',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  emptyChartText: {
+    color: '#64748B',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginTop: 3,
   },
   placeholderText: {
     flex: 1,
@@ -954,7 +1115,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#4B5563',
     lineHeight: 24,
-    marginBottom: 24,
+    marginBottom: 16,
+  },
+  contributorList: {
+    marginBottom: 16,
+  },
+  contributorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   modalSectionLabel: {
     fontSize: 12,

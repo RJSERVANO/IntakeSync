@@ -22,6 +22,8 @@ class Medication extends Model
         'days_of_week',
         'notes',
         'color',
+        'otc_medicine_id',
+        'otc_metadata',
     ];
 
     protected $casts = [
@@ -31,6 +33,7 @@ class Medication extends Model
         'start_date' => 'date',
         'end_date' => 'date',
         'days_of_week' => 'array',
+        'otc_metadata' => 'array',
     ];
 
     public function history()

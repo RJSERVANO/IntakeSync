@@ -15,11 +15,30 @@ type MedicationItem = {
   times: string[]; // ISO timestamps (time-of-day represented as ISO strings)
   reminder: boolean;
   start_date?: string;
-  end_date?: string;
+  end_date?: string | null;
   frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
   days_of_week?: number[];
   notes?: string;
   color?: string;
+  otc_medicine_id?: number | string | null;
+  otc_metadata?: any;
+};
+
+type OtcMedicineSuggestion = {
+  id?: number | string;
+  name: string;
+  generic_name?: string;
+  brand?: string;
+  category?: string;
+  description?: string;
+  common_use?: string;
+  dosage?: string;
+  dosage_text?: string;
+  interval_hours?: number | string | null;
+  max_daily_doses?: number | string | null;
+  frequency?: string;
+  timing_instructions?: string;
+  warnings?: string;
 };
 
 type HistoryEntry = {
@@ -45,9 +64,141 @@ const STORAGE_KEYS = {
 
 const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
+const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
+}
+
+function todayDateString() {
+  return toDateStringLocal(new Date());
+}
+
+function toDateStringLocal(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateStringLocal(dateString?: string | null) {
+  if (!dateString) return new Date();
+  const [year, month, day] = dateString.slice(0, 10).split('-').map(Number);
+  return new Date(year || new Date().getFullYear(), (month || 1) - 1, day || 1);
+}
+
+function formatDateLabel(dateString?: string | null) {
+  if (!dateString) return '';
+  return dateString === todayDateString() ? 'Today' : dateString;
+}
+
+function formatCalendarTitle(date: Date) {
+  return date.toLocaleDateString([], { month: 'long', year: 'numeric' });
+}
+
+function formatDateDetail(dateString?: string | null) {
+  if (!dateString) return 'No end date';
+  const date = parseDateStringLocal(dateString);
+  return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function buildCalendarDays(monthDate: Date) {
+  const firstOfMonth = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const firstGridDay = new Date(firstOfMonth);
+  firstGridDay.setDate(firstOfMonth.getDate() - firstOfMonth.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstGridDay);
+    date.setDate(firstGridDay.getDate() + index);
+    return date;
+  });
+}
+
+function roundToNextMinutes(date: Date, increment = 15) {
+  const rounded = new Date(date);
+  rounded.setSeconds(0, 0);
+  const minutes = rounded.getMinutes();
+  const nextMinutes = Math.ceil(minutes / increment) * increment;
+  if (nextMinutes === 60) {
+    rounded.setHours(rounded.getHours() + 1, 0, 0, 0);
+  } else {
+    rounded.setMinutes(nextMinutes);
+  }
+  return rounded;
+}
+
+function inferScheduleFromText(text = '', frequency?: string) {
+  const lower = text.toLowerCase();
+  const everyMatch = lower.match(/every\s+(\d+)\s*(?:hour|hr)/);
+  const maxDosesMatch = lower.match(/(?:max|maximum)\s+(\d+)/);
+  let intervalHours = everyMatch ? Number(everyMatch[1]) : undefined;
+  let maxDosesToday = maxDosesMatch ? Number(maxDosesMatch[1]) : undefined;
+
+  if (!intervalHours) {
+    if (lower.includes('twice') || lower.includes('2 times') || frequency === 'twice_daily') intervalHours = 12;
+    else if (lower.includes('three times') || lower.includes('3 times') || frequency === 'three_times_daily') intervalHours = 8;
+    else if (lower.includes('four times') || lower.includes('4 times') || frequency === 'four_times_daily') intervalHours = 6;
+    else if (lower.includes('once') || lower.includes('daily') || frequency === 'once_daily') intervalHours = 24;
+  }
+
+  if (!maxDosesToday) {
+    if (frequency === 'once_daily' || intervalHours === 24) maxDosesToday = 1;
+    else if (frequency === 'twice_daily' || intervalHours === 12) maxDosesToday = 2;
+    else if (frequency === 'three_times_daily' || intervalHours === 8) maxDosesToday = 3;
+    else if (frequency === 'four_times_daily' || intervalHours === 6) maxDosesToday = 4;
+  }
+
+  return {
+    intervalHours: intervalHours || 24,
+    maxDosesToday: Math.max(1, Math.min(maxDosesToday || 1, 6)),
+  };
+}
+
+function generateSuggestedTimes({
+  startTime,
+  intervalHours,
+  maxDosesToday,
+  frequency,
+}: {
+  startTime: Date;
+  intervalHours?: number | string | null;
+  maxDosesToday?: number | string | null;
+  frequency?: string;
+}) {
+  const inferred = inferScheduleFromText('', frequency);
+  const interval = Number(intervalHours || inferred.intervalHours || 24);
+  const maxDoses = Math.max(1, Math.min(Number(maxDosesToday || inferred.maxDosesToday || 1), 6));
+  const first = roundToNextMinutes(startTime);
+  const seen = new Set<string>();
+  const times: string[] = [];
+
+  for (let index = 0; index < maxDoses; index += 1) {
+    const candidate = new Date(first);
+    candidate.setHours(first.getHours() + index * interval);
+    const key = `${candidate.getHours()}:${candidate.getMinutes()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      times.push(candidate.toISOString());
+    }
+  }
+
+  return times;
+}
+
+function buildTimesForMedicine(medicine: OtcMedicineSuggestion, startTime = new Date()) {
+  const guidanceText = [
+    medicine.dosage_text,
+    medicine.dosage,
+    medicine.timing_instructions,
+  ].filter(Boolean).join(' ');
+  const inferred = inferScheduleFromText(guidanceText, medicine.frequency);
+
+  return generateSuggestedTimes({
+    startTime,
+    intervalHours: medicine.interval_hours || inferred.intervalHours,
+    maxDosesToday: medicine.max_daily_doses || inferred.maxDosesToday,
+    frequency: medicine.frequency,
+  });
 }
 
 function normalizeMedication(med: any, fallbackColor?: string): MedicationItem {
@@ -81,6 +232,7 @@ export default function Medication() {
   const [exporting, setExporting] = useState(false);
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showMedicineSuggestions, setShowMedicineSuggestions] = useState(false);
+  const [selectedOtcMedicine, setSelectedOtcMedicine] = useState<OtcMedicineSuggestion | null>(null);
   const [lastClearedTime, setLastClearedTime] = useState<number>(0);
   const [clearedHistoryKeys, setClearedHistoryKeys] = useState<string[]>([]);
   const [historyExpanded, setHistoryExpanded] = useState(false);
@@ -100,14 +252,17 @@ export default function Medication() {
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
   // Advanced scheduling state
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(todayDateString());
   const [endDate, setEndDate] = useState('');
   const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
   const [notes, setNotes] = useState('');
   const [color, setColor] = useState('#1E3A8A');
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [datePickerType, setDatePickerType] = useState<'start' | 'end' | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState(parseDateStringLocal(todayDateString()));
+  const [tempStartDate, setTempStartDate] = useState(todayDateString());
+  const [tempEndDate, setTempEndDate] = useState('');
+  const [tempActiveDateField, setTempActiveDateField] = useState<'start' | 'end'>('start');
   // Time picker modal state
   const [tempTime, setTempTime] = useState<Date | null>(null);
   const [timeModalVisible, setTimeModalVisible] = useState(false);
@@ -297,43 +452,16 @@ export default function Medication() {
       if (medicineData) {
         try {
           const data = JSON.parse(medicineData as string);
-          if (data.description) setNotes(data.description);
-          // Set smart schedule based on frequency
-          if (data.frequency) {
-            const now = new Date();
-            const recommendedTimes: string[] = [];
-
-            switch (data.frequency) {
-              case 'once_daily':
-                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                break;
-              case 'twice_daily':
-                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
-                break;
-              case 'three_times_daily':
-                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(14, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
-                break;
-              case 'four_times_daily':
-                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(12, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(18, 0, 0, 0)).toISOString());
-                recommendedTimes.push(new Date(now.setHours(22, 0, 0, 0)).toISOString());
-                break;
-            }
-
-            if (recommendedTimes.length > 0) {
-              setTimes(recommendedTimes);
-            }
-          }
+          const selectedMedicine = data as OtcMedicineSuggestion;
+          setSelectedOtcMedicine(selectedMedicine);
+          const recommendedTimes = buildTimesForMedicine(selectedMedicine);
+          if (recommendedTimes.length > 0) setTimes(recommendedTimes);
         } catch (e) {
           console.log('Error parsing medicine data:', e);
         }
       }
     }
-  }, [medicineName, medicineDosage, medicineData]);
+  }, [medicineName, medicineDosage, medicineData, modalVisible]);
 
   // Auto-mark missed medications and reload stats periodically
   useEffect(() => {
@@ -378,8 +506,9 @@ export default function Medication() {
     setName('');
     setDosage('');
     setTimes([]);
+    setSelectedOtcMedicine(null);
     setReminder(true);
-    setStartDate(new Date().toISOString().split('T')[0]);
+    setStartDate(todayDateString());
     setEndDate('');
     setFrequency('daily');
     setDaysOfWeek([]);
@@ -394,8 +523,9 @@ export default function Medication() {
     setName(current.name);
     setDosage(current.dosage);
     setTimes([...(current.times || [])]);
+    setSelectedOtcMedicine(current.otc_metadata || null);
     setReminder(!!current.reminder);
-    setStartDate(current.start_date || new Date().toISOString().split('T')[0]);
+    setStartDate(current.start_date || todayDateString());
     setEndDate(current.end_date || '');
     setFrequency(current.frequency || 'daily');
     setDaysOfWeek([...(current.days_of_week || [])]);
@@ -407,18 +537,37 @@ export default function Medication() {
   async function saveMedication() {
     if (!name.trim()) return Alert.alert('Validation', 'Please enter a name');
     if (!times.length) return Alert.alert('Validation', 'Please add at least one reminder time');
+    const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
+    const startChanged = !editing || (startDate || todayDateString()) !== originalStart;
+    if (startChanged && parseDateStringLocal(startDate || todayDateString()).getTime() < parseDateStringLocal(todayDateString()).getTime()) {
+      return Alert.alert('Validation', 'Start date cannot be in the past. Please select today or a future date.');
+    }
+    if (endDate && parseDateStringLocal(endDate).getTime() < parseDateStringLocal(startDate || todayDateString()).getTime()) {
+      return Alert.alert('Validation', 'End date cannot be before the start date.');
+    }
 
     const medData = {
       name,
       dosage,
       times,
       reminder,
-      start_date: startDate,
-      end_date: endDate,
+      start_date: startDate || todayDateString(),
+      end_date: endDate || null,
       frequency,
       days_of_week: daysOfWeek,
       notes,
-      color
+      color,
+      otc_medicine_id: selectedOtcMedicine?.id || null,
+      otc_metadata: selectedOtcMedicine ? {
+        name: selectedOtcMedicine.name,
+        generic_name: selectedOtcMedicine.generic_name || null,
+        category: selectedOtcMedicine.category || null,
+        dosage_text: selectedOtcMedicine.dosage_text || selectedOtcMedicine.dosage || null,
+        interval_hours: selectedOtcMedicine.interval_hours || null,
+        max_daily_doses: selectedOtcMedicine.max_daily_doses || null,
+        warnings: selectedOtcMedicine.warnings || OTC_SAFETY_COPY,
+        is_otc: true,
+      } : null,
     };
 
     if (editing) {
@@ -512,7 +661,7 @@ export default function Medication() {
       title: 'Medication Reminder',
       message: `${medication.name}${medication.dosage ? ` - ${medication.dosage}` : ''}\nScheduled for ${timeLabel}.`,
       tone: 'info',
-      icon: 'medical',
+      icon: 'medkit-outline',
     });
   }
 
@@ -701,6 +850,84 @@ export default function Medication() {
 
   function removeTime(idx: number) {
     setTimes((t) => t.filter((_, i) => i !== idx));
+  }
+
+  function openScheduleSheet(activeField: 'start' | 'end' = 'start') {
+    const draftStart = startDate || todayDateString();
+    const draftEnd = endDate || '';
+    const selectedDate = activeField === 'start' ? draftStart : draftEnd || draftStart;
+    setTempStartDate(draftStart);
+    setTempEndDate(draftEnd);
+    setTempActiveDateField(activeField);
+    setCalendarMonth(parseDateStringLocal(selectedDate));
+    setShowDatePicker(true);
+  }
+
+  function closeDatePicker() {
+    setShowDatePicker(false);
+  }
+
+  function shiftCalendarMonth(delta: number) {
+    setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+  }
+
+  function selectDateFromCalendar(date: Date) {
+    const selected = toDateStringLocal(date);
+    if (!isCalendarDateSelectable(date)) return;
+
+    if (tempActiveDateField === 'end' && parseDateStringLocal(selected).getTime() < parseDateStringLocal(tempStartDate || todayDateString()).getTime()) {
+      Alert.alert('Validation', 'End date cannot be before the start date.');
+      return;
+    }
+
+    if (tempActiveDateField === 'start') {
+      setTempStartDate(selected);
+      if (tempEndDate && parseDateStringLocal(tempEndDate).getTime() < parseDateStringLocal(selected).getTime()) {
+        setTempEndDate('');
+      }
+    } else {
+      setTempEndDate(selected);
+    }
+  }
+
+  function isCalendarDateSelectable(date: Date) {
+    const selected = toDateStringLocal(date);
+    const selectedTime = parseDateStringLocal(selected).getTime();
+    const todayTime = parseDateStringLocal(todayDateString()).getTime();
+
+    if (tempActiveDateField === 'start') {
+      const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
+      const isExistingPastStart = !!editing && !!originalStart && selected === originalStart && selectedTime < todayTime;
+      return selectedTime >= todayTime || isExistingPastStart;
+    }
+
+    return selectedTime >= parseDateStringLocal(tempStartDate || todayDateString()).getTime();
+  }
+
+  function commitScheduleSheet() {
+    if (!tempStartDate) {
+      Alert.alert('Validation', 'Please select a start date.');
+      return;
+    }
+
+    const todayTime = parseDateStringLocal(todayDateString()).getTime();
+    const tempStartTime = parseDateStringLocal(tempStartDate).getTime();
+    const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
+    const startChanged = !editing || tempStartDate !== originalStart;
+
+    if (startChanged && tempStartTime < todayTime) {
+      Alert.alert('Validation', 'Start date cannot be in the past. Please select today or a future date.');
+      return;
+    }
+
+    if (tempEndDate && parseDateStringLocal(tempEndDate).getTime() < tempStartTime) {
+      Alert.alert('Validation', 'End date cannot be before the start date.');
+      return;
+    }
+
+    setStartDate(tempStartDate);
+    setEndDate(tempEndDate || '');
+    closeDatePicker();
   }
 
   async function markTaken(medId: string, timeIso?: string) {
@@ -1176,6 +1403,9 @@ export default function Medication() {
   const displayHistory = validHistory.slice(0, historyLimit);
   const statsModalCopy = getStatsModalCopy();
   const statsModalItems = getStatsModalItems();
+  const calendarDays = buildCalendarDays(calendarMonth);
+  const activeDateString = tempActiveDateField === 'start' ? tempStartDate : tempEndDate;
+  const activeDateLabel = tempActiveDateField === 'start' ? formatDateDetail(tempStartDate) : (tempEndDate ? formatDateDetail(tempEndDate) : 'No end date');
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1251,7 +1481,7 @@ export default function Medication() {
             {displayUpcoming.slice(0, 3).map((item) => (
               <View key={`${item.medication.id}-${item.next_reminder}`} style={styles.upcomingCard}>
                 <View style={[styles.upcomingIcon, { backgroundColor: getMedicationColor(item.medication) }]}>
-                  <Ionicons name="fitness" size={18} color="#FFFFFF" />
+                  <Ionicons name="medkit-outline" size={18} color="#FFFFFF" />
                 </View>
                 <View style={styles.upcomingContent}>
                   <Text style={styles.upcomingName}>{item.medication.name}</Text>
@@ -1288,8 +1518,8 @@ export default function Medication() {
               return (
               <View key={med.id} style={[styles.medicationCard, { borderLeftColor: getMedicationColor(med) }]}>
                 <View style={styles.medicationMainRow}>
-                  <View style={[styles.medicationIcon, { backgroundColor: getMedicationColor(med) }]}>
-                    <Ionicons name="fitness" size={20} color="#FFFFFF" />
+                  <View style={[styles.medicationIcon, { backgroundColor: '#EEF2FF', borderColor: getMedicationColor(med) }]}>
+                    <Ionicons name="medkit-outline" size={20} color={getMedicationColor(med)} />
                   </View>
 
                   <View style={styles.medicationContent}>
@@ -1301,7 +1531,7 @@ export default function Medication() {
                         <View key={index} style={styles.timeBadge}>
                            <Ionicons name="time-outline" size={11} color="#2563EB" />
                            <Text style={styles.timeText}>
-                             {new Date(time).toLocaleTimeString([], { hour: 'numeric', hour12: true })}
+                             {new Date(time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
                            </Text>
                         </View>
                       ))}
@@ -1321,7 +1551,7 @@ export default function Medication() {
                     activeOpacity={0.75}
                     accessibilityLabel={doseCompleted ? 'Dose already taken' : 'Mark medication taken'}
                   >
-                    {taking ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name={doseCompleted ? 'checkmark-circle' : 'medical'} size={16} color={doseCompleted ? '#16A34A' : '#FFFFFF'} />}
+                    {taking ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name={doseCompleted ? 'checkmark-done-circle' : 'checkmark-done'} size={18} color={doseCompleted ? '#16A34A' : '#FFFFFF'} />}
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -1453,7 +1683,10 @@ export default function Medication() {
             <View>
               <TextInput
                 value={name}
-                onChangeText={setName}
+                onChangeText={(text) => {
+                  setName(text);
+                  if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) setSelectedOtcMedicine(null);
+                }}
                 style={styles.input}
                 placeholder="e.g., Vitamin C, Biogesic, Neozep"
                 onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
@@ -1463,54 +1696,32 @@ export default function Medication() {
               {showMedicineSuggestions && medicineSuggestions.length > 0 && (
                 <View style={styles.modalSuggestionsContainer}>
                   <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
-                    {medicineSuggestions.map((medicine) => (
+                    {medicineSuggestions.map((medicine: OtcMedicineSuggestion) => (
                       <TouchableOpacity
-                        key={medicine.id}
+                        key={String(medicine.id || medicine.name)}
                         style={styles.modalSuggestionItem}
                         onPress={() => {
                           setName(medicine.name);
-                          setDosage(medicine.dosage || dosage);
-                          setNotes(medicine.description || notes);
+                          setSelectedOtcMedicine(medicine);
+                          setDosage(medicine.dosage_text || medicine.dosage || dosage);
                           setShowMedicineSuggestions(false);
 
-                          // Smart schedule based on dosage
-                          const dosageLower = (medicine.dosage || '').toLowerCase();
-                          const now = new Date();
-                          const smartTimes: string[] = [];
-
-                          if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
-                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
-                          } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
-                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(14, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
-                          } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
-                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(12, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(18, 0, 0, 0)).toISOString());
-                            smartTimes.push(new Date(now.setHours(22, 0, 0, 0)).toISOString());
-                          } else {
-                            // Default: once daily at 8 AM
-                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
-                          }
-
-                          if (smartTimes.length > 0) {
-                            setTimes(smartTimes);
-                          }
+                          const smartTimes = buildTimesForMedicine(medicine);
+                          if (smartTimes.length > 0) setTimes(smartTimes);
                         }}
                       >
                         <View style={styles.modalSuggestionIcon}>
-                          <Ionicons name="medical" size={18} color="#1E3A8A" />
+                          <Ionicons name="medkit" size={19} color="#FFFFFF" />
                         </View>
                         <View style={styles.modalSuggestionContent}>
                           <Text style={styles.modalSuggestionName}>{medicine.name}</Text>
                           <Text style={styles.modalSuggestionDetails}>
-                            {medicine.generic_name || medicine.brand} - {medicine.category}
+                            {[medicine.generic_name || medicine.brand, medicine.category].filter(Boolean).join(' - ')}
                           </Text>
-                          {medicine.dosage && (
-                            <Text style={styles.modalSuggestionDosage}>Dosage: {medicine.dosage}</Text>
+                          {(medicine.dosage_text || medicine.dosage) && (
+                            <Text style={styles.modalSuggestionDosage}>Label guidance: {medicine.dosage_text || medicine.dosage}</Text>
                           )}
+                          <Text style={styles.modalSuggestionSafety}>{medicine.warnings || OTC_SAFETY_COPY}</Text>
                         </View>
                         <Ionicons name="add-circle" size={20} color="#1E3A8A" />
                       </TouchableOpacity>
@@ -1548,7 +1759,7 @@ export default function Medication() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
               {times.map((t, idx) => (
                 <View key={idx} style={styles.timeRowModal}>
-                  <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString([], { hour: 'numeric', hour12: true })}</Text>
+                  <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
                   <View style={{ flexDirection: 'row' }}>
                      <TouchableOpacity onPress={() => {
                        setPickerIndex(idx);
@@ -1575,37 +1786,39 @@ export default function Medication() {
             {/* Advanced Scheduling */}
             <Text style={styles.label}>Schedule</Text>
 
+            <TouchableOpacity style={styles.scheduleCard} onPress={() => openScheduleSheet('start')} activeOpacity={0.85}>
             <View style={styles.scheduleRow}>
                <TouchableOpacity
                  style={styles.dateButton}
-                 onPress={() => {
-                   console.log('Start date button pressed');
-                   setDatePickerType('start');
-                   setShowDatePicker(true);
-                   console.log('showDatePicker set to true, datePickerType set to start');
-                 }}
+                 onPress={() => openScheduleSheet('start')}
                  activeOpacity={0.7}
                >
-                 <Ionicons name="calendar" size={16} color="#1E3A8A" />
-                 <Text style={styles.dateButtonText}>Start: {startDate}</Text>
-                 <Ionicons name="chevron-down" size={16} color="#6B7280" style={{ marginLeft: 'auto' }} />
+                 <View style={styles.dateButtonIcon}>
+                   <Ionicons name="calendar" size={15} color="#1E3A8A" />
+                 </View>
+                 <View style={styles.dateButtonCopy}>
+                   <Text style={styles.dateButtonLabel}>Start</Text>
+                   <Text style={styles.dateButtonText}>{formatDateLabel(startDate)}</Text>
+                 </View>
+                 <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
                </TouchableOpacity>
 
                <TouchableOpacity
                  style={styles.dateButton}
-                 onPress={() => {
-                   console.log('End date button pressed');
-                   setDatePickerType('end');
-                   setShowDatePicker(true);
-                   console.log('showDatePicker set to true, datePickerType set to end');
-                 }}
+                 onPress={() => openScheduleSheet('end')}
                  activeOpacity={0.7}
                >
-                 <Ionicons name="calendar" size={16} color="#1E3A8A" />
-                 <Text style={styles.dateButtonText}>End: {endDate || 'Tap to set'}</Text>
-                 <Ionicons name="chevron-down" size={16} color="#6B7280" style={{ marginLeft: 'auto' }} />
+                 <View style={styles.dateButtonIcon}>
+                   <Ionicons name="calendar-clear" size={15} color="#1E3A8A" />
+                 </View>
+                 <View style={styles.dateButtonCopy}>
+                   <Text style={styles.dateButtonLabel}>End</Text>
+                   <Text style={styles.dateButtonText}>{endDate ? formatDateLabel(endDate) : 'No end date'}</Text>
+                 </View>
+                 <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
                </TouchableOpacity>
             </View>
+            </TouchableOpacity>
 
             <Text style={styles.label}>Frequency</Text>
             <View style={styles.frequencyContainer}>
@@ -1801,126 +2014,144 @@ export default function Medication() {
       </Modal>
 
       {/* Date Picker Modal */}
-      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => { setShowDatePicker(false); setDatePickerType(null); }}>
+      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={closeDatePicker}>
         <View style={styles.dateModalWrapper}>
-          <TouchableWithoutFeedback onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}>
+          <TouchableWithoutFeedback onPress={closeDatePicker}>
             <View style={styles.dateModalBackdrop} />
           </TouchableWithoutFeedback>
           <View style={styles.dateModalContent}>
-            <Text style={styles.dateModalTitle}>
-              Select {datePickerType === 'start' ? 'Start' : 'End'} Date
-            </Text>
-            <View style={styles.datePickerContainer}>
-              {/* Year Picker */}
-              <View style={styles.pickerColumn}>
-                <Text style={styles.pickerLabel}>Year</Text>
-                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 10 }, (_, i) => {
-                    const year = new Date().getFullYear() + i;
-                    const currentYear = datePickerType === 'start'
-                      ? parseInt(startDate.split('-')[0])
-                      : parseInt(endDate.split('-')[0]) || new Date().getFullYear();
-                    return (
-                      <TouchableOpacity
-                        key={year}
-                        style={[styles.pickerOption, currentYear === year && styles.pickerOptionSelected]}
-                        onPress={() => {
-                          const currentDate = datePickerType === 'start' ? startDate : endDate;
-                          const [, month, day] = currentDate.split('-');
-                          const newDate = `${year}-${month || '01'}-${day || '01'}`;
-                          if (datePickerType === 'start') {
-                            setStartDate(newDate);
-                } else {
-                            setEndDate(newDate);
-                          }
-                        }}
-                      >
-                        <Text style={[styles.pickerOptionText, currentYear === year && styles.pickerOptionTextSelected]}>
-                          {year}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
+            <View style={styles.dateModalHeader}>
+              <View>
+                <Text style={styles.dateModalTitle}>Schedule</Text>
+                <Text style={styles.dateModalSubtitle}>Choose when this medication schedule starts and optionally ends.</Text>
               </View>
+              <TouchableOpacity style={styles.dateModalClose} onPress={closeDatePicker} activeOpacity={0.8}>
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.scheduleRangeCard}>
+              <TouchableOpacity
+                style={[styles.scheduleRangeRow, tempActiveDateField === 'start' && styles.scheduleRangeRowActive]}
+                onPress={() => {
+                  setTempActiveDateField('start');
+                  setCalendarMonth(parseDateStringLocal(tempStartDate || todayDateString()));
+                }}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.scheduleRangeIcon, tempActiveDateField === 'start' && styles.scheduleRangeIconActive]}>
+                  <Ionicons name="play" size={12} color={tempActiveDateField === 'start' ? '#FFFFFF' : '#1E3A8A'} />
+                </View>
+                <View style={styles.scheduleRangeCopy}>
+                  <Text style={styles.scheduleRangeLabel}>Starts</Text>
+                  <Text style={styles.scheduleRangeValue}>{formatDateDetail(tempStartDate)}</Text>
+                </View>
+                {tempActiveDateField === 'start' && <Text style={styles.scheduleRangeEditing}>Editing</Text>}
+              </TouchableOpacity>
 
-              {/* Month Picker */}
-              <View style={styles.pickerColumn}>
-                <Text style={styles.pickerLabel}>Month</Text>
-                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 12 }, (_, i) => {
-                    const month = i + 1;
-                    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                    const currentMonth = datePickerType === 'start'
-                      ? parseInt(startDate.split('-')[1])
-                      : parseInt(endDate.split('-')[1]) || 1;
-                    return (
-                      <TouchableOpacity
-                        key={month}
-                        style={[styles.pickerOption, currentMonth === month && styles.pickerOptionSelected]}
-                        onPress={() => {
-                          const currentDate = datePickerType === 'start' ? startDate : endDate;
-                          const [year, , day] = currentDate.split('-');
-                          const newDate = `${year || new Date().getFullYear()}-${month.toString().padStart(2, '0')}-${day || '01'}`;
-                          if (datePickerType === 'start') {
-                            setStartDate(newDate);
-                          } else {
-                            setEndDate(newDate);
-                          }
-                        }}
-                      >
-                        <Text style={[styles.pickerOptionText, currentMonth === month && styles.pickerOptionTextSelected]}>
-                          {monthNames[i]}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
+              <View style={styles.scheduleRangeDivider} />
+
+              <TouchableOpacity
+                style={[styles.scheduleRangeRow, tempActiveDateField === 'end' && styles.scheduleRangeRowActive]}
+                onPress={() => {
+                  setTempActiveDateField('end');
+                  setCalendarMonth(parseDateStringLocal(tempEndDate || tempStartDate || todayDateString()));
+                }}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.scheduleRangeIcon, tempActiveDateField === 'end' && styles.scheduleRangeIconActive]}>
+                  <Ionicons name="stop" size={12} color={tempActiveDateField === 'end' ? '#FFFFFF' : '#1E3A8A'} />
+                </View>
+                <View style={styles.scheduleRangeCopy}>
+                  <Text style={styles.scheduleRangeLabel}>Ends</Text>
+                  <Text style={styles.scheduleRangeValue}>{tempEndDate ? formatDateDetail(tempEndDate) : 'No end date'}</Text>
+                </View>
+                {tempActiveDateField === 'end' && <Text style={styles.scheduleRangeEditing}>Editing</Text>}
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.scheduleSheetActiveText}>{tempActiveDateField === 'start' ? 'Pick a start date' : 'Pick an optional end date'}: {activeDateLabel}</Text>
+            <View style={styles.dateQuickActions}>
+              <TouchableOpacity
+                style={styles.dateQuickButton}
+                onPress={() => {
+                  selectDateFromCalendar(parseDateStringLocal(todayDateString()));
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="today-outline" size={14} color="#1E3A8A" />
+                <Text style={styles.dateQuickText}>Use today</Text>
+              </TouchableOpacity>
+              {tempActiveDateField === 'end' && (
+                <TouchableOpacity
+                  style={[styles.dateQuickButton, styles.dateQuickClearButton]}
+                  onPress={() => {
+                    setTempEndDate('');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="remove-circle-outline" size={14} color="#64748B" />
+                  <Text style={[styles.dateQuickText, styles.dateQuickClearText]}>No end date</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={styles.calendarPanel}>
+              <View style={styles.calendarMonthHeader}>
+                <TouchableOpacity style={styles.calendarNavButton} onPress={() => shiftCalendarMonth(-1)} activeOpacity={0.8}>
+                  <Ionicons name="chevron-back" size={18} color="#1E3A8A" />
+                </TouchableOpacity>
+                <Text style={styles.calendarMonthTitle}>{formatCalendarTitle(calendarMonth)}</Text>
+                <TouchableOpacity style={styles.calendarNavButton} onPress={() => shiftCalendarMonth(1)} activeOpacity={0.8}>
+                  <Ionicons name="chevron-forward" size={18} color="#1E3A8A" />
+                </TouchableOpacity>
               </View>
-
-              {/* Day Picker */}
-              <View style={styles.pickerColumn}>
-                <Text style={styles.pickerLabel}>Day</Text>
-                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 31 }, (_, i) => {
-                    const day = i + 1;
-                    const currentDay = datePickerType === 'start'
-                      ? parseInt(startDate.split('-')[2])
-                      : parseInt(endDate.split('-')[2]) || 1;
-                    return (
-                      <TouchableOpacity
-                        key={day}
-                        style={[styles.pickerOption, currentDay === day && styles.pickerOptionSelected]}
-                        onPress={() => {
-                          const currentDate = datePickerType === 'start' ? startDate : endDate;
-                          const [year, month] = currentDate.split('-');
-                          const newDate = `${year || new Date().getFullYear()}-${month || '01'}-${day.toString().padStart(2, '0')}`;
-                          if (datePickerType === 'start') {
-                            setStartDate(newDate);
-                          } else {
-                            setEndDate(newDate);
-                          }
-                        }}
-                      >
-                        <Text style={[styles.pickerOptionText, currentDay === day && styles.pickerOptionTextSelected]}>
-                          {day}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
+              <View style={styles.calendarWeekRow}>
+                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                  <Text key={`${day}-${index}`} style={styles.calendarWeekText}>{day}</Text>
+                ))}
+              </View>
+              <View style={styles.calendarGrid}>
+                {calendarDays.map((date) => {
+                  const dateString = toDateStringLocal(date);
+                  const isSelected = activeDateString === dateString;
+                  const isToday = todayDateString() === dateString;
+                  const isCurrentMonth = date.getMonth() === calendarMonth.getMonth();
+                  const isDisabled = !isCalendarDateSelectable(date);
+                  return (
+                    <TouchableOpacity
+                      key={dateString}
+                      style={[
+                        styles.calendarDay,
+                        isDisabled && styles.calendarDayDisabled,
+                        isSelected && !isDisabled && styles.calendarDaySelected,
+                        isToday && !isSelected && !isDisabled && styles.calendarDayToday,
+                      ]}
+                      onPress={() => selectDateFromCalendar(date)}
+                      disabled={isDisabled}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[
+                        styles.calendarDayText,
+                        !isCurrentMonth && styles.calendarDayMutedText,
+                        isDisabled && styles.calendarDayDisabledText,
+                        isToday && !isSelected && !isDisabled && styles.calendarDayTodayText,
+                        isSelected && !isDisabled && styles.calendarDaySelectedText,
+                      ]}>
+                        {date.getDate()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
             <View style={styles.dateModalButtons}>
               <TouchableOpacity
                 style={styles.dateModalCancelButton}
-                onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}
+                onPress={closeDatePicker}
               >
                 <Text style={styles.dateModalCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.dateModalDoneButton}
-                onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}
+                onPress={commitScheduleSheet}
               >
                 <Text style={styles.dateModalDoneText}>Done</Text>
               </TouchableOpacity>
@@ -2072,8 +2303,8 @@ export default function Medication() {
               ) : (
                 statsModalItems.map((med) => (
                   <View key={med.id} style={styles.statsDetailItem}>
-                    <View style={[styles.statsDetailIcon, { backgroundColor: getMedicationColor(med) }]}>
-                      <Ionicons name="fitness" size={15} color="#FFFFFF" />
+                      <View style={[styles.statsDetailIcon, { backgroundColor: getMedicationColor(med) }]}>
+                      <Ionicons name="medkit-outline" size={15} color="#FFFFFF" />
                     </View>
                     <View style={styles.statsDetailContent}>
                       <Text style={styles.statsDetailName}>{med.name}</Text>
@@ -2209,8 +2440,8 @@ const styles = StyleSheet.create({
   // Medication Cards
   medicationCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 12,
+    borderRadius: 18,
+    padding: 13,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#DBEAFE',
@@ -2222,13 +2453,14 @@ const styles = StyleSheet.create({
   },
   medicationMainRow: { flexDirection: 'row', alignItems: 'flex-start' },
   medicationIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 15,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10
+    marginRight: 11,
+    borderWidth: 1
   },
   medicationInitial: { color: 'white', fontWeight: '700', fontSize: 20 },
   medicationContent: { flex: 1 },
@@ -2255,16 +2487,16 @@ const styles = StyleSheet.create({
   medicationActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 9,
+    gap: 8,
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: '#EFF6FF',
   },
   actionButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 13,
+    width: 36,
+    height: 36,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -2612,22 +2844,43 @@ const styles = StyleSheet.create({
   toggleKnob: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'white', transform: [{ translateX: 0 }] },
 
   // Advanced Scheduling
-  scheduleRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, gap: 8 },
+  scheduleCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 0,
+    marginBottom: 12,
+  },
+  scheduleRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   dateButton: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 15,
+    padding: 11,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
     borderWidth: 1,
-    borderColor: '#DBEAFE'
+    borderColor: '#D7E6FF'
   },
-  dateButtonText: { marginLeft: 7, fontSize: 12, color: '#0F172A', fontWeight: '700', flexShrink: 1 },
+  dateButtonIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginRight: 8,
+  },
+  dateButtonCopy: { flex: 1, minWidth: 0 },
+  dateButtonLabel: { fontSize: 10, color: '#64748B', fontWeight: '900', textTransform: 'uppercase', marginBottom: 1 },
+  dateButtonText: { fontSize: 13, color: '#0F172A', fontWeight: '900', flexShrink: 1 },
 
   frequencyContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12, gap: 8 },
   frequencyButton: {
@@ -2728,13 +2981,20 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E2E8F0',
   },
   modalSuggestionIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#EFF6FF',
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: '#1E3A8A',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
   modalSuggestionContent: {
     flex: 1,
@@ -2754,6 +3014,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#1E3A8A',
     fontWeight: '800',
+  },
+  modalSuggestionSafety: {
+    fontSize: 10,
+    color: '#64748B',
+    fontWeight: '600',
+    lineHeight: 14,
+    marginTop: 4,
   },
 
   // Time Picker Modal
@@ -2793,25 +3060,160 @@ const styles = StyleSheet.create({
   previewText: { textAlign: 'center', color: '#6B7280', marginTop: 12, fontSize: 14 },
 
   // Date Picker Modal
-  dateModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  dateModalWrapper: { flex: 1, justifyContent: 'flex-end', alignItems: 'stretch' },
   dateModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.42)' },
   dateModalContent: {
     backgroundColor: '#FFFFFF',
-    marginHorizontal: 24,
-    borderRadius: 20,
-    padding: 18,
-    alignItems: 'center',
+    marginHorizontal: 12,
+    marginBottom: 12,
+    borderRadius: 24,
+    padding: 15,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 16,
     elevation: 12,
-    minWidth: 300
+    maxHeight: '90%',
   },
-  dateModalTitle: { fontSize: 18, fontWeight: '900', color: '#0F172A', marginBottom: 14 },
+  dateModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  dateModalEyebrow: { fontSize: 11, color: '#64748B', fontWeight: '900', textTransform: 'uppercase', marginBottom: 2 },
+  dateModalTitle: { fontSize: 22, fontWeight: '900', color: '#0F172A', letterSpacing: 0 },
+  dateModalSubtitle: { fontSize: 11, color: '#64748B', fontWeight: '700', lineHeight: 16, marginTop: 4, maxWidth: 282 },
+  dateModalClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dateQuickActions: { flexDirection: 'row', width: '100%', gap: 8, marginBottom: 12 },
+  dateQuickButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: '#EAF3FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 14,
+    paddingVertical: 8,
+  },
+  dateQuickText: { color: '#1E3A8A', fontWeight: '900', fontSize: 12 },
+  dateQuickClearButton: { backgroundColor: '#F8FAFC', borderColor: '#CBD5E1' },
+  dateQuickClearText: { color: '#64748B' },
+  scheduleRangeCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#D7E6FF',
+    padding: 5,
+    marginBottom: 8,
+  },
+  scheduleRangeRow: {
+    minHeight: 48,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  scheduleRangeRowActive: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  scheduleRangeDivider: { height: 1, backgroundColor: '#E2E8F0', marginHorizontal: 12, marginVertical: 2 },
+  scheduleRangeIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 11,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  scheduleRangeIconActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
+  },
+  scheduleRangeCopy: { flex: 1, minWidth: 0 },
+  scheduleRangeLabel: { fontSize: 11, color: '#64748B', fontWeight: '900', textTransform: 'uppercase', marginBottom: 2 },
+  scheduleRangeValue: { fontSize: 15, color: '#0F172A', fontWeight: '900' },
+  scheduleRangeEditing: {
+    color: '#1E3A8A',
+    backgroundColor: '#EFF6FF',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  scheduleSheetActiveText: { fontSize: 12, color: '#334155', fontWeight: '900', marginBottom: 8 },
 
-  // Custom Date Picker
+  calendarPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    padding: 10,
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  calendarMonthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  calendarNavButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarMonthTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
+  calendarWeekRow: { flexDirection: 'row', marginBottom: 5 },
+  calendarWeekText: { flex: 1, textAlign: 'center', fontSize: 11, color: '#64748B', fontWeight: '900' },
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  calendarDay: {
+    width: '14.2857%',
+    height: 33,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    marginVertical: 1,
+  },
+  calendarDaySelected: {
+    backgroundColor: '#2563EB',
+    shadowColor: '#2563EB',
+    shadowOpacity: 0.22,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  calendarDayToday: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE' },
+  calendarDayDisabled: { opacity: 0.42 },
+  calendarDayText: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
+  calendarDayMutedText: { color: '#CBD5E1' },
+  calendarDayDisabledText: { color: '#CBD5E1' },
+  calendarDayTodayText: { color: '#1E3A8A' },
+  calendarDaySelectedText: { color: '#FFFFFF' },
+  // Legacy wheel styles kept for the time picker.
   datePickerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2919,9 +3321,21 @@ const styles = StyleSheet.create({
     textAlign: 'center'
   },
   dateModalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 14, width: '100%', gap: 10 },
-  dateModalCancelButton: { flex: 1, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center' },
+  dateModalCancelButton: { flex: 1, paddingHorizontal: 16, paddingVertical: 13, borderRadius: 15, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center' },
   dateModalCancelText: { color: '#1E3A8A', fontWeight: '900' },
-  dateModalDoneButton: { flex: 1, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center' },
+  dateModalDoneButton: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderRadius: 15,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
   dateModalDoneText: { color: 'white', fontWeight: '900' },
 
   // Buttons

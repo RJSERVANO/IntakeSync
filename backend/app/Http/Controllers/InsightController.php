@@ -12,6 +12,78 @@ use Illuminate\Support\Facades\DB;
 
 class InsightController extends Controller
 {
+    protected function medicationRunsOnDate(Medication $medication, Carbon $date): bool
+    {
+        if ($medication->active === false || !$medication->reminder) {
+            return false;
+        }
+
+        if ($medication->start_date && Carbon::parse($medication->start_date)->startOfDay()->gt($date)) {
+            return false;
+        }
+
+        if ($medication->end_date && Carbon::parse($medication->end_date)->endOfDay()->lt($date)) {
+            return false;
+        }
+
+        $daysOfWeek = $medication->days_of_week;
+        if (is_array($daysOfWeek) && count($daysOfWeek) > 0) {
+            $dayTokens = [
+                strtolower($date->format('l')),
+                strtolower($date->format('D')),
+                (string) $date->dayOfWeek,
+                (string) ($date->dayOfWeekIso),
+            ];
+            $normalizedDays = array_map(fn ($day) => strtolower((string) $day), $daysOfWeek);
+            return count(array_intersect($dayTokens, $normalizedDays)) > 0;
+        }
+
+        return true;
+    }
+
+    protected function scheduledDosesForDate($medications, Carbon $date): int
+    {
+        $total = 0;
+        foreach ($medications as $medication) {
+            if (!$this->medicationRunsOnDate($medication, $date)) {
+                continue;
+            }
+
+            $times = is_array($medication->times) ? $medication->times : [];
+            $total += count($times);
+        }
+
+        return $total;
+    }
+
+    protected function serializeHydrationEntry(HydrationEntry $entry): array
+    {
+        return [
+            'id' => $entry->id,
+            'amount_ml' => (int) $entry->amount_ml,
+            'timestamp' => optional($entry->created_at)->toISOString(),
+            'created_at' => optional($entry->created_at)->toISOString(),
+            'source' => $entry->source,
+            'beverage_type' => $entry->beverage_type,
+            'sugar_level' => $entry->sugar_level,
+            'caffeine_level' => $entry->caffeine_level,
+            'drink_label' => $entry->drink_label,
+        ];
+    }
+
+    protected function serializeMedicationEvent(MedicationHistory $event): array
+    {
+        return [
+            'id' => $event->id,
+            'medication_id' => $event->medication_id,
+            'medication_name' => optional($event->medication)->name,
+            'status' => $event->status,
+            'time' => optional($event->time)->toISOString(),
+            'scheduled_time' => optional($event->scheduled_time)->toISOString(),
+            'taken_time' => optional($event->taken_time)->toISOString(),
+        ];
+    }
+
     /**
      * Get weekly report card
      */
@@ -19,72 +91,103 @@ class InsightController extends Controller
     {
         $user = $request->user();
         
-        $startOfWeek = Carbon::now()->startOfWeek();
-        $endOfWeek = Carbon::now()->endOfWeek();
+        $startOfWeek = Carbon::now()->startOfWeek(Carbon::SUNDAY);
+        $endOfWeek = Carbon::now()->endOfWeek(Carbon::SATURDAY);
 
-        // Hydration analysis
         $hydrationEntries = HydrationEntry::where('user_id', $user->id)
             ->whereBetween('created_at', [$startOfWeek, $endOfWeek])
             ->get();
 
         $hydrationGoal = $user->hydration_goal ?? 2000;
         $totalHydration = $hydrationEntries->sum('amount_ml');
-        $expectedHydration = $hydrationGoal * 7; // 7 days
-        $hydrationPercentage = $expectedHydration > 0 
+        $daysWithHydrationLogs = $hydrationEntries
+            ->groupBy(fn ($entry) => Carbon::parse($entry->created_at)->toDateString())
+            ->count();
+        $expectedHydration = $hydrationGoal * 7;
+        $hydrationPercentage = $hydrationEntries->count() > 0 && $expectedHydration > 0
             ? round(($totalHydration / $expectedHydration) * 100) 
-            : 0;
+            : null;
 
-        $hydrationMessage = $hydrationPercentage >= 90 
-            ? 'Excellent! You\'re staying well hydrated.'
-            : ($hydrationPercentage >= 70 
-                ? 'Good progress! Keep it up.'
-                : 'Try to drink more water throughout the day.');
-
-        // Medication adherence
         $medications = Medication::where('user_id', $user->id)->get();
         $totalScheduled = 0;
         $totalCompleted = 0;
+        $totalMissed = 0;
+        $dailyScores = [];
+        $medicationIds = $medications->pluck('id');
+        $medicationEvents = MedicationHistory::with('medication')
+            ->where('user_id', $user->id)
+            ->whereBetween('time', [$startOfWeek, $endOfWeek])
+            ->orderBy('time', 'desc')
+            ->get();
 
-        foreach ($medications as $medication) {
-            $timesPerDay = count($medication->times ?? []);
-            $daysInWeek = 7;
-            $totalScheduled += $timesPerDay * $daysInWeek;
+        for ($date = $startOfWeek->copy(); $date->lte($endOfWeek); $date->addDay()) {
+            $dayStart = $date->copy()->startOfDay();
+            $dayEnd = $date->copy()->endOfDay();
+            $dayHydrationEntries = $hydrationEntries->filter(fn ($entry) => Carbon::parse($entry->created_at)->isSameDay($date));
+            $dayHydrationTotal = $dayHydrationEntries->sum('amount_ml');
+            $dayHydrationScore = $dayHydrationEntries->count() > 0 && $hydrationGoal > 0
+                ? min(100, round(($dayHydrationTotal / $hydrationGoal) * 100))
+                : null;
 
-            $completed = MedicationHistory::where('medication_id', $medication->id)
-                ->where('status', 'completed')
-                ->whereBetween('time', [$startOfWeek, $endOfWeek])
-                ->count();
-            
-            $totalCompleted += $completed;
+            $dayScheduled = $this->scheduledDosesForDate($medications, $date);
+            $dayEvents = $medicationEvents->filter(fn ($event) => Carbon::parse($event->time)->between($dayStart, $dayEnd, true));
+            $dayCompleted = $dayEvents->where('status', 'completed')->count();
+            $daySkipped = $dayEvents->whereIn('status', ['missed', 'skipped'])->count();
+            $dayMedicationScore = $dayScheduled > 0 ? min(100, round(($dayCompleted / $dayScheduled) * 100)) : null;
+            $components = array_values(array_filter([$dayHydrationScore, $dayMedicationScore], fn ($score) => $score !== null));
+            $dayScore = count($components) > 0 ? round(array_sum($components) / count($components)) : null;
+
+            $totalScheduled += $dayScheduled;
+            $totalCompleted += $dayCompleted;
+            $totalMissed += $dayScheduled > 0 ? max(0, min($dayScheduled, $dayScheduled - $dayCompleted)) : $daySkipped;
+
+            $dailyScores[] = [
+                'day' => substr($date->format('D'), 0, 1),
+                'date' => $date->toDateString(),
+                'score' => $dayScore,
+                'has_data' => $dayScore !== null,
+                'hydration_ml' => $dayHydrationTotal,
+                'hydration_score' => $dayHydrationScore,
+                'medication_scheduled' => $dayScheduled,
+                'medication_completed' => $dayCompleted,
+                'medication_score' => $dayMedicationScore,
+            ];
         }
 
-        $adherenceRate = $totalScheduled > 0 
+        $adherenceRate = $totalScheduled > 0
             ? round(($totalCompleted / $totalScheduled) * 100) 
-            : 0;
+            : null;
 
-        $medicationMessage = $adherenceRate >= 90 
-            ? 'Outstanding adherence! You\'re on track.'
-            : ($adherenceRate >= 70 
-                ? 'Good job! A few improvements could help.'
-                : 'Consider setting more reminders to stay consistent.');
-
-        // Overall score (average of hydration and medication)
-        $overallScore = round(($hydrationPercentage + $adherenceRate) / 2);
+        $scoreComponents = array_values(array_filter([$hydrationPercentage, $adherenceRate], fn ($score) => $score !== null));
+        $overallScore = count($scoreComponents) > 0 ? round(array_sum($scoreComponents) / count($scoreComponents)) : null;
+        $hasData = $overallScore !== null;
 
         return response()->json([
+            'has_data' => $hasData,
             'hydration' => [
                 'percentage' => $hydrationPercentage,
                 'total_ml' => $totalHydration,
                 'goal_ml' => $expectedHydration,
-                'message' => $hydrationMessage,
+                'daily_goal_ml' => $hydrationGoal,
+                'daily_average_ml' => $hydrationEntries->count() > 0 ? round($totalHydration / 7) : null,
+                'days_with_logs' => $daysWithHydrationLogs,
+                'logs' => $hydrationEntries->sortByDesc('created_at')->values()->map(fn ($entry) => $this->serializeHydrationEntry($entry)),
+                'message' => $hydrationEntries->count() > 0
+                    ? 'Beverage logs are included in this period.'
+                    : 'No beverage logs in this period.',
             ],
             'medications' => [
                 'adherence_rate' => $adherenceRate,
                 'completed' => $totalCompleted,
                 'scheduled' => $totalScheduled,
-                'message' => $medicationMessage,
+                'missed' => max(0, $totalMissed),
+                'events' => $medicationEvents->values()->map(fn ($event) => $this->serializeMedicationEvent($event)),
+                'message' => $totalScheduled > 0
+                    ? 'Medication check-ins are included in this period.'
+                    : 'No medication schedule data in this period.',
             ],
             'overall_score' => $overallScore,
+            'daily_scores' => $dailyScores,
             'week_start' => $startOfWeek->toDateString(),
             'week_end' => $endOfWeek->toDateString(),
         ]);
