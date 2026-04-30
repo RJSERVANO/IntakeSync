@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';
-import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
+import InlineNotice from './components/common/InlineNotice';
 
 const { height } = Dimensions.get('window');
+
+type NoticeType = 'success' | 'info' | 'warning' | 'error';
 
 interface OnboardingData {
   nickname?: string;
@@ -29,11 +31,11 @@ export default function Onboarding() {
   const [data, setData] = useState<OnboardingData>({});
   const [weightInput, setWeightInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [noticeModal, setNoticeModal] = useState<{
-    type: ThemedNoticeType;
-    title: string;
+  const [inlineNotice, setInlineNotice] = useState<{
+    type: NoticeType;
     message: string;
   } | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const steps = [
     'nickname',
@@ -91,12 +93,19 @@ export default function Onboarding() {
     setData(prev => ({ ...prev, [key]: value }));
   };
 
-  const showNotice = (type: ThemedNoticeType, title: string, message: unknown) => {
-    setNoticeModal({
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  const showNotice = (type: NoticeType, title: string, message: unknown) => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setInlineNotice({
       type,
-      title,
-      message: typeof message === 'string' ? message : JSON.stringify(message),
+      message: `${title}: ${typeof message === 'string' ? message : JSON.stringify(message)}`,
     });
+    noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2600);
   };
 
   const normalizeWeightText = (value: string) => {
@@ -566,13 +575,11 @@ export default function Onboarding() {
         {renderStep()}
       </ScrollView>
 
-      <ThemedNoticeModal
-        visible={Boolean(noticeModal)}
-        type={noticeModal?.type || 'info'}
-        title={noticeModal?.title || ''}
-        message={noticeModal?.message || ''}
-        onPrimary={() => setNoticeModal(null)}
-        onClose={() => setNoticeModal(null)}
+      <InlineNotice
+        visible={Boolean(inlineNotice)}
+        message={inlineNotice?.message || ''}
+        type={inlineNotice?.type || 'info'}
+        top={18}
       />
     </View>
   );

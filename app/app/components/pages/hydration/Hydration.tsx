@@ -17,7 +17,7 @@ import {
   calculatePersonalizedHydrationGoal,
   resolveHydrationGoal,
 } from '../../../../utils/hydrationHelpers';
-import { useCelebrationAnimation, usePulseAnimation, useBounceAnimation } from '../../../../hooks/useHydrationAnimations';
+import { usePulseAnimation } from '../../../../hooks/useHydrationAnimations';
 
 interface UserDetails {
   weight?: number;
@@ -205,12 +205,8 @@ export default function Hydration() {
   const [showIdealGoalAlert, setShowIdealGoalAlert] = useState(false);
   const [showInitialGoalModal, setShowInitialGoalModal] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [showGoalReachedModal, setShowGoalReachedModal] = useState(false);
   const [goalReachedToday, setGoalReachedToday] = useState(false); // Track if goal was already reached today
-  const [showOverhydrationModal, setShowOverhydrationModal] = useState(false);
   const [overhydrationShownToday, setOverhydrationShownToday] = useState(false); // Track if warning shown today
-  const [behindAlert, setBehindAlert] = useState<string | null>(null);
-  const [showBehindAlert, setShowBehindAlert] = useState(false);
   const [customGoalInput, setCustomGoalInput] = useState('');
   const [showGoalEditorModal, setShowGoalEditorModal] = useState(false);
   const [goalUpdateResult, setGoalUpdateResult] = useState<{ goal: number; synced: boolean } | null>(null);
@@ -240,9 +236,7 @@ export default function Hydration() {
   } | null>(null);
 
   const anim = useRef(new Animated.Value(0)).current;
-  const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
   const { pulse: pulseButton } = usePulseAnimation();
-  const bounceAnimation = useBounceAnimation();
 
   // FIX: Session-based refs to prevent repeated modals in a single session
   // These refs track if a modal has already been shown since the app launched
@@ -256,7 +250,9 @@ export default function Hydration() {
 
   const closeNotice = () => setNoticeModal(null);
   const showNotice = (type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') => {
-    setNoticeModal({ type, title, message, primaryText });
+    void type;
+    void primaryText;
+    showInlineNotice(`${title}: ${message}`);
   };
 
   useEffect(() => {
@@ -275,7 +271,12 @@ export default function Hydration() {
     const timerId = notificationManager.scheduleHydrationReminder(120, () => {
       const current = totalToday();
       const suggestedAmount = Math.round(goal / 8);
-      notificationManager.showHydrationReminder(suggestedAmount, current, goal);
+      const remaining = Math.max(goal - current, 0);
+      showInlineNotice(
+        remaining > 0
+          ? `Time to hydrate: ${suggestedAmount} ml suggested`
+          : 'Hydration goal reached'
+      );
     });
     
     setReminderTimerId(timerId);
@@ -431,10 +432,7 @@ export default function Hydration() {
     goalReachedShownRef.current = true;
     setGoalReachedToday(true);
     await AsyncStorage.setItem(shownKey, '1');
-    triggerCelebration();
-    setShowGoalReachedModal(true);
     showInlineNotice('Hydration goal reached');
-    notificationManager.showGoalCompletionAlert('hydration', goal);
   }
 
   function quickAddWater(amount: number) {
@@ -656,11 +654,8 @@ export default function Hydration() {
       const paceCheck = calculateHydrationPace(newTotal, goal, 'morning');
       if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
         const behindMessage = `Stay hydrated! Drink ${paceCheck.remaining}ml more today to reach your goal.`;
-        setBehindAlert(behindMessage);
         showInlineNotice(behindMessage);
         
-        // Show behind pace notification
-        notificationManager.showBehindPaceAlert(paceCheck.remaining);
       }
     }
     
@@ -1590,118 +1585,6 @@ export default function Hydration() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </Modal>
-
-      {/* Goal Reached Celebration Modal */}
-      <Modal
-        visible={showGoalReachedModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowGoalReachedModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <Animated.View style={[styles.celebrationContainer, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}>
-            <View style={styles.celebrationCard}>
-              <View style={styles.celebrationGlow} />
-              <View style={styles.celebrationIconRing}>
-                <View style={styles.celebrationIconInner}>
-                  <Ionicons name="water" size={30} color="#FFFFFF" />
-                </View>
-              </View>
-              <Text style={styles.celebrationEyebrow}>Daily target complete</Text>
-              <Text style={styles.celebrationTitle}>Beverage Goal Reached</Text>
-              <Text style={styles.celebrationMessage}>
-                You reached {fmt(goal)} ml today. Nice, steady beverage rhythm.
-              </Text>
-              <View style={styles.celebrationProgressCard}>
-                <View style={styles.celebrationProgressHeader}>
-                  <View>
-                    <Text style={styles.celebrationProgressLabel}>Today&apos;s intake</Text>
-                    <Text style={styles.celebrationProgressMeta}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
-                  </View>
-                  <Text style={styles.celebrationProgressValue}>{Math.max(100, Math.round(percent()))}%</Text>
-                </View>
-                <View style={styles.celebrationProgressTrack}>
-                  <View style={[styles.celebrationProgressFill, { width: `${Math.min(100, Math.max(0, percent()))}%` }]} />
-                </View>
-                <View style={styles.celebrationBadgeRow}>
-                  <View style={styles.celebrationBadge}>
-                    <Ionicons name="checkmark-circle" size={14} color="#2563EB" />
-                    <Text style={styles.celebrationBadgeText}>Goal complete</Text>
-                  </View>
-                  <View style={styles.celebrationBadge}>
-                    <Ionicons name="sparkles-outline" size={14} color="#2563EB" />
-                    <Text style={styles.celebrationBadgeText}>Balanced pace</Text>
-                  </View>
-                </View>
-              </View>
-              <TouchableOpacity 
-                style={styles.celebrationButton}
-                onPress={() => setShowGoalReachedModal(false)}
-              >
-                <Text style={styles.celebrationButtonText}>Continue</Text>
-              </TouchableOpacity>
-            </View>
-          </Animated.View>
-        </View>
-      </Modal>
-
-      {/* Overhydration Warning Modal (>150%) */}
-      <Modal
-        visible={showOverhydrationModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowOverhydrationModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Ionicons name="warning" size={60} color="#EF4444" style={{ marginBottom: 16 }} />
-            <Text style={styles.overhydrationTitle}>⚠️ Whoa there!</Text>
-            <Text style={styles.overhydrationMessage}>
-              You have exceeded 150% of your goal. Drinking too much water can dilute electrolytes. Listen to your body.
-            </Text>
-            <View style={styles.celebrationStats}>
-              <View style={styles.statBox}>
-                <Text style={[styles.celebrationStatValue, { color: '#EF4444' }]}>{fmt(totalToday())}</Text>
-                <Text style={styles.celebrationStatLabel}>Total Intake</Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={[styles.celebrationStatValue, { color: '#EF4444' }]}>{Math.round((totalToday() / goal) * 100)}%</Text>
-                <Text style={styles.celebrationStatLabel}>of Goal</Text>
-              </View>
-            </View>
-            <TouchableOpacity 
-              style={[styles.celebrationButton, { backgroundColor: '#EF4444' }]}
-              onPress={() => setShowOverhydrationModal(false)}
-            >
-              <Text style={styles.celebrationButtonText}>I Understand</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Behind on Pace Alert Modal */}
-      <Modal
-        visible={showBehindAlert}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowBehindAlert(false)}
-      >
-        <View style={styles.alertOverlay}>
-          <Animated.View style={[styles.alertContent, bounceAnimation]}>
-            <View style={styles.alertIcon}>
-              <Ionicons name="warning" size={32} color="#EF4444" />
-            </View>
-            <Text style={styles.alertTitle}>Stay on Track!</Text>
-            <Text style={styles.alertMessage}>{behindAlert}</Text>
-            <TouchableOpacity 
-              style={styles.alertButton}
-              onPress={() => setShowBehindAlert(false)}
-            >
-              <Text style={styles.alertButtonText}>Got It</Text>
-            </TouchableOpacity>
-          </Animated.View>
         </View>
       </Modal>
 

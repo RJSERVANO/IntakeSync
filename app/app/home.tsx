@@ -88,8 +88,6 @@ export default function Home() {
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
-  const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [noticeModal, setNoticeModal] = useState<{
@@ -173,19 +171,19 @@ export default function Home() {
         if (cancelled || alreadyShown === '1') return;
         goalCompletionShownRef.current = true;
         await AsyncStorage.setItem(key, '1');
-        if (!cancelled) setShowGoalCompletionModal(true);
+        if (!cancelled) showInlineNotice('Beverage goal reached');
       };
       showOnce().catch(() => {
         if (!cancelled) {
           goalCompletionShownRef.current = true;
-          setShowGoalCompletionModal(true);
+          showInlineNotice('Beverage goal reached');
         }
       });
     }
     
     // Show over-hydration modal when exceeding 110% (after goal was already completed)
     if (currentPercentage > 110 && previousHydrationPercentage >= 100 && previousHydrationPercentage <= 110) {
-      setShowOverHydrationModal(true);
+      showInlineNotice('High intake logged. Stay mindful.');
     }
     
     // Update previous percentage
@@ -196,7 +194,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [quickStatus.hydrationPercentage, previousHydrationPercentage]);
+  }, [quickStatus.hydrationPercentage, previousHydrationPercentage, showInlineNotice]);
 
   useEffect(() => {
     // Safety timeout - always set loading to false after 5 seconds max (very aggressive)
@@ -917,13 +915,11 @@ export default function Home() {
                     message: err?.data?.message || err?.message,
                     data: err?.data,
                   });
-                  setNoticeModal({
-                    type: api.isNetworkError(err) ? 'warning' : 'error',
-                    title: api.isNetworkError(err) ? 'Saved Offline Unavailable' : 'Logging Failed',
-                    message: api.isNetworkError(err)
-                      ? 'Home quick logging could not reach the server. Please open Beverage to log offline.'
-                      : 'Failed to log beverage intake. Please try again.',
-                  });
+                  showInlineNotice(
+                    api.isNetworkError(err)
+                      ? 'Home quick logging could not reach the server.'
+                      : 'Failed to log beverage intake.'
+                  );
                 }
                 }}
               >
@@ -1124,107 +1120,6 @@ export default function Home() {
         onSecondary={() => setNoticeModal(null)}
         onClose={() => setNoticeModal(null)}
       />
-
-      {/* Goal Completion Modal */}
-      <Modal
-        visible={showGoalCompletionModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowGoalCompletionModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.goalModalContent}>
-            <View style={styles.goalModalTopGlow} />
-            <View style={styles.goalModalIconRing}>
-              <View style={styles.goalModalIconInner}>
-                <Ionicons name="checkmark" size={34} color="#FFFFFF" />
-              </View>
-            </View>
-            <View style={styles.goalModalHeader}>
-              <Text style={styles.goalModalEyebrow}>Daily target complete</Text>
-              <Text style={styles.goalModalTitle}>Goal Achieved</Text>
-              <Text style={styles.goalModalSubtitle}>Your beverage pace is right on track.</Text>
-            </View>
-            
-            <View style={styles.goalModalStats}>
-              <View style={styles.goalStatBox}>
-                <View style={styles.goalStatHeader}>
-                  <View>
-                    <Text style={styles.goalStatLabel}>Beverage Intake</Text>
-                    <Text style={styles.goalStatCaption}>{quickStatus.hydrationTotal} / {quickStatus.hydrationGoal} ml</Text>
-                  </View>
-                  <Text style={styles.goalStatValue}>{Math.max(100, quickStatus.hydrationPercentage)}%</Text>
-                </View>
-                <View style={styles.goalProgressTrack}>
-                  <View style={[styles.goalProgressFill, { width: `${Math.min(100, Math.max(0, quickStatus.hydrationPercentage))}%` }]} />
-                </View>
-                <View style={styles.goalStatFooter}>
-                  <Text style={styles.goalStatFooterText}>{"Synced with today's dashboard"}</Text>
-                  <Ionicons name="sparkles-outline" size={15} color="#2563EB" />
-                </View>
-              </View>
-            </View>
-
-            <Text style={styles.goalModalMessage}>
-              {"You reached today's beverage goal. Keep the steady routine going."}
-            </Text>
-
-            <TouchableOpacity 
-              style={styles.goalModalButton}
-              onPress={() => setShowGoalCompletionModal(false)}
-            >
-              <Text style={styles.goalModalButtonText}>Continue</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Over-Hydration Warning Modal */}
-      <Modal
-        visible={showOverHydrationModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowOverHydrationModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.overHydrationModalContent}>
-            <View style={styles.overHydrationModalHeader}>
-              <Ionicons name="warning" size={64} color="#F59E0B" />
-              <Text style={styles.overHydrationModalTitle}>Beverage Intake Alert</Text>
-              <Text style={styles.overHydrationModalSubtitle}>You have exceeded your goal</Text>
-            </View>
-            
-            <View style={styles.goalModalStats}>
-              <View style={styles.overHydrationStatBox}>
-                <Text style={styles.overHydrationStatValue}>{quickStatus.hydrationPercentage}%</Text>
-                <Text style={styles.goalStatLabel}>Current Level</Text>
-              </View>
-            </View>
-
-            <Text style={styles.overHydrationModalMessage}>
-              You are at {quickStatus.hydrationPercentage}% of your daily goal. Consider slowing down and spacing beverage intake evenly.
-            </Text>
-
-            <View style={styles.overHydrationTips}>
-              <View style={styles.tipItem}>
-                <Ionicons name="information-circle" size={20} color="#3B82F6" />
-                <Text style={styles.tipText}>Listen to your body signals</Text>
-              </View>
-              <View style={styles.tipItem}>
-                <Ionicons name="information-circle" size={20} color="#3B82F6" />
-                <Text style={styles.tipText}>Space out water intake evenly</Text>
-              </View>
-            </View>
-
-            <TouchableOpacity 
-              style={styles.overHydrationModalButton}
-              onPress={() => setShowOverHydrationModal(false)}
-            >
-              <Text style={styles.goalModalButtonText}>Got It</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
     </SafeAreaView>
   );
