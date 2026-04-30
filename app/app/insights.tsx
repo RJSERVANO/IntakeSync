@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View, Modal } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 
 interface DetailModalProps {
@@ -85,6 +85,50 @@ const isCurrentWeek = (value?: string) => {
 };
 
 const getEntryTime = (entry: any) => entry?.timestamp || entry?.date || entry?.created_at || entry?.scheduled_at || entry?.time || '';
+
+const getMedicationDoseTime = (entry: any) => entry?.scheduled_time || entry?.scheduled_at || entry?.time || entry?.timestamp || entry?.created_at || '';
+
+const getMedicationDoseKey = (entry: any) => {
+  const medId = entry?.medication_id || entry?.medicationId || entry?.med_id || entry?.id || 'medication';
+  const date = new Date(getMedicationDoseTime(entry));
+  if (Number.isNaN(date.getTime())) return `${medId}:${entry?.id || JSON.stringify(entry)}`;
+  date.setSeconds(0, 0);
+  return `${medId}:${date.toISOString().slice(0, 16)}`;
+};
+
+const getMedicationStatusPriority = (entry: any) => {
+  const status = String(entry?.status || '').toLowerCase();
+  if (status === 'completed') return 4;
+  if (status === 'snoozed') return 3;
+  if (status === 'missed' || status === 'skipped') return 2;
+  return 1;
+};
+
+const dedupeMedicationEvents = (entries: any[]) => {
+  const byDose = new Map<string, any>();
+  entries.forEach((entry) => {
+    const key = getMedicationDoseKey(entry);
+    const existing = byDose.get(key);
+    if (!existing) {
+      byDose.set(key, entry);
+      return;
+    }
+
+    const entryPriority = getMedicationStatusPriority(entry);
+    const existingPriority = getMedicationStatusPriority(existing);
+    const entryTime = new Date(getEntryTime(entry)).getTime() || 0;
+    const existingTime = new Date(getEntryTime(existing)).getTime() || 0;
+    if (entryPriority > existingPriority || (entryPriority === existingPriority && entryTime > existingTime)) {
+      byDose.set(key, entry);
+    }
+  });
+
+  return Array.from(byDose.values()).sort((a, b) => {
+    const bTime = new Date(getEntryTime(b)).getTime() || 0;
+    const aTime = new Date(getEntryTime(a)).getTime() || 0;
+    return bTime - aTime;
+  });
+};
 
 const formatShortDate = (value?: string) => {
   if (!value) return 'Recent';
@@ -227,7 +271,9 @@ export default function InsightsScreen() {
           weeklyReport.medications?.entries,
           weeklyReport.medications?.logs,
         ];
-        const medicationEvents = medicationSources.find(Array.isArray)?.filter((entry: any) => isCurrentWeek(getEntryTime(entry))) || [];
+        const medicationEvents = dedupeMedicationEvents(
+          medicationSources.find(Array.isArray)?.filter((entry: any) => isCurrentWeek(getEntryTime(entry))) || []
+        );
         
         // Extract pattern message
         let missedPattern = 'Routine patterns will appear as more activity is logged.';

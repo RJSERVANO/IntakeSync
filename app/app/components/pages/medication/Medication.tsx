@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, ActivityIndicator } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
@@ -216,10 +216,54 @@ function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
   return {
     id: entry.id?.toString() || uid(),
     medId: medId.toString(),
-    time: entry.time,
+    time: entry.scheduled_time || entry.time,
     status: entry.status,
     loggedAt: entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at,
   };
+}
+
+function getDoseMinuteKey(entry: HistoryEntry) {
+  const date = new Date(entry.time);
+  if (Number.isNaN(date.getTime())) return `${entry.medId}:${entry.id}`;
+  date.setSeconds(0, 0);
+  return `${entry.medId}:${date.toISOString().slice(0, 16)}`;
+}
+
+function getHistoryStatusPriority(status: HistoryEntry['status']) {
+  if (status === 'completed') return 4;
+  if (status === 'snoozed') return 3;
+  if (status === 'missed' || status === 'skipped') return 2;
+  return 1;
+}
+
+function getHistorySortTime(entry: HistoryEntry) {
+  const logged = new Date(entry.loggedAt || entry.time).getTime();
+  if (Number.isFinite(logged)) return logged;
+  const scheduled = new Date(entry.time).getTime();
+  return Number.isFinite(scheduled) ? scheduled : 0;
+}
+
+function dedupeMedicationHistory(entries: HistoryEntry[]) {
+  const byDose = new Map<string, HistoryEntry>();
+  entries.forEach((entry) => {
+    const key = getDoseMinuteKey(entry);
+    const existing = byDose.get(key);
+    if (!existing) {
+      byDose.set(key, entry);
+      return;
+    }
+
+    const entryPriority = getHistoryStatusPriority(entry.status);
+    const existingPriority = getHistoryStatusPriority(existing.status);
+    if (
+      entryPriority > existingPriority ||
+      (entryPriority === existingPriority && getHistorySortTime(entry) > getHistorySortTime(existing))
+    ) {
+      byDose.set(key, entry);
+    }
+  });
+
+  return Array.from(byDose.values()).sort((a, b) => getHistorySortTime(b) - getHistorySortTime(a));
 }
 
 export default function Medication() {
@@ -401,7 +445,7 @@ export default function Medication() {
           if (historyResults.status === 'fulfilled') {
             const allHistory = historyResults.value.flat();
             console.log('Initial history loaded:', allHistory.length, 'entries');
-            setHistory(allHistory);
+            setHistory(dedupeMedicationHistory(allHistory));
           } else {
             console.log('Failed to load history:', historyResults.reason);
           }
@@ -446,7 +490,7 @@ export default function Medication() {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
           const hraw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
           if (raw) setMeds(JSON.parse(raw));
-          if (hraw) setHistory(JSON.parse(hraw));
+          if (hraw) setHistory(dedupeMedicationHistory(JSON.parse(hraw)));
         }
       } catch (err) {
         if (api.isAuthError(err)) {
@@ -459,7 +503,7 @@ export default function Medication() {
             const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
             const hraw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
             if (raw) setMeds(JSON.parse(raw));
-            if (hraw) setHistory(JSON.parse(hraw));
+            if (hraw) setHistory(dedupeMedicationHistory(JSON.parse(hraw)));
           } catch {
             // Keep whatever is already visible.
           }
@@ -547,7 +591,7 @@ export default function Medication() {
             // ignore per-med history errors
           }
         }
-        setHistory(allHistory);
+        setHistory(dedupeMedicationHistory(allHistory));
       } catch (e) {
         console.log('Failed to reload stats/history:', e);
       }
@@ -812,7 +856,7 @@ export default function Medication() {
         const allHistory = historyResults.value.flat();
         console.log('Reloaded history:', allHistory.length, 'entries');
         console.log('Sample entries:', allHistory.slice(0, 3));
-        setHistory(allHistory);
+        setHistory(dedupeMedicationHistory(allHistory));
       } else {
         console.log('Failed to reload history:', historyResults.reason);
       }
@@ -859,7 +903,7 @@ export default function Medication() {
     const newMeds = previous.filter((m) => m.id !== id);
     const newHistory = previousHistory.filter((entry) => entry.medId.toString() !== id.toString());
     setMeds(newMeds);
-    setHistory(newHistory);
+    setHistory(dedupeMedicationHistory(newHistory));
     try {
       await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(newMeds));
       await AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(newHistory));
@@ -1080,7 +1124,7 @@ export default function Medication() {
     const scheduledTime = getScheduledTimeForMedication(med, timeIso);
 
     if (hasCompletedDose(medId, scheduledTime)) {
-      notificationManager.showCustomNotification('Already taken', 'This scheduled dose is already marked taken.', 'toast', 'low');
+      showInlineNotice('This scheduled dose is already marked taken');
       return;
     }
     setActionBusy(actionKey, true);
@@ -1102,14 +1146,16 @@ export default function Medication() {
     };
 
     // Update history immediately for better UX
-    setHistory(prev => existingMissedDose
+    setHistory(prev => dedupeMedicationHistory(existingMissedDose
       ? prev.map((entry) => entry.id === existingMissedDose.id ? newHistoryEntry : entry)
       : [newHistoryEntry, ...prev]
+    )
     );
     const rollbackOptimisticTaken = () => {
-      setHistory(prev => existingMissedDose
+      setHistory(prev => dedupeMedicationHistory(existingMissedDose
         ? prev.map((entry) => entry.id === existingMissedDose.id ? existingMissedDose : entry)
         : prev.filter(h => h.id !== newHistoryEntry.id)
+      )
       );
     };
 
@@ -1121,11 +1167,11 @@ export default function Medication() {
         console.log('Server response:', response);
         // Update with server ID if available
         if (response && response.id) {
-          setHistory(prev => prev.map(h =>
+          setHistory(prev => dedupeMedicationHistory(prev.map(h =>
             h.id === newHistoryEntry.id
               ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.taken_time || response.created_at || h.loggedAt }, medId)
               : h
-          ));
+          )));
         }
 
         // Also reload stats to update counters
@@ -1137,7 +1183,7 @@ export default function Medication() {
         rollbackOptimisticTaken();
 
         if (err?.status === 409) {
-          notificationManager.showCustomNotification('Already taken', err?.data?.message || 'This scheduled dose has already been logged.', 'toast', 'low');
+          showInlineNotice(err?.data?.message || 'This scheduled dose has already been logged');
         } else if (err?.status === 404) {
           showNotice('error', 'Action Failed', 'This medication no longer exists on the server. Please refresh the page.');
         } else if (err?.status === 401 || err?.status === 403) {
@@ -1171,7 +1217,7 @@ export default function Medication() {
     });
 
     if (duplicateSnooze) {
-      notificationManager.showCustomNotification('Already Snoozed', `Reminder is already snoozed by ${mins} minutes`, 'toast', 'low');
+      showInlineNotice(`Reminder is already snoozed by ${mins} minutes`);
       return;
     }
 
@@ -1179,7 +1225,7 @@ export default function Medication() {
     const entry: HistoryEntry = { id: uid(), medId, time: snoozedTime, status: 'snoozed', loggedAt: new Date().toISOString() };
 
     // Update history immediately for better UX
-    setHistory((h) => [entry, ...h]);
+    setHistory((h) => dedupeMedicationHistory([entry, ...h]));
 
     // Schedule snooze reminder
     const med = meds.find(m => m.id === medId);
@@ -1194,11 +1240,11 @@ export default function Medication() {
       try {
         const response = await api.post(`/medications/${medId}/history`, { status: 'snoozed', time: entry.time }, token as string);
         if (response?.id) {
-          setHistory((current) => current.map((item) => item.id === entry.id ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.created_at || item.loggedAt }, medId) : item));
+          setHistory((current) => dedupeMedicationHistory(current.map((item) => item.id === entry.id ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.created_at || item.loggedAt }, medId) : item)));
         }
         showInlineNotice(`Reminder snoozed for ${mins} minutes`);
       } catch (err) {
-        setHistory((current) => current.filter((item) => item.id !== entry.id));
+        setHistory((current) => dedupeMedicationHistory(current.filter((item) => item.id !== entry.id)));
         console.log('Snooze history sync failed:', err);
         showThemedPopup({
           title: 'Snooze failed',
@@ -1236,7 +1282,7 @@ export default function Medication() {
           await AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(remainingHistory));
           setLastClearedTime(now);
           setClearedHistoryKeys(nextClearedKeys);
-          setHistory(remainingHistory);
+          setHistory(dedupeMedicationHistory(remainingHistory));
           setHistoryExpanded(false);
           showInlineNotice('Recent history cleared');
         } catch (error) {
@@ -1352,7 +1398,7 @@ export default function Medication() {
   }
 
   function getValidHistoryEntries() {
-    return history.filter((entry) => {
+    return dedupeMedicationHistory(history).filter((entry) => {
       const medExists = meds.some((med) => med.id.toString() === entry.medId.toString());
       const entryTime = new Date(entry.time).getTime();
       return medExists && entryTime > lastClearedTime && !isClearedHistory(entry);

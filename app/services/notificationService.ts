@@ -57,11 +57,11 @@ function getNotifications(): typeof ExpoNotifications | null {
     notificationsModule = require('expo-notifications');
     notificationsModule?.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
+        shouldShowAlert: false,
+        shouldPlaySound: false,
         shouldSetBadge: !isExpoGo, // Badge might not work in Expo Go
-        shouldShowBanner: true,
-        shouldShowList: true,
+        shouldShowBanner: false,
+        shouldShowList: false,
       }),
     });
     return notificationsModule;

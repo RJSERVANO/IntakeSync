@@ -1,7 +1,8 @@
-import { Stack, SplashScreen } from 'expo-router';
+import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
-import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
 import { notificationManager } from '../services/notificationManager';
 import { notificationService } from '../services/notificationService';
@@ -17,47 +18,47 @@ LogBox.ignoreLogs([
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
+  const ioniconFontName = Object.keys(Ionicons.font)[0] || 'Ionicons';
+
   const [fontsLoaded, fontError] = useFonts({
-    ...Ionicons.font,
+    [ioniconFontName]: require('../assets/fonts/Ionicons.ttf'),
   });
-  const [readyTimeout, setReadyTimeout] = useState(false);
 
   useEffect(() => {
-    console.log('RootLayout mounted');
+    if (__DEV__) {
+      console.log('RootLayout fonts:', {
+        ioniconFontName,
+        fontsLoaded,
+        fontError: fontError?.message,
+      });
+    }
 
-    const timer = setTimeout(() => {
-      console.log('RootLayout font timeout fallback triggered');
-      setReadyTimeout(true);
-    }, 3000);
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, fontError, ioniconFontName]);
 
-    // Initialize notification manager
-    notificationManager.initialize();
-    notificationService.ensureAndroidChannels();
+  useEffect(() => {
+    try {
+      notificationManager.initialize();
+      notificationService.ensureAndroidChannels();
+    } catch (error) {
+      console.log('Notification setup error:', error);
+    }
 
     // Cleanup on unmount
     return () => {
-      clearTimeout(timer);
-      notificationManager.cleanup();
+      try {
+        notificationManager.cleanup();
+      } catch (error) {
+        console.log('Notification cleanup error:', error);
+      }
     };
   }, []);
 
-  useEffect(() => {
-    console.log('RootLayout state:', {
-      fontsLoaded,
-      fontError: fontError?.message,
-      readyTimeout,
-    });
-
-    if (fontsLoaded || fontError || readyTimeout) {
-      SplashScreen.hideAsync().catch(() => {});
-    }
-  }, [fontsLoaded, fontError, readyTimeout]);
-
-  if (!fontsLoaded && !fontError && !readyTimeout) {
+  if (!fontsLoaded && !fontError) {
     return null;
   }
-
-  console.log('Rendering Stack');
 
   return (
     <>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Modal } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSnooze } from '../../../../hooks/useSnooze';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import BottomNavigation from '../../navigation/BottomNavigation';

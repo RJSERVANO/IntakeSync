@@ -243,12 +243,15 @@
                     </div>
                 </div>
                 <div class="flex flex-col items-center justify-center py-8">
-                    <div class="relative w-40 h-40 rounded-full border-8 border-slate-200 flex items-center justify-center" style="border-color: #e2e8f0">
-                        <div class="absolute inset-1 rounded-full border-8 flex items-center justify-center" style="border-color: #10b981; border-left-color: #e2e8f0; transform: rotate(-90deg)">
-                            <div class="text-center">
-                                <p class="text-4xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
-                                <p class="text-xs text-slate-500 mt-1">effective</p>
-                            </div>
+                    <div
+                        class="relative flex h-44 w-44 items-center justify-center rounded-full"
+                        style="background: conic-gradient(#10b981 0deg {{ min(100, max(0, $effectivenessRate)) * 3.6 }}deg, #e2e8f0 {{ min(100, max(0, $effectivenessRate)) * 3.6 }}deg 360deg);"
+                    >
+                        <div class="absolute inset-3 rounded-full bg-white"></div>
+                        <div class="absolute inset-0 rounded-full border border-slate-200"></div>
+                        <div class="relative text-center">
+                            <p class="text-4xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
+                            <p class="text-xs text-slate-500 mt-1">effective</p>
                         </div>
                     </div>
                 </div>
@@ -374,16 +377,17 @@
         // Notification Types Distribution
         const typesCtx = document.getElementById('typesChart');
         if (typesCtx) {
-            const typeData = @json($notificationTypeData);
+            const typeData = @json($notificationTypeData).filter(item => Number(item.count) > 0);
+            const hasTypeData = typeData.length > 0;
             typesChart = new Chart(typesCtx.getContext('2d'), {
                 type: 'doughnut',
                 data: {
-                    labels: typeData.map(item => item.type),
+                    labels: hasTypeData ? typeData.map(item => item.type) : ['No notifications'],
                     datasets: [{
-                        data: typeData.map(item => item.count),
-                        backgroundColor: ['#3b82f6', '#ef4444', '#fbbf24', '#10b981', '#8b5cf6'],
+                        data: hasTypeData ? typeData.map(item => Number(item.count)) : [1],
+                        backgroundColor: hasTypeData ? ['#3b82f6', '#ef4444', '#fbbf24', '#10b981', '#8b5cf6'] : ['#e2e8f0'],
                         borderWidth: 0,
-                        hoverOffset: 4
+                        hoverOffset: hasTypeData ? 4 : 0
                     }]
                 },
                 options: {
@@ -393,11 +397,15 @@
                     plugins: {
                         legend: {
                             position: 'bottom',
+                            display: hasTypeData,
                             labels: {
                                 usePointStyle: true,
                                 boxWidth: 8,
                                 padding: 15
                             }
+                        },
+                        tooltip: {
+                            enabled: hasTypeData
                         }
                     }
                 }

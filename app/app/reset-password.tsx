@@ -7,7 +7,7 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';

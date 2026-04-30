@@ -1,8 +1,15 @@
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.254.101:8000/api';
+const BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  'https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api';
 
 if (__DEV__) {
   console.log('API BASE_URL:', BASE_URL);
 }
+
+const ngrokHeaders =
+  BASE_URL.includes('ngrok-free.dev') || BASE_URL.includes('ngrok.app')
+    ? { 'ngrok-skip-browser-warning': 'true' }
+    : {};
 
 export type ApiErrorType = 'auth' | 'network' | 'timeout' | 'validation' | 'server' | 'unknown';
 
@@ -107,7 +114,7 @@ function joinPath(path: string) {
 }
 
 export async function post(path: string, body: any, token?: string, timeout: number = 10000) {
-  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -132,7 +139,7 @@ export async function post(path: string, body: any, token?: string, timeout: num
 }
 
 export async function get(path: string, token?: string, timeout: number = 10000) {
-  const headers: any = { Accept: 'application/json' };
+  const headers: any = { Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   
   // Add timeout to prevent infinite hanging
@@ -158,7 +165,7 @@ export async function get(path: string, token?: string, timeout: number = 10000)
 }
 
 export async function put(path: string, body: any, token?: string, timeout: number = 10000) {
-  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -183,7 +190,7 @@ export async function put(path: string, body: any, token?: string, timeout: numb
 }
 
 export async function del(path: string, token?: string, timeout: number = 10000) {
-  const headers: any = { Accept: 'application/json' };
+  const headers: any = { Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);

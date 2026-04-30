@@ -26,8 +26,16 @@ class InsightController extends Controller
             return false;
         }
 
+        if ($medication->frequency === 'monthly') {
+            $anchor = $medication->start_date ? Carbon::parse($medication->start_date) : Carbon::parse($medication->created_at);
+            return (int) $date->day === (int) $anchor->day;
+        }
+
         $daysOfWeek = $medication->days_of_week;
-        if (is_array($daysOfWeek) && count($daysOfWeek) > 0) {
+        if ($medication->frequency === 'weekly' || $medication->frequency === 'custom') {
+            if (!is_array($daysOfWeek) || count($daysOfWeek) === 0) {
+                return false;
+            }
             $dayTokens = [
                 strtolower($date->format('l')),
                 strtolower($date->format('D')),
@@ -41,19 +49,85 @@ class InsightController extends Controller
         return true;
     }
 
-    protected function scheduledDosesForDate($medications, Carbon $date): int
+    protected function normalizeDoseTime(Carbon $date): Carbon
     {
-        $total = 0;
+        return $date->copy()->setSecond(0)->setMicrosecond(0);
+    }
+
+    protected function doseKey(int|string $medicationId, Carbon $date): string
+    {
+        return $medicationId . ':' . $this->normalizeDoseTime($date)->format('Y-m-d H:i');
+    }
+
+    protected function historyDoseTime(MedicationHistory $entry): Carbon
+    {
+        return $this->normalizeDoseTime(Carbon::parse($entry->scheduled_time ?: $entry->time));
+    }
+
+    protected function historyStatusPriority(?string $status): int
+    {
+        return match ($status) {
+            'completed' => 4,
+            'snoozed' => 3,
+            'skipped', 'missed' => 2,
+            default => 1,
+        };
+    }
+
+    protected function dedupeMedicationEvents($events)
+    {
+        return $events
+            ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
+            ->reduce(function ($carry, $entry) {
+                $key = $this->doseKey($entry->medication_id, $this->historyDoseTime($entry));
+                $existing = $carry->get($key);
+                if (!$existing) {
+                    $carry->put($key, $entry);
+                    return $carry;
+                }
+
+                $entryPriority = $this->historyStatusPriority($entry->status);
+                $existingPriority = $this->historyStatusPriority($existing->status);
+                if (
+                    $entryPriority > $existingPriority ||
+                    ($entryPriority === $existingPriority && optional($entry->created_at)->gt($existing->created_at))
+                ) {
+                    $carry->put($key, $entry);
+                }
+
+                return $carry;
+            }, collect())
+            ->values()
+            ->sortByDesc(fn($entry) => optional($entry->time)->timestamp ?? optional($entry->created_at)->timestamp ?? 0)
+            ->values();
+    }
+
+    protected function scheduledDosesForDate($medications, Carbon $date, ?Carbon $through = null): int
+    {
+        $doseKeys = [];
         foreach ($medications as $medication) {
             if (!$this->medicationRunsOnDate($medication, $date)) {
                 continue;
             }
 
             $times = is_array($medication->times) ? $medication->times : [];
-            $total += count($times);
+            foreach ($times as $timeString) {
+                $time = Carbon::parse($timeString);
+                $scheduled = $this->normalizeDoseTime($date->copy()->setTime($time->hour, $time->minute, 0));
+
+                if ($medication->created_at && $scheduled->lt($this->normalizeDoseTime(Carbon::parse($medication->created_at)))) {
+                    continue;
+                }
+
+                if ($through && $scheduled->gt($through)) {
+                    continue;
+                }
+
+                $doseKeys[$this->doseKey($medication->id, $scheduled)] = true;
+            }
         }
 
-        return $total;
+        return count($doseKeys);
     }
 
     protected function serializeHydrationEntry(HydrationEntry $entry): array
@@ -114,11 +188,11 @@ class InsightController extends Controller
         $totalMissed = 0;
         $dailyScores = [];
         $medicationIds = $medications->pluck('id');
-        $medicationEvents = MedicationHistory::with('medication')
+        $medicationEvents = $this->dedupeMedicationEvents(MedicationHistory::with('medication')
             ->where('user_id', $user->id)
             ->whereBetween('time', [$startOfWeek, $endOfWeek])
             ->orderBy('time', 'desc')
-            ->get();
+            ->get());
 
         for ($date = $startOfWeek->copy(); $date->lte($endOfWeek); $date->addDay()) {
             $dayStart = $date->copy()->startOfDay();
@@ -129,7 +203,10 @@ class InsightController extends Controller
                 ? min(100, round(($dayHydrationTotal / $hydrationGoal) * 100))
                 : null;
 
-            $dayScheduled = $this->scheduledDosesForDate($medications, $date);
+            $elapsedThrough = $date->isToday()
+                ? Carbon::now()
+                : ($date->isPast() ? $dayEnd : $dayStart->copy()->subSecond());
+            $dayScheduled = $this->scheduledDosesForDate($medications, $date, $elapsedThrough);
             $dayEvents = $medicationEvents->filter(fn ($event) => Carbon::parse($event->time)->between($dayStart, $dayEnd, true));
             $dayCompleted = $dayEvents->where('status', 'completed')->count();
             $daySkipped = $dayEvents->whereIn('status', ['missed', 'skipped'])->count();
@@ -139,7 +216,7 @@ class InsightController extends Controller
 
             $totalScheduled += $dayScheduled;
             $totalCompleted += $dayCompleted;
-            $totalMissed += $dayScheduled > 0 ? max(0, min($dayScheduled, $dayScheduled - $dayCompleted)) : $daySkipped;
+            $totalMissed += $daySkipped;
 
             $dailyScores[] = [
                 'day' => substr($date->format('D'), 0, 1),
@@ -207,9 +284,9 @@ class InsightController extends Controller
         $medications = Medication::where('user_id', $user->id)->get();
         
         foreach ($medications as $medication) {
-            $history = MedicationHistory::where('medication_id', $medication->id)
+            $history = $this->dedupeMedicationEvents(MedicationHistory::where('medication_id', $medication->id)
                 ->where('created_at', '>=', $thirtyDaysAgo)
-                ->get();
+                ->get());
 
             // Check for day-of-week patterns
             $missedByDay = [];

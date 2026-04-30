@@ -5,15 +5,12 @@
  * NO native modules, NO push tokens, NO background tasks, NO native scheduling.
  * 
  * Uses:
- * - react-native-toast-message for toast notifications
- * - Themed toast fallback for dialog-style notifications
- * - Custom modals for rich notifications
+ * - Screen-owned inline notices and custom modals for visible notification UI
  * - AppState listeners for app resume triggers
  * - JavaScript timers for in-app reminders
  */
 
 import { AppState } from 'react-native';
-import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Notification types
@@ -82,28 +79,11 @@ class NotificationManager {
   }
 
   /**
-   * Show a toast notification
+   * Legacy toast notifications are disabled. Screens own visible notification UI
+   * through InlineNotice/custom components so users do not see duplicate popups.
    */
   private showToast(config: NotificationConfig) {
-    const { type, title, message, priority = 'medium', duration = 4000, onPress } = config;
-
-    let toastType: 'success' | 'error' | 'info' = 'info';
-    if (priority === 'critical' || type === 'overhydration_warning') {
-      toastType = 'error';
-    } else if (type === 'goal_completed' || type === 'streak_milestone') {
-      toastType = 'success';
-    }
-
-    Toast.show({
-      type: toastType,
-      text1: title,
-      text2: message,
-      visibilityTime: duration,
-      autoHide: true,
-      position: 'top',
-      topOffset: 50,
-      onPress: onPress,
-    });
+    void config;
   }
 
   /**

@@ -8,7 +8,7 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 import { hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
 import { AuthField, AuthSelectField } from '../components/auth/AuthField';
@@ -66,6 +66,18 @@ function parseBirthDate(value: string) {
   if (age < 13 || age > 120) return null;
 
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function capitalizeWords(value: string) {
+  return value.replace(/\S+/g, (word) =>
+    word
+      .split(/([-'])/)
+      .map((part) => {
+        if (part === '-' || part === "'") return part;
+        return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+      })
+      .join('')
+  );
 }
 
 export default function Register() {
@@ -223,7 +235,9 @@ export default function Register() {
               iconName="person-outline"
               placeholder="Enter your full name"
               value={name}
-              onChangeText={setName}
+              onChangeText={(value) => setName(capitalizeWords(value))}
+              autoCapitalize="words"
+              autoCorrect={false}
               textContentType="name"
             />
 
@@ -330,7 +344,8 @@ export default function Register() {
               iconName="location-outline"
               placeholder="Address"
               value={address}
-              onChangeText={setAddress}
+              onChangeText={(value) => setAddress(capitalizeWords(value))}
+              autoCapitalize="words"
               optional
             />
           </View>

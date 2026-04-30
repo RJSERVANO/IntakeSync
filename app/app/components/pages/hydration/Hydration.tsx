@@ -10,7 +10,7 @@ import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type B
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { notificationManager } from '../../../../services/notificationManager';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Medication;
 use App\Models\MedicationHistory;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
 class MedicationController extends Controller
@@ -130,17 +131,8 @@ class MedicationController extends Controller
             'time' => $data['time'],
         ]);
 
-        // Check for duplicate entries within a 2-hour window of the scheduled time
-        // Prevent duplicates for the same scheduled time, regardless of status
-        $scheduledTime = \Carbon\Carbon::parse($data['time']);
-        $twoHoursBefore = $scheduledTime->copy()->subHours(2);
-        $twoHoursAfter = $scheduledTime->copy()->addHours(2);
-
-        // Check for any existing entry (completed or skipped) for this time window
-        $existingEntry = MedicationHistory::where('medication_id', $medication->id)
-            ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
-            ->whereIn('status', ['completed', 'skipped'])
-            ->first();
+        $scheduledTime = $this->normalizeDoseTime(Carbon::parse($data['time']));
+        $existingEntry = $this->findExistingDoseHistory($medication->id, $scheduledTime);
 
         if ($existingEntry) {
             Log::warning('Duplicate entry detected', [
@@ -149,17 +141,29 @@ class MedicationController extends Controller
                 'new_status' => $data['status'],
             ]);
             // If trying to mark as completed but already marked as skipped, allow update
-            if ($data['status'] === 'completed' && $existingEntry->status === 'skipped') {
+            if ($data['status'] === 'completed' && in_array($existingEntry->status, ['skipped', 'missed'], true)) {
                 $existingEntry->update([
                     'status' => 'completed',
-                    'time' => $data['time'],
+                    'time' => $scheduledTime,
+                    'scheduled_time' => $scheduledTime,
                     'taken_time' => now(),
                 ]);
-                Log::info('Updated skipped to completed', ['entry_id' => $existingEntry->id]);
+                Log::info('Updated missed/skipped to completed', ['entry_id' => $existingEntry->id]);
                 return response()->json($existingEntry->fresh(), 200);
             }
-            // If trying to mark as skipped but already marked as completed, don't allow
-            if ($data['status'] === 'skipped' && $existingEntry->status === 'completed') {
+
+            if ($data['status'] === 'completed' && $existingEntry->status === 'snoozed') {
+                $existingEntry->update([
+                    'status' => 'completed',
+                    'time' => $scheduledTime,
+                    'scheduled_time' => $scheduledTime,
+                    'taken_time' => now(),
+                ]);
+                return response()->json($existingEntry->fresh(), 200);
+            }
+
+            // If trying to mark as skipped/missed but already marked as completed, don't allow
+            if (in_array($data['status'], ['skipped', 'missed'], true) && $existingEntry->status === 'completed') {
                 return response()->json([
                     'message' => 'This medication has already been marked as completed for this scheduled time',
                     'existing_entry' => $existingEntry
@@ -176,9 +180,9 @@ class MedicationController extends Controller
             'medication_id' => $medication->id,
             'user_id' => $user->id,
             'status' => $data['status'],
-            'time' => $data['time'],
+            'time' => $scheduledTime,
             'scheduled_time' => $scheduledTime,
-            'taken_time' => now(),
+            'taken_time' => $data['status'] === 'completed' ? now() : null,
         ]);
 
         Log::info('History entry created', [
@@ -195,7 +199,9 @@ class MedicationController extends Controller
     {
         $user = $request->user();
         $this->authorizeForUser($user, 'view', $medication);
-        $historyEntries = $medication->history()->orderBy('time', 'desc')->get();
+        $historyEntries = $this->dedupeMedicationHistory(
+            $medication->history()->orderBy('time', 'desc')->orderBy('created_at', 'desc')->get()
+        );
         Log::info('History retrieved', [
             'user_id' => $user->id,
             'medication_id' => $medication->id,
@@ -259,81 +265,199 @@ class MedicationController extends Controller
     {
         $user = $request->user();
         $medications = Medication::where('user_id', $user->id)->get();
+        $this->autoMarkMissedMedications($user);
 
         $stats = [
             'total_medications' => $medications->count(),
-            'active_medications' => $medications->where('reminder', true)->count(),
+            'active_medications' => $medications
+                ->filter(fn($med) => $med->reminder && $med->active !== false && (!$med->end_date || Carbon::parse($med->end_date)->endOfDay()->gte(now())))
+                ->count(),
             'total_reminders_today' => 0,
             'completed_today' => 0,
             'missed_today' => 0,
         ];
 
-        $today = now()->toDateString();
         $now = now();
+        $todayStart = $now->copy()->startOfDay();
+        $todayEnd = $now->copy()->endOfDay();
 
         foreach ($medications as $med) {
-            if (!$med->reminder) continue;
-            if (!$this->isMedicationScheduledOnDate($med, $now)) continue;
+            $stats['total_reminders_today'] += count($this->scheduledDosesForDate($med, $now));
 
-            $times = $med->times ?? [];
-            $stats['total_reminders_today'] += count($times);
-
-            // Count completed and missed for today
-            $history = $med->history()
-                ->whereDate('time', $today)
-                ->get();
+            $history = $this->dedupeMedicationHistory($med->history()
+                ->whereBetween('time', [$todayStart, $todayEnd])
+                ->get());
 
             $stats['completed_today'] += $history->where('status', 'completed')->count();
-            $stats['missed_today'] += $history->where('status', 'skipped')->count();
-
-            // Auto-mark missed medications that have passed their scheduled time
-            foreach ($times as $timeStr) {
-                $scheduledTime = \Carbon\Carbon::parse($timeStr);
-                $todayScheduledTime = $now->copy()->setTime($scheduledTime->hour, $scheduledTime->minute, $scheduledTime->second);
-
-                // If scheduled time has passed (more than 30 minutes ago) and it's still today
-                $thirtyMinutesAgo = $now->copy()->subMinutes(30);
-                if ($todayScheduledTime->isBefore($thirtyMinutesAgo) && $todayScheduledTime->isToday()) {
-                    // Check if already marked
-                    $twoHoursBefore = $todayScheduledTime->copy()->subHours(2);
-                    $twoHoursAfter = $todayScheduledTime->copy()->addHours(2);
-
-                    $existingEntry = MedicationHistory::where('medication_id', $med->id)
-                        ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
-                        ->whereIn('status', ['completed', 'skipped'])
-                        ->first();
-
-                    if (!$existingEntry) {
-                        // Auto-mark as missed
-                        MedicationHistory::create([
-                            'medication_id' => $med->id,
-                            'user_id' => $med->user_id,
-                            'status' => 'skipped',
-                            'time' => $todayScheduledTime,
-                            'scheduled_time' => $todayScheduledTime,
-                            'taken_time' => now(),
-                        ]);
-                        $stats['missed_today']++;
-                    }
-                }
-            }
+            $stats['missed_today'] += $history->whereIn('status', ['skipped', 'missed'])->count();
         }
 
         return response()->json($stats);
     }
 
-    private function isMedicationScheduledOnDate(Medication $medication, \Carbon\Carbon $date): bool
+    private function normalizeDoseTime(Carbon $date): Carbon
     {
-        if ($medication->start_date && \Carbon\Carbon::parse($medication->start_date)->startOfDay()->gt($date->copy()->endOfDay())) {
+        return $date->copy()->setSecond(0)->setMicrosecond(0);
+    }
+
+    private function doseKey(int|string $medicationId, Carbon $date): string
+    {
+        return $medicationId . ':' . $this->normalizeDoseTime($date)->format('Y-m-d H:i');
+    }
+
+    private function historyDoseTime(MedicationHistory $entry): Carbon
+    {
+        return $this->normalizeDoseTime(Carbon::parse($entry->scheduled_time ?: $entry->time));
+    }
+
+    private function historyStatusPriority(?string $status): int
+    {
+        return match ($status) {
+            'completed' => 4,
+            'snoozed' => 3,
+            'skipped', 'missed' => 2,
+            default => 1,
+        };
+    }
+
+    private function dedupeMedicationHistory($entries)
+    {
+        return $entries
+            ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
+            ->reduce(function ($carry, $entry) {
+                $key = $this->doseKey($entry->medication_id, $this->historyDoseTime($entry));
+                $existing = $carry->get($key);
+                if (!$existing) {
+                    $carry->put($key, $entry);
+                    return $carry;
+                }
+
+                $entryPriority = $this->historyStatusPriority($entry->status);
+                $existingPriority = $this->historyStatusPriority($existing->status);
+                if (
+                    $entryPriority > $existingPriority ||
+                    ($entryPriority === $existingPriority && optional($entry->created_at)->gt($existing->created_at))
+                ) {
+                    $carry->put($key, $entry);
+                }
+
+                return $carry;
+            }, collect())
+            ->values()
+            ->sortByDesc(fn($entry) => optional($entry->time)->timestamp ?? optional($entry->created_at)->timestamp ?? 0)
+            ->values();
+    }
+
+    private function findExistingDoseHistory(int|string $medicationId, Carbon $scheduledTime): ?MedicationHistory
+    {
+        $scheduledTime = $this->normalizeDoseTime($scheduledTime);
+        return MedicationHistory::where('medication_id', $medicationId)
+            ->where(function ($query) use ($scheduledTime) {
+                $query->whereBetween('scheduled_time', [$scheduledTime, $scheduledTime->copy()->addSeconds(59)])
+                    ->orWhere(function ($fallback) use ($scheduledTime) {
+                        $fallback->whereNull('scheduled_time')
+                            ->whereBetween('time', [$scheduledTime, $scheduledTime->copy()->addSeconds(59)]);
+                    });
+            })
+            ->orderByRaw("CASE status WHEN 'completed' THEN 4 WHEN 'snoozed' THEN 3 WHEN 'skipped' THEN 2 WHEN 'missed' THEN 2 ELSE 1 END DESC")
+            ->latest('created_at')
+            ->first();
+    }
+
+    private function hasFutureSnooze(Medication $medication, Carbon $now): bool
+    {
+        return MedicationHistory::where('medication_id', $medication->id)
+            ->where('status', 'snoozed')
+            ->where('time', '>', $now)
+            ->exists();
+    }
+
+    private function scheduledDosesForDate(Medication $medication, Carbon $date): array
+    {
+        if (!$this->isMedicationScheduledOnDate($medication, $date)) {
+            return [];
+        }
+
+        $times = is_array($medication->times) ? $medication->times : [];
+        $doses = [];
+        foreach ($times as $timeStr) {
+            $time = Carbon::parse($timeStr);
+            $scheduled = $this->normalizeDoseTime($date->copy()->setTime($time->hour, $time->minute, 0));
+
+            if ($medication->created_at && $scheduled->lt($this->normalizeDoseTime(Carbon::parse($medication->created_at)))) {
+                continue;
+            }
+
+            $doses[$this->doseKey($medication->id, $scheduled)] = $scheduled;
+        }
+
+        return array_values($doses);
+    }
+
+    private function autoMarkMissedMedications($user): void
+    {
+        $now = now();
+        $graceCutoff = $now->copy()->subMinutes(30);
+        $medications = Medication::where('user_id', $user->id)
+            ->where('reminder', true)
+            ->get();
+
+        foreach ($medications as $medication) {
+            if ($this->hasFutureSnooze($medication, $now)) {
+                continue;
+            }
+
+            foreach ($this->scheduledDosesForDate($medication, $now) as $scheduled) {
+                if ($scheduled->gt($graceCutoff)) {
+                    continue;
+                }
+
+                $existing = $this->findExistingDoseHistory($medication->id, $scheduled);
+                if ($existing) {
+                    continue;
+                }
+
+                MedicationHistory::create([
+                    'medication_id' => $medication->id,
+                    'user_id' => $medication->user_id,
+                    'status' => 'skipped',
+                    'time' => $scheduled,
+                    'scheduled_time' => $scheduled,
+                    'taken_time' => null,
+                ]);
+            }
+        }
+    }
+
+    private function isMedicationScheduledOnDate(Medication $medication, Carbon $date): bool
+    {
+        if ($medication->active === false || !$medication->reminder) {
             return false;
         }
 
-        if ($medication->end_date && \Carbon\Carbon::parse($medication->end_date)->endOfDay()->lt($date->copy()->startOfDay())) {
+        if ($medication->start_date && Carbon::parse($medication->start_date)->startOfDay()->gt($date->copy()->endOfDay())) {
             return false;
         }
 
-        if ($medication->frequency === 'weekly' && is_array($medication->days_of_week) && count($medication->days_of_week) > 0) {
-            return in_array((int) $date->dayOfWeek, array_map('intval', $medication->days_of_week), true);
+        if ($medication->end_date && Carbon::parse($medication->end_date)->endOfDay()->lt($date->copy()->startOfDay())) {
+            return false;
+        }
+
+        if ($medication->frequency === 'weekly') {
+            return is_array($medication->days_of_week)
+                && count($medication->days_of_week) > 0
+                && in_array((int) $date->dayOfWeek, array_map('intval', $medication->days_of_week), true);
+        }
+
+        if ($medication->frequency === 'monthly') {
+            $anchor = $medication->start_date ? Carbon::parse($medication->start_date) : Carbon::parse($medication->created_at);
+            return (int) $date->day === (int) $anchor->day;
+        }
+
+        if ($medication->frequency === 'custom') {
+            return is_array($medication->days_of_week)
+                && count($medication->days_of_week) > 0
+                && in_array((int) $date->dayOfWeek, array_map('intval', $medication->days_of_week), true);
         }
 
         return true;
@@ -354,27 +478,27 @@ class MedicationController extends Controller
 
             // Get all medications
             $totalMedications = Medication::count();
-            $activeMedications = Medication::where('reminder', true)->count();
+            $activeMedications = Medication::where('reminder', true)
+                ->where(function ($query) {
+                    $query->whereNull('end_date')->orWhereDate('end_date', '>=', now()->toDateString());
+                })
+                ->count();
 
             // Calculate adherence rate
-            $totalHistory = MedicationHistory::where('created_at', '>=', $startDate)->count();
-            $takenHistory = MedicationHistory::where('created_at', '>=', $startDate)
-                ->where('status', 'completed')
-                ->count();
+            $history = $this->dedupeMedicationHistory(MedicationHistory::where('created_at', '>=', $startDate)->get());
+            $totalHistory = $history->count();
+            $takenHistory = $history->where('status', 'completed')->count();
             $adherenceRate = $totalHistory > 0 ? round(($takenHistory / $totalHistory) * 100, 1) : 0;
 
             // Count upcoming doses (medications scheduled for today)
             $upcomingDoses = 0;
             $medications = Medication::where('reminder', true)->get();
             foreach ($medications as $med) {
-                $times = $med->times ?? [];
-                $upcomingDoses += count($times);
+                $upcomingDoses += count($this->scheduledDosesForDate($med, now()));
             }
 
             // Count missed doses
-            $missedDoses = MedicationHistory::where('created_at', '>=', $startDate)
-                ->where('status', 'skipped')
-                ->count();
+            $missedDoses = $history->whereIn('status', ['skipped', 'missed'])->count();
 
             // Medication types distribution
             $medicationTypes = Medication::selectRaw('name, COUNT(*) as count')
@@ -396,10 +520,11 @@ class MedicationController extends Controller
                 $weekStart = now()->subWeeks($w)->startOfWeek();
                 $weekEnd = now()->subWeeks($w)->endOfWeek();
 
-                $weekTotal = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])->count();
-                $weekTaken = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])
-                    ->where('status', 'completed')
-                    ->count();
+                $weekHistory = $this->dedupeMedicationHistory(
+                    MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])->get()
+                );
+                $weekTotal = $weekHistory->count();
+                $weekTaken = $weekHistory->where('status', 'completed')->count();
 
                 $weekAdherence = $weekTotal > 0 ? round(($weekTaken / $weekTotal) * 100, 1) : 0;
 
@@ -410,10 +535,13 @@ class MedicationController extends Controller
             }
 
             // Recent medication history
-            $recentHistory = MedicationHistory::with(['medication.user'])
-                ->orderBy('created_at', 'desc')
-                ->limit(10)
-                ->get()
+            $recentHistory = $this->dedupeMedicationHistory(
+                MedicationHistory::with(['medication.user'])
+                    ->orderBy('created_at', 'desc')
+                    ->limit(50)
+                    ->get()
+            )
+                ->take(10)
                 ->map(function ($entry) {
                     return [
                         'user_name' => $entry->medication->user->name ?? 'Unknown User',

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';

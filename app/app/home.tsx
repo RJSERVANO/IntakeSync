@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import { clearCachedSession, getCachedSession, hasValidCachedSession, updateCachedUser } from '../services/offlineStorage';

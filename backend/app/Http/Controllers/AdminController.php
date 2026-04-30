@@ -540,19 +540,21 @@ class AdminController extends Controller
     public function medication()
     {
         $timeRange = request('timeRange', 7);
+        $since = Carbon::now()->subDays($timeRange);
 
         // Calculate metrics
         $activeMedications = Medication::where('active', true)->count();
 
-        $totalEntries = MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($timeRange))->count();
-        $completedEntries = MedicationHistory::where('status', 'completed')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->count();
+        $historyEntries = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::where('created_at', '>=', $since)
+                ->with('user', 'medication')
+                ->get()
+        );
+        $totalEntries = $historyEntries->count();
+        $completedEntries = $historyEntries->where('status', 'completed')->count();
         $adherenceRate = $totalEntries > 0 ? round(($completedEntries / $totalEntries) * 100, 1) : 0;
 
-        $missedDoses = MedicationHistory::where('status', 'missed')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->count();
+        $missedDoses = $historyEntries->whereIn('status', ['missed', 'skipped'])->count();
 
         // Get critical missed medications
         $criticalMissedMedications = $this->getCriticalMissedMedications();
@@ -563,12 +565,11 @@ class AdminController extends Controller
         $medicationTypeData = $this->getMedicationAdherenceByName($timeRange);
         $weeklyAdherenceData = $this->getMedicationAdherenceTrend($timeRange);
 
-        $problematicEntries = MedicationHistory::whereIn('status', ['missed', 'skipped'])
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->with('user', 'medication')
-            ->latest('created_at')
-            ->limit(10)
-            ->get();
+        $problematicEntries = $historyEntries
+            ->whereIn('status', ['missed', 'skipped'])
+            ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
+            ->take(10)
+            ->values();
 
         return view('admin.medication.index-enhanced', compact(
             'activeMedications',
@@ -600,7 +601,7 @@ class AdminController extends Controller
 
         $openRate = $totalNotifications > 0 ? round(($openedNotifications / $totalNotifications) * 100, 1) : 0;
 
-        $effectiveness = $this->getNotificationEffectiveness();
+        $effectiveness = $this->getNotificationEffectiveness($timeRange);
         $effectivenessRate = $effectiveness['rate'];
         $avgResponseMinutes = $this->getNotificationAverageResponseMinutes($timeRange);
         $notificationVolumeData = $this->getNotificationVolumeData($timeRange);
@@ -737,12 +738,16 @@ class AdminController extends Controller
             ]);
 
         // Missed medication alerts
-        $missedMeds = MedicationHistory::where('status', 'missed')
-            ->where('created_at', '>=', Carbon::now()->subDays(1))
-            ->with('user', 'medication')
-            ->latest('created_at')
-            ->limit(5)
-            ->get()
+        $missedMeds = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::whereIn('status', ['missed', 'skipped'])
+                ->where('created_at', '>=', Carbon::now()->subDays(1))
+                ->with('user', 'medication')
+                ->latest('created_at')
+                ->get()
+        )
+            ->whereIn('status', ['missed', 'skipped'])
+            ->sortByDesc(fn($med) => optional($med->created_at)->timestamp ?? 0)
+            ->take(5)
             ->map(fn($med) => [
                 'type' => 'missed_medication',
                 'title' => 'Missed Medication Alert',
@@ -869,39 +874,95 @@ class AdminController extends Controller
     {
         $weekAgo = Carbon::now()->subDays(7);
 
-        return MedicationHistory::where('status', 'missed')
-            ->where('created_at', '>=', $weekAgo)
-            ->with('user', 'medication')
+        $missedEntries = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::whereIn('status', ['missed', 'skipped'])
+                ->where('created_at', '>=', $weekAgo)
+                ->with('user', 'medication')
+                ->get()
+        )->whereIn('status', ['missed', 'skipped']);
+
+        return $missedEntries
             ->groupBy('user_id')
-            ->selectRaw('user_id, COUNT(*) as missed_count')
-            ->having('missed_count', '>', 2)
-            ->get()
-            ->map(function ($record) {
-                $user = User::find($record->user_id);
-                $missedMeds = MedicationHistory::where('user_id', $record->user_id)
-                    ->where('status', 'missed')
-                    ->where('created_at', '>=', Carbon::now()->subDays(7))
-                    ->with('medication')
-                    ->get();
+            ->map(function ($entries, $userId) {
+                $user = $entries->first()->user ?? User::find($userId);
+                if (!$user || $entries->count() <= 2) {
+                    return null;
+                }
 
                 return [
                     'user_id' => $user->id,
                     'user_name' => $user->name,
                     'user_email' => $user->email,
-                    'missed_count' => $record->missed_count,
-                    'medications' => $missedMeds->pluck('medication.name')->unique()->implode(', '),
+                    'missed_count' => $entries->count(),
+                    'medications' => $entries->pluck('medication.name')->filter()->unique()->implode(', '),
                 ];
-            });
+            })
+            ->filter()
+            ->values();
+    }
+
+    private function medicationHistoryDoseTime(MedicationHistory $entry): Carbon
+    {
+        $source = $entry->scheduled_time ?: $entry->time ?: $entry->created_at;
+        return Carbon::parse($source)->seconds(0)->microseconds(0);
+    }
+
+    private function medicationHistoryDoseKey(MedicationHistory $entry): string
+    {
+        return implode('|', [
+            $entry->user_id,
+            $entry->medication_id,
+            $this->medicationHistoryDoseTime($entry)->format('Y-m-d H:i'),
+        ]);
+    }
+
+    private function medicationHistoryStatusPriority(?string $status): int
+    {
+        return match ($status) {
+            'completed' => 4,
+            'snoozed' => 3,
+            'missed', 'skipped' => 2,
+            default => 1,
+        };
+    }
+
+    private function dedupeMedicationHistoryCollection($entries)
+    {
+        return collect($entries)
+            ->reduce(function ($deduped, MedicationHistory $entry) {
+                $key = $this->medicationHistoryDoseKey($entry);
+                $existing = $deduped->get($key);
+                if (!$existing) {
+                    $deduped->put($key, $entry);
+                    return $deduped;
+                }
+
+                $entryPriority = $this->medicationHistoryStatusPriority($entry->status);
+                $existingPriority = $this->medicationHistoryStatusPriority($existing->status);
+                $entryStamp = optional($entry->created_at)->timestamp ?? 0;
+                $existingStamp = optional($existing->created_at)->timestamp ?? 0;
+
+                if ($entryPriority > $existingPriority || ($entryPriority === $existingPriority && $entryStamp > $existingStamp)) {
+                    $deduped->put($key, $entry);
+                }
+
+                return $deduped;
+            }, collect())
+            ->values();
     }
 
     /**
      * Get notification effectiveness metrics
      */
-    public function getNotificationEffectiveness()
+    public function getNotificationEffectiveness($days = null)
     {
-        $totalNotifications = Notification::count();
-        $engagedNotifications = Notification::whereNotNull('actioned_at')
-            ->count();
+        $baseQuery = Notification::query();
+        if ($days !== null) {
+            $baseQuery->where('created_at', '>=', Carbon::now()->subDays($days));
+        }
+
+        $totalNotifications = (clone $baseQuery)->count();
+        $engagedNotifications = (clone $baseQuery)->whereNotNull('actioned_at')->count();
 
         return [
             'total' => $totalNotifications,
@@ -940,15 +1001,16 @@ class AdminController extends Controller
 
     private function getNotificationTypeData($days)
     {
-        return Notification::select('type', DB::raw('COUNT(*) as count'))
-            ->where('created_at', '>=', Carbon::now()->subDays($days))
-            ->groupBy('type')
-            ->orderByDesc('count')
-            ->get()
-            ->map(fn($row) => [
-                'type' => ucfirst($row->type ?? 'General'),
-                'count' => (int) $row->count,
-            ]);
+        return Notification::where('created_at', '>=', Carbon::now()->subDays($days))
+            ->pluck('type')
+            ->map(fn($type) => trim((string) $type) !== '' ? Str::lower(trim((string) $type)) : 'general')
+            ->countBy()
+            ->sortDesc()
+            ->map(fn($count, $type) => [
+                'type' => Str::headline($type),
+                'count' => (int) $count,
+            ])
+            ->values();
     }
 
     private function getNotificationEngagementBreakdown($days)
@@ -983,33 +1045,44 @@ class AdminController extends Controller
 
     private function getMedicationAdherenceByName($days)
     {
-        return Medication::query()
-            ->join('medication_history', 'medications.id', '=', 'medication_history.medication_id')
-            ->where('medication_history.created_at', '>=', Carbon::now()->subDays($days))
-            ->groupBy('medications.id', 'medications.name')
-            ->select(
-                'medications.name',
-                DB::raw('COUNT(medication_history.id) as total_count'),
-                DB::raw("SUM(CASE WHEN medication_history.status = 'completed' THEN 1 ELSE 0 END) as completed_count")
-            )
-            ->orderByDesc('total_count')
-            ->limit(8)
-            ->get()
+        $entries = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($days))
+                ->with('medication')
+                ->get()
+        );
+
+        return $entries
+            ->groupBy('medication_id')
+            ->map(function ($items) {
+                $total = $items->count();
+                $completed = $items->where('status', 'completed')->count();
+                return [
+                    'type' => optional($items->first()->medication)->name ?? 'Medication',
+                    'adherence' => $total > 0 ? round(($completed / $total) * 100, 1) : 0,
+                    'total' => $total,
+                ];
+            })
+            ->sortByDesc('total')
+            ->take(8)
             ->map(fn($row) => [
-                'type' => $row->name,
-                'adherence' => $row->total_count > 0 ? round(($row->completed_count / $row->total_count) * 100, 1) : 0,
-            ]);
+                'type' => $row['type'],
+                'adherence' => $row['adherence'],
+            ])
+            ->values();
     }
 
     private function getMedicationAdherenceTrend($days)
     {
+        $entries = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($days))
+                ->get()
+        );
         $data = [];
         for ($i = ($days - 1); $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
-            $total = MedicationHistory::whereDate('created_at', $date)->count();
-            $completed = MedicationHistory::whereDate('created_at', $date)
-                ->where('status', 'completed')
-                ->count();
+            $dayEntries = $entries->filter(fn($entry) => $this->medicationHistoryDoseTime($entry)->isSameDay($date));
+            $total = $dayEntries->count();
+            $completed = $dayEntries->where('status', 'completed')->count();
 
             $data[] = [
                 'date' => $date->format('M j'),
@@ -1054,10 +1127,11 @@ class AdminController extends Controller
             ->where('status', 'active')
             ->get()
             ->map(function ($user) {
-                $total = $user->medicationHistory->count();
+                $history = $this->dedupeMedicationHistoryCollection($user->medicationHistory);
+                $total = $history->count();
                 if ($total === 0) return null;
 
-                $completed = $user->medicationHistory->where('status', 'completed')->count();
+                $completed = $history->where('status', 'completed')->count();
                 $rate = round(($completed / $total) * 100, 1);
 
                 return [
