@@ -11,7 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
-import { getCachedSession, hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
+import { clearCachedSession, getCachedSession, hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authStyles } from '../components/auth/authStyles';
@@ -41,6 +41,35 @@ export default function Login() {
       message: typeof message === 'string' ? message : JSON.stringify(message),
     });
   };
+
+  async function showLoginError(err: any, fallbackMessage: string) {
+    if (api.isNetworkError(err)) {
+      const cached = await getCachedSession();
+      if (hasValidCachedSession(cached)) {
+        router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
+        return;
+      }
+      showNotice('warning', 'Backend Unreachable', 'Internet or backend access is required for first-time login.');
+      return;
+    }
+
+    if (api.isAuthError(err)) {
+      await clearCachedSession();
+      showNotice('error', 'Invalid Credentials', err?.message || 'The email or password is incorrect.');
+      return;
+    }
+
+    const message = err?.data?.message || err?.data || err?.message || fallbackMessage;
+    if (err?.type === 'validation' || err?.status === 422) {
+      showNotice('warning', 'Validation Error', message);
+      return;
+    }
+    if (err?.type === 'server' || (err?.status && err.status >= 500)) {
+      showNotice('error', 'Server Error', message);
+      return;
+    }
+    showNotice('error', 'Login Failed', message);
+  }
 
   useEffect(() => {
     Animated.parallel([
@@ -83,17 +112,7 @@ export default function Login() {
       }
     } catch (err: any) {
       console.log('login error', err);
-      if (api.isNetworkError(err)) {
-        const cached = await getCachedSession();
-        if (hasValidCachedSession(cached)) {
-          router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
-          return;
-        }
-        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
-        return;
-      }
-      const message = err?.data?.message || err?.data || err?.message || 'Login failed';
-      showNotice('error', 'Login Failed', message);
+      await showLoginError(err, 'Login failed');
     } finally {
       setLoading(false);
     }
@@ -117,18 +136,7 @@ export default function Login() {
       }
     } catch (err: any) {
       console.log('google signin error', err);
-      if (api.isNetworkError(err)) {
-        const cached = await getCachedSession();
-        if (hasValidCachedSession(cached)) {
-          router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
-          return;
-        }
-        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
-        return;
-      }
-      const message =
-        err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
-      showNotice('error', 'Login Failed', message);
+      await showLoginError(err, 'Google sign-in failed');
     } finally {
       setLoading(false);
     }

@@ -1361,13 +1361,13 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
   },
   headerAvatarImage: {
-    width: '100%',
-    height: '100%',
+    width: '112%',
+    height: '112%',
   },
   avatarText: {
     color: 'white',
     fontWeight: '800',
-    fontSize: 14,
+    fontSize: 18,
   },
   welcomeSection: {
     paddingTop: 16,

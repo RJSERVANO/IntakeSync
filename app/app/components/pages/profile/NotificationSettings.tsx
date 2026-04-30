@@ -78,8 +78,10 @@ export default function NotificationSettings() {
     if (key === 'allowNotifications' && value) {
       const granted = await notificationService.requestPermissions();
       if (!granted) {
-        setNoticeModal({ type: 'warning', title: 'Notifications Are Off', message: 'Notification permission was not granted. You can enable it later in your device settings.' });
+        setNoticeModal({ type: 'warning', title: 'Notifications Are Off', message: 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try this switch again.' });
         next = { ...prefs, allowNotifications: false };
+      } else {
+        setNoticeModal({ type: 'success', title: 'Notifications Enabled', message: 'Hydration and medication reminders can now appear on this device.' });
       }
     }
 

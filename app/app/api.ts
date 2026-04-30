@@ -36,12 +36,31 @@ function makeApiError(status: number | undefined, data: any, fallbackMessage: st
   };
 }
 
+function logRequest(method: string, url: string) {
+  if (__DEV__) {
+    console.log(`API ${method}:`, url);
+  }
+}
+
+function logStatus(res: Response) {
+  if (__DEV__) {
+    console.log('API STATUS:', res.status);
+  }
+}
+
+function logApiError(error: ApiError) {
+  if (__DEV__) {
+    console.log('API ERROR TYPE:', error.type);
+  }
+}
+
 function normalizeFetchError(error: any): ApiError {
   if (error?.type) {
+    logApiError(error);
     return error;
   }
   if (error?.name === 'AbortError') {
-    return {
+    const normalized: ApiError = {
       status: 408,
       data: { message: 'Request timeout' },
       type: 'timeout',
@@ -50,8 +69,10 @@ function normalizeFetchError(error: any): ApiError {
       isAuthError: false,
       isValidationError: false,
     };
+    logApiError(normalized);
+    return normalized;
   }
-  return {
+  const normalized: ApiError = {
     status: 0,
     data: { message: error?.message || 'Backend unavailable' },
     type: 'network',
@@ -60,6 +81,8 @@ function normalizeFetchError(error: any): ApiError {
     isAuthError: false,
     isValidationError: false,
   };
+  logApiError(normalized);
+  return normalized;
 }
 
 async function parseResponse(res: Response) {
@@ -88,14 +111,17 @@ export async function post(path: string, body: any, token?: string, timeout: num
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const url = joinPath(path);
+  logRequest('POST', url);
   try {
-    const res = await fetch(joinPath(path), {
+    const res = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    logStatus(res);
     const data = await parseResponse(res);
     if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
     return data;
@@ -112,13 +138,16 @@ export async function get(path: string, token?: string, timeout: number = 10000)
   // Add timeout to prevent infinite hanging
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const url = joinPath(path);
+  logRequest('GET', url);
   
   try {
-    const res = await fetch(joinPath(path), { 
+    const res = await fetch(url, {
       headers,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    logStatus(res);
     const data = await parseResponse(res);
     if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
     return data;
@@ -133,14 +162,17 @@ export async function put(path: string, body: any, token?: string, timeout: numb
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const url = joinPath(path);
+  logRequest('PUT', url);
   try {
-    const res = await fetch(joinPath(path), {
+    const res = await fetch(url, {
       method: 'PUT',
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    logStatus(res);
     const data = await parseResponse(res);
     if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
     return data;
@@ -155,9 +187,12 @@ export async function del(path: string, token?: string, timeout: number = 10000)
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const url = joinPath(path);
+  logRequest('DELETE', url);
   try {
-    const res = await fetch(joinPath(path), { method: 'DELETE', headers, signal: controller.signal });
+    const res = await fetch(url, { method: 'DELETE', headers, signal: controller.signal });
     clearTimeout(timeoutId);
+    logStatus(res);
     const data = await parseResponse(res);
     if (!res.ok) throw makeApiError(res.status, data, 'Request failed');
     return data;

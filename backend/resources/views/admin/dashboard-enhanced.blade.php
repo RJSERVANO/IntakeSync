@@ -13,12 +13,12 @@
                 <p class="text-slate-500 mt-2">Live admin overview from IntakeSync users, beverage intake, medication, and notification data.</p>
             </div>
             <div class="flex gap-3">
-                <button onclick="location.href='{{ route('admin.hydration.index') }}'" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition font-medium text-sm">
+                <a href="{{ route('admin.hydration.index') }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition font-medium text-sm">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11z"></path>
                     </svg>
                     Beverage Analytics
-                </button>
+                </a>
                 <a href="{{ route('admin.users.create') }}" class="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
@@ -146,7 +146,7 @@
                     <div class="text-3xl font-bold text-slate-900">{{ $hydrationCompliance['compliance_rate'] }}%</div>
                     <p class="text-sm text-slate-600 mt-2">{{ $hydrationCompliance['users_on_track'] }} of {{ $hydrationCompliance['total_users'] }} users on track</p>
                     <div class="mt-4 w-full bg-slate-200 rounded-full h-2">
-                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ $hydrationCompliance['compliance_rate'] }}%"></div>
+                        <div class="bg-blue-600 h-2 rounded-full progress-bar" data-width="{{ $hydrationCompliance['compliance_rate'] }}"></div>
                     </div>
                 </div>
             </div>
@@ -157,7 +157,7 @@
                     <div class="text-3xl font-bold text-slate-900">{{ $notificationEffectiveness['rate'] }}%</div>
                     <p class="text-sm text-slate-600 mt-2">{{ $notificationEffectiveness['engaged'] }} of {{ $notificationEffectiveness['total'] }} engaged</p>
                     <div class="mt-4 w-full bg-slate-200 rounded-full h-2">
-                        <div class="bg-purple-600 h-2 rounded-full" style="width: {{ $notificationEffectiveness['rate'] }}%"></div>
+                        <div class="bg-purple-600 h-2 rounded-full progress-bar" data-width="{{ $notificationEffectiveness['rate'] }}"></div>
                     </div>
                 </div>
             </div>
@@ -241,14 +241,38 @@
 @push('scripts')
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <!-- htmlhint attr-unsafe-chars:false -->
+<template id="userGrowthData">@json($userGrowth)</template>
+<template id="platformSplitData">@json($platformSplit)</template>
 <script>
     let userGrowthChart, platformSplitChart;
+
+    function readJsonTemplate(id) {
+        const template = document.getElementById(id);
+        if (!template) {
+            return [];
+        }
+
+        try {
+            return JSON.parse(template.textContent || '[]');
+        } catch (error) {
+            console.error(`Invalid chart data in ${id}`, error);
+            return [];
+        }
+    }
+
+    function initProgressBars() {
+        document.querySelectorAll('.progress-bar[data-width]').forEach((bar) => {
+            const width = Number(bar.getAttribute('data-width'));
+            const boundedWidth = Number.isFinite(width) ? Math.max(0, Math.min(width, 100)) : 0;
+            bar.style.width = `${boundedWidth}%`;
+        });
+    }
 
     function initCharts() {
         // User Growth Chart
         const userGrowthCtx = document.getElementById('userGrowthChart');
         if (userGrowthCtx) {
-            const userGrowthData = @json($userGrowth);
+            const userGrowthData = readJsonTemplate('userGrowthData');
             userGrowthChart = new Chart(userGrowthCtx.getContext('2d'), {
                 type: 'line',
                 data: {
@@ -302,7 +326,7 @@
         // Platform Split Chart
         const platformCtx = document.getElementById('platformSplitChart');
         if (platformCtx) {
-            const platformData = @json($platformSplit);
+            const platformData = readJsonTemplate('platformSplitData');
             platformSplitChart = new Chart(platformCtx.getContext('2d'), {
                 type: 'doughnut',
                 data: {
@@ -332,7 +356,10 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', initCharts);
+    document.addEventListener('DOMContentLoaded', () => {
+        initProgressBars();
+        initCharts();
+    });
 </script>
 @endpush
 @endsection

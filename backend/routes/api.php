@@ -14,6 +14,10 @@ Route::post('oauth/google', [AuthController::class, 'google']);
 Route::post('forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('reset-password', [AuthController::class, 'resetPassword']);
 
+Route::get('test', function () {
+    return response()->json(['message' => 'API works']);
+});
+
 // OTC Medicines endpoints (public)
 Route::get('medicines/search', [OtcMedicineController::class, 'search']);
 Route::get('medicines', [OtcMedicineController::class, 'index']);

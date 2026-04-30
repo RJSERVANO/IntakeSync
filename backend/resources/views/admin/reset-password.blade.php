@@ -166,6 +166,29 @@
         box-shadow: 0 0 0px 1000px rgba(30, 41, 59, 1) inset !important;
         /* slate-800 */
     }
+
+    .admin-field-icon {
+        position: absolute;
+        left: 1rem;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        height: 1.25rem;
+        width: 1.25rem;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+    }
+
+    .admin-field-input {
+        min-height: 3.5rem;
+        padding-left: 3.5rem !important;
+        padding-right: 1rem !important;
+    }
+
+    .admin-field-input.has-trailing-action {
+        padding-right: 3.5rem !important;
+    }
 </style>
 
 <div class="fixed inset-0 z-50 bg-gradient-to-b from-blue-700 via-blue-800 to-blue-900 flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 overflow-hidden">
@@ -232,26 +255,26 @@
 
                 <!-- Email Display (read-only) -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
+                    <div class="admin-field-icon">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
                     </div>
                     <input type="email" id="email_display" value="{{ $email ?? old('email') }}" readonly
-                        class="block w-full pl-12 pr-4 py-3 border border-gray-600 rounded-xl bg-slate-800 text-white cursor-not-allowed focus:outline-none text-sm">
+                        class="admin-field-input block w-full border border-gray-600 rounded-xl bg-slate-800 text-white cursor-not-allowed focus:outline-none text-sm">
                 </div>
 
                 <!-- New Password -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
+                    <div class="admin-field-icon">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
                     </div>
                     <input type="password" id="password" name="password" required placeholder="Password"
-                        class="block w-full pl-12 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                        class="admin-field-input has-trailing-action block w-full border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
                     <button type="button" id="togglePassword"
                         class="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none">
                         <svg id="eyeOpen" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -270,14 +293,14 @@
 
                 <!-- Confirm Password -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
+                    <div class="admin-field-icon">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
                     </div>
                     <input type="password" id="password_confirmation" name="password_confirmation" required placeholder="Confirm password"
-                        class="block w-full pl-12 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                        class="admin-field-input has-trailing-action block w-full border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
                     <button type="button" id="togglePasswordConfirmation"
                         class="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none">
                         <svg id="eyeOpenConfirm" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

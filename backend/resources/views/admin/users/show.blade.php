@@ -64,8 +64,8 @@
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-blue-50 rounded-lg">
-                        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21a7 7 0 007-7c0-4.5-4.6-9.4-6.4-11.2a.85.85 0 00-1.2 0C9.6 4.6 5 9.5 5 14a7 7 0 007 7z"></path>
                         </svg>
                     </div>
                     <div>
@@ -78,8 +78,8 @@
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-green-50 rounded-lg">
-                        <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 8h-2v3h-3v2h3v3h2v-3h3v-2h-3V8zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 14H9c-.55 0-1-.45-1-1V5c0-.55.45-1 1-1h10c.55 0 1 .45 1 1v10c0 .55-.45 1-1 1z"></path>
+                        <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 21h4m-2-4v4m-4-4h8a2 2 0 002-2V7a4 4 0 00-4-4h-4a4 4 0 00-4 4v8a2 2 0 002 2zm4-12v8m-4-4h8"></path>
                         </svg>
                     </div>
                     <div>
@@ -92,8 +92,8 @@
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-purple-50 rounded-lg">
-                        <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                        <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 01-6 0"></path>
                         </svg>
                     </div>
                     <div>
@@ -106,7 +106,7 @@
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-amber-50 rounded-lg">
-                        <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
                         </svg>
                     </div>
@@ -121,28 +121,28 @@
         <!-- Tabs -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <!-- Tab Navigation -->
-            <div class="border-b border-slate-100">
-                <div class="flex" role="tablist">
-                    <button onclick="showTab('hydration')" id="hydration-tab" role="tab" aria-selected="true" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:text-slate-900 hover:border-slate-300 transition-colors active-tab">
+            <div class="border-b border-slate-100 overflow-x-auto">
+                <div class="flex min-w-max md:min-w-0" role="tablist" aria-label="User activity details">
+                    <button type="button" onclick="showTab('hydration')" id="hydration-tab" role="tab" aria-controls="hydration-content" aria-selected="true" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold border-b-2 transition-colors active-tab border-blue-500 text-blue-600">
                         <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21a7 7 0 007-7c0-4.5-4.6-9.4-6.4-11.2a.85.85 0 00-1.2 0C9.6 4.6 5 9.5 5 14a7 7 0 007 7z"></path>
                             </svg>
                             Hydration
                         </span>
                     </button>
-                    <button onclick="showTab('medication')" id="medication-tab" role="tab" aria-selected="false" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:text-slate-900 hover:border-slate-300 transition-colors">
+                    <button type="button" onclick="showTab('medication')" id="medication-tab" role="tab" aria-controls="medication-content" aria-selected="false" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:text-slate-900 hover:border-slate-300 transition-colors">
                         <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C6.228 6.228 2 10.228 2 15s4.228 8.772 10 8.772c5.772 0 10-3.928 10-8.772 0-4.772-4.228-8.747-10-8.747z"></path>
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 21h4m-2-4v4m-4-4h8a2 2 0 002-2V7a4 4 0 00-4-4h-4a4 4 0 00-4 4v8a2 2 0 002 2zm4-12v8m-4-4h8"></path>
                             </svg>
                             Medications
                         </span>
                     </button>
-                    <button onclick="showTab('notifications')" id="notifications-tab" role="tab" aria-selected="false" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:text-slate-900 hover:border-slate-300 transition-colors">
+                    <button type="button" onclick="showTab('notifications')" id="notifications-tab" role="tab" aria-controls="notifications-content" aria-selected="false" class="tab-button flex-1 md:flex-none px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:text-slate-900 hover:border-slate-300 transition-colors">
                         <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 01-6 0"></path>
                             </svg>
                             Notifications
                         </span>
@@ -151,7 +151,7 @@
             </div>
 
             <!-- Hydration Tab -->
-            <div id="hydration-content" class="tab-content p-8">
+            <div id="hydration-content" class="tab-content p-8" role="tabpanel" aria-labelledby="hydration-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Hydration Entries</h3>
                 @if($hydrationEntries->count() > 0)
                 <div class="overflow-x-auto">
@@ -188,7 +188,7 @@
             </div>
 
             <!-- Medication Tab -->
-            <div id="medication-content" class="tab-content hidden p-8">
+            <div id="medication-content" class="tab-content hidden p-8" role="tabpanel" aria-labelledby="medication-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Active Medications</h3>
                 @if($medications->count() > 0)
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -243,7 +243,7 @@
             </div>
 
             <!-- Notifications Tab -->
-            <div id="notifications-content" class="tab-content hidden p-8">
+            <div id="notifications-content" class="tab-content hidden p-8" role="tabpanel" aria-labelledby="notifications-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Notifications</h3>
                 @if($notifications->count() > 0)
                 <div class="overflow-x-auto">
@@ -289,6 +289,13 @@
 @push('scripts')
 <script>
     function showTab(tabName) {
+        const selectedContent = document.getElementById(tabName + '-content');
+        const selectedButton = document.getElementById(tabName + '-tab');
+
+        if (!selectedContent || !selectedButton) {
+            return;
+        }
+
         // Hide all tab contents
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.add('hidden');
@@ -298,15 +305,16 @@
         document.querySelectorAll('.tab-button').forEach(button => {
             button.classList.remove('active-tab', 'border-blue-500', 'text-blue-600');
             button.classList.add('border-transparent', 'text-slate-600');
+            button.setAttribute('aria-selected', 'false');
         });
 
         // Show selected tab content
-        document.getElementById(tabName + '-content').classList.remove('hidden');
+        selectedContent.classList.remove('hidden');
 
         // Add active class to selected tab button
-        const activeButton = document.getElementById(tabName + '-tab');
-        activeButton.classList.add('active-tab', 'border-blue-500', 'text-blue-600');
-        activeButton.classList.remove('border-transparent', 'text-slate-600');
+        selectedButton.classList.add('active-tab', 'border-blue-500', 'text-blue-600');
+        selectedButton.classList.remove('border-transparent', 'text-slate-600');
+        selectedButton.setAttribute('aria-selected', 'true');
     }
 </script>
 @endpush

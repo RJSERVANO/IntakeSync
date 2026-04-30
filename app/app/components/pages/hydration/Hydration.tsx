@@ -713,8 +713,10 @@ export default function Hydration() {
       setOfflineMode(true);
       showInlineNotice('Offline mode - changes will sync when connected.');
     }
-    closeNotice();
-    showInlineNotice(source === 'quick' ? `${amountMl} ml water logged` : 'Beverage logged');
+    if (source !== 'quick') {
+      closeNotice();
+      showInlineNotice('Beverage logged');
+    }
   }
 
 

@@ -341,25 +341,6 @@
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <!-- Emergency Contact -->
-                        <div class="bg-slate-50 rounded-lg p-6">
-                            <h4 class="font-semibold text-slate-900 mb-4">Emergency Contact</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Name</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->emergency_contact_name ?? 'Not provided' }}
-                                    </p>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Phone</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->emergency_contact_phone ?? 'Not provided' }}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
                         <!-- Hydration Goal -->
                         <div class="bg-slate-50 rounded-lg p-6">
                             <h4 class="font-semibold text-slate-900 mb-4">Health Goals</h4>

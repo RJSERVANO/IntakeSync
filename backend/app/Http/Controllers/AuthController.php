@@ -129,6 +129,7 @@ class AuthController extends Controller
         if (!$googleUser) {
             return response()->json([
                 'message' => 'Google sign-in could not be verified. Please try again.',
+                'debug' => app()->environment('production') ? null : 'Check that GOOGLE_CLIENT_IDS includes the OAuth client ID in the id_token aud claim.',
             ], 401);
         }
 

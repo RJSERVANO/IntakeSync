@@ -77,6 +77,7 @@ if (__DEV__) {
   console.log('Google Redirect URI:', googleRedirectUri);
   console.log('[GoogleAuth] proxy mode:', useProxy ? 'enabled' : 'disabled');
   console.log('[GoogleAuth] selected client ID type:', selectedClientIdType);
+  console.log('[GoogleAuth] response type:', useProxy ? 'id_token' : 'code with token exchange');
   console.log('[GoogleAuth] backend endpoint: /oauth/google');
   if (isExpoGo && !useProxy) {
     console.warn('[GoogleAuth] Expo Go is running with proxy disabled. APK mode is primary, but Expo Go Google sign-in may require EXPO_PUBLIC_GOOGLE_USE_PROXY=true.');
@@ -95,12 +96,13 @@ if (useProxy && expoProjectFullName && googleRedirectUri !== getFallbackExpoGoRe
 export function useGoogleAuth() {
   const [, , promptAsync] = Google.useAuthRequest({
     clientId: selectedClientId || 'missing-google-client-id',
+    webClientId: googleWebClientId || undefined,
+    androidClientId: googleAndroidClientId || undefined,
     redirectUri: googleRedirectUri,
-    responseType: 'id_token',
-    usePKCE: false,
+    responseType: useProxy ? 'id_token' : undefined,
     scopes: ['openid', 'profile', 'email'],
     selectAccount: true,
-    shouldAutoExchangeCode: false,
+    shouldAutoExchangeCode: !useProxy,
   });
 
   const signInWithGoogle = useCallback(async () => {
@@ -129,6 +131,11 @@ export function useGoogleAuth() {
     }
 
     const idToken = result.params?.id_token || (result.authentication as any)?.idToken;
+    if (__DEV__) {
+      console.log('[GoogleAuth] response type:', result.type);
+      console.log('[GoogleAuth] id_token exists:', Boolean(idToken));
+      console.log('[GoogleAuth] backend endpoint called:', '/oauth/google');
+    }
     if (!idToken) {
       throw new Error('Google did not return an identity token.');
     }

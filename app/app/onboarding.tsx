@@ -207,12 +207,12 @@ export default function Onboarding() {
       if (granted) {
         showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
       } else {
-        showNotice('warning', 'Notifications Disabled', 'You can still use IntakeSync, but reminders may not appear until notifications are enabled.');
+        showNotice('warning', 'Notifications Not Enabled', 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try again later from Notification Settings.');
       }
       setCurrentStep(currentStep + 1);
     } catch (err) {
       console.log('Notification permission request failed:', err);
-      showNotice('warning', 'Notifications Disabled', 'You can still use IntakeSync, but reminders may not appear until notifications are enabled.');
+      showNotice('warning', 'Notifications Not Enabled', 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try again later from Notification Settings.');
       updateData('notification_permissions_accepted', false);
       setCurrentStep(currentStep + 1);
     }

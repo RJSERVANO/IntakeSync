@@ -22,7 +22,8 @@
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -35,7 +36,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/mainlogo.png",
+          "image": "./assets/images/foregroundapp.png",
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#1E3A8A"
