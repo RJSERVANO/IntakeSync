@@ -5,6 +5,7 @@ import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
 
 export default function PrivacySecurity() {
   const { token } = useLocalSearchParams();
@@ -34,8 +35,8 @@ export default function PrivacySecurity() {
       return;
     }
 
-    if (passwordData.newPassword.length < 8) {
-      setNotice({ type: 'warning', title: 'Password Too Short', message: 'Password must be at least 8 characters.' });
+    if (!isStrongPassword(passwordData.newPassword)) {
+      setNotice({ type: 'warning', title: 'Weak Password', message: PASSWORD_POLICY_MESSAGE });
       return;
     }
 
@@ -126,7 +127,7 @@ export default function PrivacySecurity() {
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>Change Password</Text>
-                <Text style={styles.modalSubtitle}>Use at least 8 characters for the new password.</Text>
+                <Text style={styles.modalSubtitle}>Use uppercase, lowercase, a number, and a symbol.</Text>
               </View>
               <TouchableOpacity style={styles.closeButton} onPress={closeModal} disabled={loading}>
                 <Ionicons name="close" size={22} color="#475569" />
@@ -136,6 +137,7 @@ export default function PrivacySecurity() {
             <ScrollView contentContainerStyle={styles.modalForm} showsVerticalScrollIndicator={false}>
               <PasswordField label="Current Password *" value={passwordData.currentPassword} onChangeText={(text) => setPasswordData({ ...passwordData, currentPassword: text })} />
               <PasswordField label="New Password *" value={passwordData.newPassword} onChangeText={(text) => setPasswordData({ ...passwordData, newPassword: text })} />
+              <PasswordChecklist password={passwordData.newPassword} />
               <PasswordField label="Confirm New Password *" value={passwordData.confirmPassword} onChangeText={(text) => setPasswordData({ ...passwordData, confirmPassword: text })} />
 
               <View style={styles.modalActions}>
@@ -203,6 +205,25 @@ function PasswordField({ label, value, onChangeText }: { label: string; value: s
         value={value}
         onChangeText={onChangeText}
       />
+    </View>
+  );
+}
+
+function PasswordChecklist({ password }: { password: string }) {
+  return (
+    <View style={styles.passwordChecklist}>
+      {getPasswordRules(password).map((rule) => (
+        <View key={rule.id} style={styles.passwordRuleRow}>
+          <Ionicons
+            name={rule.valid ? 'checkmark-circle' : 'ellipse-outline'}
+            size={15}
+            color={rule.valid ? '#10B981' : '#94A3B8'}
+          />
+          <Text style={[styles.passwordRuleText, rule.valid && styles.passwordRuleTextValid]}>
+            {rule.label}
+          </Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -422,6 +443,29 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     color: '#0F172A',
+  },
+  passwordChecklist: {
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 12,
+    gap: 7,
+    marginTop: -4,
+    marginBottom: 15,
+  },
+  passwordRuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  passwordRuleText: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  passwordRuleTextValid: {
+    color: '#047857',
   },
   modalActions: {
     flexDirection: 'row',

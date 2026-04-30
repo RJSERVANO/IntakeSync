@@ -24,6 +24,7 @@ return [
 
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_ids' => array_values(array_filter(array_map('trim', explode(',', env('GOOGLE_CLIENT_IDS', env('GOOGLE_CLIENT_ID', '')))))),
     ],
 
     'ses' => [

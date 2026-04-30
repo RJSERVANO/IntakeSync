@@ -202,7 +202,7 @@
 
             <div class="text-center mb-6">
                 <div class="flex justify-center mb-4">
-                    <img src="{{ asset('images/mainlogo.png') }}" alt="AQUATAB Logo" class="h-20 w-auto">
+                    <img src="{{ asset('images/mainlogo.png') }}" alt="IntakeSync Logo" class="h-20 w-auto">
                 </div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">Admin Login</h1>
             </div>
@@ -253,15 +253,15 @@
                 <div class="space-y-2">
                     <label for="email" class="text-sm font-semibold text-slate-200">Email Address</label>
                     <div class="relative">
-                        <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                        <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                             <svg class="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
                         </div>
                         <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus
-                            placeholder="admin@aqua.com"
-                            class="block w-full p10 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                            placeholder="admin@intakesync.local"
+                            class="block w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
                     </div>
                     @error('email')
                     <p class="text-xs text-red-400 mt-1">{{ $message }}</p>
@@ -272,16 +272,16 @@
                 <div class="space-y-2">
                     <label for="password" class="text-sm font-semibold text-slate-200">Password</label>
                     <div class="relative">
-                        <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                        <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                             <svg class="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                             </svg>
                         </div>
-                        <input type="password" id="password" name="password" required placeholder="••••••••"
-                            class="block w-full pl-14 pr-12 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                        <input type="password" id="password" name="password" required placeholder="Password"
+                            class="block w-full pl-12 pr-12 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
                         <button type="button" id="togglePassword"
-                            class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none">
+                            class="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-slate-500 hover:text-slate-700 focus:outline-none">
                             <svg id="eyeOpen" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -302,10 +302,10 @@
                 </div>
 
                 <!-- Remember & Forgot -->
-                <div class="flex items-center justify-between text-sm">
-                    <label class="flex items-center gap-2 text-slate-200 cursor-pointer">
-                        <input type="checkbox" name="remember" class="h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-colors">
-                        <span class="select-none">Remember Me</span>
+                <div class="flex items-center justify-between gap-4 text-sm">
+                    <label class="inline-flex items-center gap-2.5 text-slate-200 cursor-pointer leading-none">
+                        <input type="checkbox" name="remember" class="h-4 w-4 shrink-0 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-colors">
+                        <span class="select-none">Remember me</span>
                     </label>
                     <a href="{{ route('admin.password.request') }}" class="text-blue-400 hover:text-blue-300 font-semibold transition-colors">Forgot Password?</a>
                 </div>

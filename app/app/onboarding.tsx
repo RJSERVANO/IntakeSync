@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert, Modal, BackHandler } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';
+import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 
 const { height } = Dimensions.get('window');
 
@@ -26,8 +27,13 @@ export default function Onboarding() {
 
   const [currentStep, setCurrentStep] = useState(0);
   const [data, setData] = useState<OnboardingData>({});
+  const [weightInput, setWeightInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showWeightPicker, setShowWeightPicker] = useState(false);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+  } | null>(null);
 
   const steps = [
     'nickname',
@@ -40,12 +46,7 @@ export default function Onboarding() {
     'complete'
   ];
 
-  // Generate arrays for pickers
-  const selectedWeightUnit = data.weight_unit || 'kg';
-  const weights =
-    selectedWeightUnit === 'lbs'
-      ? Array.from({ length: 507 }, (_, i) => i + 44)
-      : Array.from({ length: 231 }, (_, i) => i + 20);
+  const selectedWeightUnit = data.weight_unit === 'lbs' ? 'lbs' : 'kg';
   const estimatedHydrationGoal = calculatePersonalizedHydrationGoal(data);
 
   // Load saved data on mount
@@ -60,6 +61,9 @@ export default function Onboarding() {
             const normalizedData: any = { ...dataToLoad };
 
             setData(prev => ({ ...prev, ...normalizedData }));
+            if (normalizedData.weight !== undefined && normalizedData.weight !== null) {
+              setWeightInput(String(normalizedData.weight));
+            }
           }
         }
       } catch (err) {
@@ -72,11 +76,6 @@ export default function Onboarding() {
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (showWeightPicker) {
-        setShowWeightPicker(false);
-        return true;
-      }
-
       if (currentStep > 0) {
         setCurrentStep(prev => Math.max(0, prev - 1));
         return true;
@@ -86,33 +85,76 @@ export default function Onboarding() {
     });
 
     return () => subscription.remove();
-  }, [currentStep, showWeightPicker]);
+  }, [currentStep]);
 
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
   };
 
-  const getWeightValidationMessage = () => {
-    if (!data.weight) return null;
-    const unit = data.weight_unit || 'kg';
-    if (unit === 'kg' && (data.weight < 20 || data.weight > 250)) {
-      return 'Please choose a weight between 20 and 250 kg, or skip for now.';
+  const showNotice = (type: ThemedNoticeType, title: string, message: unknown) => {
+    setNoticeModal({
+      type,
+      title,
+      message: typeof message === 'string' ? message : JSON.stringify(message),
+    });
+  };
+
+  const normalizeWeightText = (value: string) => {
+    const cleaned = value.replace(/[^0-9.]/g, '');
+    const [whole, ...decimalParts] = cleaned.split('.');
+    const decimal = decimalParts.join('');
+    return decimalParts.length > 0 ? `${whole}.${decimal}` : whole;
+  };
+
+  const updateWeightInput = (value: string) => {
+    const normalized = normalizeWeightText(value);
+    setWeightInput(normalized);
+
+    if (!normalized || normalized === '.') {
+      updateData('weight', undefined);
+      return;
     }
-    if (unit === 'lbs' && (data.weight < 44 || data.weight > 550)) {
-      return 'Please choose a weight between 44 and 550 lbs, or skip for now.';
-    }
-    return null;
+
+    const numericWeight = Number(normalized);
+    updateData('weight', Number.isFinite(numericWeight) ? numericWeight : undefined);
+  };
+
+  const updateWeightUnit = (unit: 'kg' | 'lbs') => {
+    updateData('weight_unit', unit);
+  };
+
+  const getWeightRange = (unit = selectedWeightUnit) => {
+    return unit === 'lbs'
+      ? { min: 44, max: 550, label: '44 and 550 lbs' }
+      : { min: 20, max: 250, label: '20 and 250 kg' };
+  };
+
+  const isValidWeight = () => {
+    if (!weightInput.trim() || weightInput === '.') return false;
+    const numericWeight = Number(weightInput);
+    const range = getWeightRange();
+    return Number.isFinite(numericWeight) && numericWeight >= range.min && numericWeight <= range.max;
+  };
+
+  const getPayloadData = () => {
+    const typedWeight = Number(weightInput);
+    const range = getWeightRange();
+    const hasTypedWeight = Number.isFinite(typedWeight) && typedWeight >= range.min && typedWeight <= range.max;
+    return hasTypedWeight
+      ? { ...data, weight: typedWeight, weight_unit: selectedWeightUnit }
+      : data;
   };
 
   const buildOnboardingPayload = () => {
-    const calculatedGoal = calculatePersonalizedHydrationGoal(data);
+    const payloadData = getPayloadData();
+    const calculatedGoal = calculatePersonalizedHydrationGoal(payloadData);
     return {
-      nickname: data.nickname,
-      weight: data.weight,
-      weight_unit: data.weight_unit || 'kg',
-      climate: data.climate,
-      exercise_frequency: data.exercise_frequency,
-      notification_permissions_accepted: data.notification_permissions_accepted,
+      nickname: payloadData.nickname,
+      weight: payloadData.weight,
+      weight_unit: payloadData.weight_unit || 'kg',
+      climate: payloadData.climate,
+      exercise_frequency: payloadData.exercise_frequency,
+      notification_permissions_accepted: payloadData.notification_permissions_accepted,
       daily_hydration_goal: calculatedGoal,
     };
   };
@@ -120,11 +162,12 @@ export default function Onboarding() {
   const nextStep = async () => {
     if (currentStep < steps.length - 1) {
       if (steps[currentStep] === 'weight') {
-        const validationMessage = getWeightValidationMessage();
-        if (validationMessage) {
-          Alert.alert('Check your weight', validationMessage);
+        if (!isValidWeight()) {
+          showNotice('warning', 'Invalid Weight', `Please enter a valid weight between ${getWeightRange().label}.`);
           return;
         }
+        updateData('weight', Number(weightInput));
+        updateData('weight_unit', selectedWeightUnit);
       }
 
       const saveSteps = ['nickname', 'weight', 'climate', 'exercise', 'notifications'];
@@ -161,10 +204,15 @@ export default function Onboarding() {
         ...buildOnboardingPayload(),
         notification_permissions_accepted: granted,
       }, token);
+      if (granted) {
+        showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
+      } else {
+        showNotice('warning', 'Notifications Disabled', 'You can still use IntakeSync, but reminders may not appear until notifications are enabled.');
+      }
       setCurrentStep(currentStep + 1);
     } catch (err) {
       console.log('Notification permission request failed:', err);
-      Alert.alert('Reminders not enabled', 'We could not enable reminders right now. You can turn them on later in settings.');
+      showNotice('warning', 'Notifications Disabled', 'You can still use IntakeSync, but reminders may not appear until notifications are enabled.');
       updateData('notification_permissions_accepted', false);
       setCurrentStep(currentStep + 1);
     }
@@ -196,7 +244,7 @@ export default function Onboarding() {
     } catch (err: any) {
       console.log('Error opening medication setup:', err);
       const message = err?.data?.message || err?.message || 'Could not open medication setup right now.';
-      Alert.alert('Medication setup', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Medication Setup', message);
     } finally {
       setLoading(false);
     }
@@ -217,14 +265,14 @@ export default function Onboarding() {
       // Mark onboarding as complete
       await api.post(
         '/onboarding/complete',
-        { daily_hydration_goal: calculatePersonalizedHydrationGoal(data) },
+        { daily_hydration_goal: calculatePersonalizedHydrationGoal(getPayloadData()) },
         token
       );
       router.replace({ pathname: '/home', params: { token } } as any);
     } catch (err: any) {
       console.log('Error completing onboarding:', err);
       const message = err?.data?.message || err?.data || err?.message || 'Failed to complete onboarding';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Onboarding Failed', message);
       setLoading(false);
     }
   };
@@ -400,48 +448,36 @@ export default function Onboarding() {
               </Text>
             </View>
             <Text style={styles.title}>How much do you weigh?</Text>
-            <Text style={styles.description}>You can skip this and start with a standard goal.</Text>
-            <View style={styles.fieldRow}>
-              <TouchableOpacity 
-                onPress={() => {
-                  // Set default unit to kg if not set
-                  if (!data.weight_unit) {
-                    updateData('weight_unit', 'kg');
-                  }
-                  setShowWeightPicker(true);
-                }} 
-                style={[styles.pickerButton, { flex: 1 }]}
-              >
-                <Text style={[styles.pickerButtonText, !data.weight && styles.pickerPlaceholder]}>
-                  {data.weight ? `${data.weight} ${selectedWeightUnit}` : 'Select weight'}
-                </Text>
-                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-              <View style={styles.unitSelector}>
-                {(['kg', 'lbs'] as const).map((unit) => (
-                  <TouchableOpacity
-                    key={unit}
-                    style={[styles.unitButton, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitButtonSelected]}
-                    onPress={() => {
-                      updateData('weight_unit', unit);
-                      const nextWeight = data.weight;
-                      if (nextWeight) {
-                        const invalidKg = unit === 'kg' && (nextWeight < 20 || nextWeight > 250);
-                        const invalidLbs = unit === 'lbs' && (nextWeight < 44 || nextWeight > 550);
-                        if (invalidKg || invalidLbs) updateData('weight', undefined);
-                      }
-                    }}
-                  >
-                    <Text style={[styles.unitText, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitTextSelected]}>{unit}</Text>
-                  </TouchableOpacity>
-                ))}
+            <Text style={styles.description}>Enter your weight so IntakeSync can estimate a hydration goal.</Text>
+            <View style={styles.weightInputShell}>
+              <Ionicons name="scale-outline" size={20} color="#2563EB" />
+              <TextInput
+                style={styles.weightInput}
+                placeholder={`Enter weight in ${selectedWeightUnit}`}
+                placeholderTextColor="#94A3B8"
+                value={weightInput}
+                onChangeText={updateWeightInput}
+                keyboardType="numeric"
+                returnKeyType="done"
+                maxLength={6}
+              />
+              <View style={styles.weightUnitBadge}>
+                <Text style={styles.weightUnitBadgeText}>{selectedWeightUnit}</Text>
               </View>
             </View>
+            <View style={styles.unitSelector}>
+              {(['kg', 'lbs'] as const).map((unit) => (
+                <TouchableOpacity
+                  key={unit}
+                  style={[styles.unitButton, selectedWeightUnit === unit && styles.unitButtonSelected]}
+                  onPress={() => updateWeightUnit(unit)}
+                >
+                  <Text style={[styles.unitText, selectedWeightUnit === unit && styles.unitTextSelected]}>{unit}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+              <TouchableOpacity onPress={nextStep} style={[styles.nextButton, styles.fullWidthButton]}>
                 <Text style={styles.nextButtonText}>Next</Text>
               </TouchableOpacity>
             </View>
@@ -454,8 +490,18 @@ export default function Onboarding() {
             <View style={[styles.iconContainer, styles.heroIconBlue]}>
               <Ionicons name="notifications-outline" size={58} color="#2563EB" />
             </View>
-            <Text style={styles.title}>Enable reminders?</Text>
-            <Text style={styles.description}>IntakeSync can remind you about hydration and medication schedules. You can change this later.</Text>
+            <Text style={styles.title}>Enable Reminders</Text>
+            <Text style={styles.description}>IntakeSync uses notifications to remind you about hydration and medication schedules.</Text>
+            <View style={styles.notificationSupportBox}>
+              <Ionicons name="settings-outline" size={18} color="#2563EB" />
+              <Text style={styles.notificationSupportText}>You can update this later in Notification Settings.</Text>
+            </View>
+            {data.notification_permissions_accepted === true && (
+              <View style={styles.notificationSuccessBox}>
+                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+                <Text style={styles.notificationSuccessText}>Reminders enabled</Text>
+              </View>
+            )}
             <TouchableOpacity 
               onPress={requestNotificationPermission}
               style={styles.primaryButton}
@@ -471,8 +517,8 @@ export default function Onboarding() {
       case 'medication-setup-prompt':
         return (
           <View style={styles.stepContainer}>
-            <View style={[styles.iconContainer, styles.heroIconOrange]}>
-              <Ionicons name="medical-outline" size={58} color="#F97316" />
+            <View style={[styles.iconContainer, styles.heroIconRed]}>
+              <Ionicons name="medkit-outline" size={58} color="#DC2626" />
             </View>
             <Text style={styles.title}>Set up medication reminders?</Text>
             <Text style={styles.description}>You can add your medicines and reminder times now, or set them up later from the Medication tab.</Text>
@@ -520,49 +566,14 @@ export default function Onboarding() {
         {renderStep()}
       </ScrollView>
 
-      {/* Weight Picker Modal */}
-      <Modal
-        transparent
-        animationType="slide"
-        visible={showWeightPicker}
-        onRequestClose={() => setShowWeightPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
-                <Text style={styles.modalCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>Select Weight</Text>
-              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
-                <Text style={styles.modalConfirm}>Done</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.pickerScrollView}>
-              {weights.map((weight) => (
-                <TouchableOpacity
-                  key={weight}
-                  style={[
-                    styles.pickerItem,
-                    data.weight === weight && styles.pickerItemSelected
-                  ]}
-                  onPress={() => {
-                    updateData('weight', weight);
-                    setShowWeightPicker(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.pickerItemText,
-                    data.weight === weight && styles.pickerItemTextSelected
-                  ]}>
-                    {weight}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
     </View>
   );
 }
@@ -660,6 +671,16 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
+  heroIconRed: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
   heroIconWarm: {
     backgroundColor: '#FFFBEB',
     borderWidth: 1,
@@ -723,6 +744,43 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontSize: 16,
     fontWeight: '700',
+  },
+  weightInputShell: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  weightInput: {
+    flex: 1,
+    paddingVertical: 16,
+    paddingHorizontal: 10,
+    color: '#0F172A',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  weightUnitBadge: {
+    minWidth: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+  },
+  weightUnitBadgeText: {
+    color: '#1E3A8A',
+    fontSize: 14,
+    fontWeight: '900',
   },
   nicknameInputContainer: {
     flexDirection: 'row',
@@ -857,6 +915,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  fullWidthButton: {
+    flex: 1,
+  },
   primaryButton: {
     backgroundColor: '#2563EB',
     paddingVertical: 17,
@@ -913,6 +974,41 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',
+  },
+  notificationSupportBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#F8FBFF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginBottom: 12,
+  },
+  notificationSupportText: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  notificationSuccessBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginBottom: 4,
+  },
+  notificationSuccessText: {
+    color: '#047857',
+    fontSize: 14,
+    fontWeight: '900',
   },
   highlight: {
     color: '#2563EB',
@@ -1031,7 +1127,8 @@ const styles = StyleSheet.create({
   },
   unitSelector: {
     flexDirection: 'row',
-    marginLeft: 12,
+    alignSelf: 'center',
+    marginTop: 12,
     backgroundColor: '#E0ECFF',
     borderRadius: 12,
     padding: 4,

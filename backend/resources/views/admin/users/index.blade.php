@@ -51,8 +51,15 @@
                         @forelse ($users as $user)
                         @php
                         $roleClass = $user->role === 'admin' ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-700';
+                        $rowTints = [
+                            'bg-blue-50/35 hover:bg-blue-50/70',
+                            'bg-rose-50/25 hover:bg-rose-50/60',
+                            'bg-amber-50/30 hover:bg-amber-50/70',
+                            'bg-teal-50/30 hover:bg-teal-50/70',
+                        ];
+                        $rowTint = $rowTints[$loop->index % count($rowTints)];
                         @endphp
-                        <tr class="hover:bg-slate-50 transition-colors">
+                        <tr class="{{ $rowTint }} transition-colors">
                             <td class="px-6 py-4 text-sm font-medium text-slate-900">
                                 <a href="{{ route('admin.users.show', $user) }}" class="text-blue-600 hover:text-blue-700 font-semibold">{{ $user->name }}</a>
                             </td>
@@ -65,7 +72,7 @@
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-600">{{ $user->created_at->format('M j, Y') }}</td>
                             <td class="px-6 py-4 text-sm">
-                                <div class="flex items-center gap-2">
+                                <div class="flex items-center gap-2 whitespace-nowrap">
                                     <a href="{{ route('admin.users.show', $user) }}" class="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="View">
                                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>

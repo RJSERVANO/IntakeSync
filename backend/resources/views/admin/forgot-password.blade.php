@@ -202,7 +202,7 @@
 
             <div class="text-center mb-6">
                 <div class="flex justify-center mb-4">
-                    <img src="{{ asset('images/mainlogo.png') }}" alt="AQUATAB Logo" class="h-20 w-auto">
+                    <img src="{{ asset('images/mainlogo.png') }}" alt="IntakeSync Logo" class="h-20 w-auto">
                 </div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">Reset Password</h1>
             </div>
@@ -244,15 +244,15 @@
                 <div class="space-y-2">
                     <label for="email" class="text-sm font-semibold text-slate-200">Email Address</label>
                     <div class="relative">
-                        <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                        <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                             <svg class="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
                         </div>
                         <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus
-                            placeholder="admin@aqua.com"
-                            class="block w-full pl-14 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                            placeholder="admin@intakesync.local"
+                            class="block w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
                     </div>
                     @error('email')
                     <p class="text-xs text-red-400 mt-1">{{ $message }}</p>
@@ -267,7 +267,7 @@
                 <!-- Back to Login -->
                 <div class="text-center mt-6">
                     <a href="{{ route('admin.login') }}" class="text-sm text-blue-400 hover:text-blue-300 font-semibold transition-colors">
-                        ← Back to Login
+                        Back to Login
                     </a>
                 </div>
             </form>

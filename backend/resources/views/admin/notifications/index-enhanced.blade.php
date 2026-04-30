@@ -12,10 +12,10 @@
                 <p class="text-slate-500 mt-2">Monitor notification delivery, engagement, and effectiveness metrics</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
+                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" onchange="window.location='{{ route('admin.notifications.index') }}?timeRange=' + this.value">
+                    <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
+                    <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
+                    <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
                 </select>
             </div>
         </div>
@@ -26,7 +26,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-purple-50 rounded-xl">
                         <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"></path>
                         </svg>
                     </div>
                 </div>
@@ -40,7 +40,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-green-50 rounded-xl">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7l8 6 8-6M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2zM9 14l2 2 4-4"></path>
                         </svg>
                     </div>
                 </div>
@@ -54,7 +54,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-blue-50 rounded-xl">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7zM15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                         </svg>
                     </div>
                 </div>
@@ -69,14 +69,14 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-amber-50 rounded-xl">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M12 3l7 4v5c0 4.4-2.9 8.4-7 9-4.1-.6-7-4.6-7-9V7l7-4z"></path>
                         </svg>
                     </div>
                 </div>
                 <div>
                     <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Effectiveness</p>
                     <p class="text-3xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">action within 30 mins</p>
+                    <p class="text-xs text-slate-500 mt-2">notifications actioned</p>
                 </div>
             </div>
         </div>
@@ -90,6 +90,11 @@
                         <p class="text-2xl font-bold text-slate-900 mt-2">{{ number_format($snoozedCount) }}</p>
                     </div>
                     <div class="text-right text-xs text-slate-500">
+                        <div class="ml-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
                         <p>{{ $totalNotifications > 0 ? round(($snoozedCount / $totalNotifications) * 100, 1) : 0 }}% of total</p>
                     </div>
                 </div>
@@ -102,6 +107,11 @@
                         <p class="text-2xl font-bold text-red-600 mt-2">{{ number_format($failedCount) }}</p>
                     </div>
                     <div class="text-right text-xs text-slate-500">
+                        <div class="ml-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12M12 21a9 9 0 100-18 9 9 0 000 18z"></path>
+                            </svg>
+                        </div>
                         <p>{{ $totalNotifications > 0 ? round(($failedCount / $totalNotifications) * 100, 1) : 0 }}% of total</p>
                     </div>
                 </div>
@@ -111,9 +121,14 @@
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Avg Response Time</p>
-                        <p class="text-2xl font-bold text-slate-900 mt-2">~5 min</p>
+                        <p class="text-2xl font-bold text-slate-900 mt-2">{{ $avgResponseMinutes === null ? '-' : $avgResponseMinutes . ' min' }}</p>
                     </div>
                     <div class="text-right text-xs text-slate-500">
+                        <div class="ml-auto mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l2.5 2.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
                         <p>when opened</p>
                     </div>
                 </div>
@@ -123,7 +138,7 @@
         <!-- Failed Notifications Log -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
-                <h3 class="text-lg font-bold text-red-900">⚠️ Failed Notifications Log</h3>
+                <h3 class="text-lg font-bold text-red-900">Failed Notifications Log</h3>
                 <p class="text-sm text-red-700 mt-1">Notifications that failed to deliver with error details</p>
             </div>
             <div class="overflow-x-auto">
@@ -134,7 +149,7 @@
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">User</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Message</th>
                             <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Error Reason</th>
-                            <th class="px-6 py-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Retry</th>
+                            <th class="px-6 py-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
@@ -153,7 +168,7 @@
                                 <p class="text-sm text-slate-600">{{ $notif['error'] }}</p>
                             </td>
                             <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <button onclick="retryNotification({{ $notif['id'] }})" class="text-blue-600 hover:text-blue-900 text-sm font-medium">Retry →</button>
+                                <a href="{{ route('admin.users.show', $notif['user_id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View User -></a>
                             </td>
                         </tr>
                         @empty
@@ -163,6 +178,7 @@
                             </td>
                         </tr>
                         @endforelse
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -204,33 +220,18 @@
                     </div>
                 </div>
                 <div class="space-y-4">
+                    @foreach($engagementBreakdown as $item)
                     <div>
                         <div class="flex justify-between mb-2">
-                            <span class="text-sm font-semibold text-slate-700">Opened & Actioned</span>
-                            <span class="text-sm font-bold text-green-600">68%</span>
+                            <span class="text-sm font-semibold text-slate-700">{{ $item['label'] }}</span>
+                            <span class="text-sm font-bold {{ $item['color'] === 'green' ? 'text-green-600' : ($item['color'] === 'blue' ? 'text-blue-600' : 'text-slate-600') }}">{{ $item['percent'] }}%</span>
                         </div>
                         <div class="w-full bg-slate-200 rounded-full h-2">
-                            <div class="bg-green-600 h-2 rounded-full" style="width: 68%"></div>
+                            <div class="{{ $item['color'] === 'green' ? 'bg-green-600' : ($item['color'] === 'blue' ? 'bg-blue-600' : 'bg-slate-600') }} h-2 rounded-full" style="width: {{ $item['percent'] }}%"></div>
                         </div>
+                        <p class="text-xs text-slate-500 mt-1">{{ $item['count'] }} notifications</p>
                     </div>
-                    <div>
-                        <div class="flex justify-between mb-2">
-                            <span class="text-sm font-semibold text-slate-700">Opened Only</span>
-                            <span class="text-sm font-bold text-blue-600">18%</span>
-                        </div>
-                        <div class="w-full bg-slate-200 rounded-full h-2">
-                            <div class="bg-blue-600 h-2 rounded-full" style="width: 18%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <div class="flex justify-between mb-2">
-                            <span class="text-sm font-semibold text-slate-700">Not Opened</span>
-                            <span class="text-sm font-bold text-slate-600">14%</span>
-                        </div>
-                        <div class="w-full bg-slate-200 rounded-full h-2">
-                            <div class="bg-slate-600 h-2 rounded-full" style="width: 14%"></div>
-                        </div>
-                    </div>
+                    @endforeach
                 </div>
             </div>
 
@@ -238,14 +239,14 @@
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Effectiveness Score</h3>
-                        <p class="text-slate-500 text-sm">Notifications leading to action within 30 mins</p>
+                        <p class="text-slate-500 text-sm">Notifications that were actioned</p>
                     </div>
                 </div>
                 <div class="flex flex-col items-center justify-center py-8">
                     <div class="relative w-40 h-40 rounded-full border-8 border-slate-200 flex items-center justify-center" style="border-color: #e2e8f0">
                         <div class="absolute inset-1 rounded-full border-8 flex items-center justify-center" style="border-color: #10b981; border-left-color: #e2e8f0; transform: rotate(-90deg)">
                             <div class="text-center">
-                                <p class="text-4xl font-bold text-slate-900">72%</p>
+                                <p class="text-4xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
                                 <p class="text-xs text-slate-500 mt-1">effective</p>
                             </div>
                         </div>
@@ -299,7 +300,7 @@
                                 </span>
                             </td>
                             <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="/admin/users/{{ $notif['user_id'] ?? '#' }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View →</a>
+                                <a href="{{ route('admin.users.show', $notif['user_id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View -></a>
                             </td>
                         </tr>
                         @empty
@@ -309,6 +310,7 @@
                             </td>
                         </tr>
                         @endforelse
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -324,13 +326,14 @@
         // Daily Notification Volume
         const dailyCtx = document.getElementById('dailyVolumeChart');
         if (dailyCtx) {
+            const volumeData = @json($notificationVolumeData);
             dailyVolumeChart = new Chart(dailyCtx.getContext('2d'), {
                 type: 'line',
                 data: {
-                    labels: ['Day 1', 'Day 5', 'Day 10', 'Day 15', 'Day 20', 'Day 25', 'Day 30'],
+                    labels: volumeData.map(item => item.date),
                     datasets: [{
                         label: 'Notifications Sent',
-                        data: [245, 312, 289, 356, 298, 401, 378],
+                        data: volumeData.map(item => item.count),
                         borderColor: '#8b5cf6',
                         backgroundColor: 'rgba(139, 92, 246, 0.1)',
                         tension: 0.4,
@@ -371,12 +374,13 @@
         // Notification Types Distribution
         const typesCtx = document.getElementById('typesChart');
         if (typesCtx) {
+            const typeData = @json($notificationTypeData);
             typesChart = new Chart(typesCtx.getContext('2d'), {
                 type: 'doughnut',
                 data: {
-                    labels: ['Hydration Reminders', 'Medication Alerts', 'Achievement', 'Updates', 'Other'],
+                    labels: typeData.map(item => item.type),
                     datasets: [{
-                        data: [35, 30, 15, 12, 8],
+                        data: typeData.map(item => item.count),
                         backgroundColor: ['#3b82f6', '#ef4444', '#fbbf24', '#10b981', '#8b5cf6'],
                         borderWidth: 0,
                         hoverOffset: 4

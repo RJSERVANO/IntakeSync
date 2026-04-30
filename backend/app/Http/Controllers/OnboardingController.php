@@ -62,7 +62,7 @@ class OnboardingController extends Controller
 
         $validated = $request->validate([
             'nickname' => 'nullable|string|max:100',
-            'weight' => 'nullable|integer|min:0|max:550',
+            'weight' => 'nullable|numeric|min:0|max:550',
             'weight_unit' => 'nullable|in:kg,lbs',
             'climate' => 'nullable|string|in:hot,temperate,cold',
             'exercise_frequency' => 'nullable|string|in:rarely,sometimes,regularly,often',

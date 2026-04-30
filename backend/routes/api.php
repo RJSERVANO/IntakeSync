@@ -30,6 +30,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
     Route::put('me', [AuthController::class, 'update']);
+    Route::post('me/change-password', [AuthController::class, 'changePassword']);
 
     // Onboarding endpoints
     Route::get('onboarding', [App\Http\Controllers\OnboardingController::class, 'show']);

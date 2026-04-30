@@ -10,20 +10,20 @@
         <div class="flex items-center justify-between mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900">Dashboard</h1>
-                <p class="text-slate-500 mt-2">Welcome back! Here's your IntakeSync performance overview.</p>
+                <p class="text-slate-500 mt-2">Live admin overview from IntakeSync users, beverage intake, medication, and notification data.</p>
             </div>
             <div class="flex gap-3">
                 <button onclick="location.href='{{ route('admin.hydration.index') }}'" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition font-medium text-sm">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11z"></path>
                     </svg>
-                    Hydration Analytics
+                    Beverage Analytics
                 </button>
                 <a href="{{ route('admin.users.create') }}" class="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition shadow-sm font-medium">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                     </svg>
-                    Create Announcement
+                    Create User
                 </a>
             </div>
         </div>
@@ -47,9 +47,9 @@
                         <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
                         </svg>
-                        +12.5%
+                        {{ $userGrowthChange >= 0 ? '+' : '' }}{{ $userGrowthChange }}%
                     </span>
-                    <span class="text-slate-400 ml-2">from last month</span>
+                    <span class="text-slate-400 ml-2">{{ $usersLast30Days }} new in 30 days</span>
                 </div>
             </div>
 
@@ -66,13 +66,8 @@
                     </div>
                 </div>
                 <div class="mt-4 flex items-center text-sm">
-                    <span class="text-green-600 font-medium flex items-center">
-                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
-                        </svg>
-                        +8.2%
-                    </span>
-                    <span class="text-slate-400 ml-2">logged in today</span>
+                    <span class="text-slate-500 font-medium">Active today</span>
+                    <span class="text-slate-400 ml-2">login, sync, beverage, or medication activity</span>
                 </div>
             </div>
         </div>
@@ -99,10 +94,10 @@
                     </div>
                     <div class="flex items-center justify-between p-3 rounded-lg bg-slate-50">
                         <div class="flex items-center gap-3">
-                            <div class="w-3 h-3 rounded-full {{ $systemHealth['support_tickets'] == 0 ? 'bg-green-500' : 'bg-amber-500' }}"></div>
-                            <span class="text-sm font-medium text-slate-700">Support Tickets</span>
+                            <div class="w-3 h-3 rounded-full {{ $systemHealth['password_resets'] == 0 ? 'bg-green-500' : 'bg-amber-500' }}"></div>
+                            <span class="text-sm font-medium text-slate-700">Password Reset Requests</span>
                         </div>
-                        <span class="text-xs font-semibold {{ $systemHealth['support_tickets'] == 0 ? 'text-green-700 bg-green-100' : 'text-amber-700 bg-amber-100' }} px-2.5 py-1 rounded-full">{{ $systemHealth['support_tickets'] }} Pending</span>
+                        <span class="text-xs font-semibold {{ $systemHealth['password_resets'] == 0 ? 'text-green-700 bg-green-100' : 'text-amber-700 bg-amber-100' }} px-2.5 py-1 rounded-full">{{ $systemHealth['password_resets'] }} in last hour</span>
                     </div>
                 </div>
             </div>
@@ -113,21 +108,21 @@
                 <div class="grid grid-cols-2 gap-3">
                     <a href="{{ route('admin.hydration.index') }}" class="p-4 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors border border-blue-200">
                         <svg class="w-6 h-6 text-blue-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11z"></path>
                         </svg>
-                        <span class="text-sm font-semibold text-blue-900">Hydration</span>
-                        <p class="text-xs text-blue-700 mt-1">View analytics</p>
+                        <span class="text-sm font-semibold text-blue-900">Beverage Intake</span>
+                        <p class="text-xs text-blue-700 mt-1">View beverage analytics</p>
                     </a>
                     <a href="{{ route('admin.medication.index') }}" class="p-4 rounded-lg bg-teal-50 hover:bg-teal-100 transition-colors border border-teal-200">
                         <svg class="w-6 h-6 text-teal-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
                         </svg>
-                        <span class="text-sm font-semibold text-teal-900">Medications</span>
+                        <span class="text-sm font-semibold text-teal-900">Medication Adherence</span>
                         <p class="text-xs text-teal-700 mt-1">Monitor adherence</p>
                     </a>
                     <a href="{{ route('admin.notifications.index') }}" class="p-4 rounded-lg bg-purple-50 hover:bg-purple-100 transition-colors border border-purple-200">
                         <svg class="w-6 h-6 text-purple-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"></path>
                         </svg>
                         <span class="text-sm font-semibold text-purple-900">Notifications</span>
                         <p class="text-xs text-purple-700 mt-1">Track delivery</p>
@@ -143,10 +138,10 @@
             </div>
         </div>
 
-        <!-- Hydration & Compliance Summary -->
+        <!-- Beverage & Compliance Summary -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Hydration Compliance</h4>
+                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Beverage Compliance</h4>
                 <div>
                     <div class="text-3xl font-bold text-slate-900">{{ $hydrationCompliance['compliance_rate'] }}%</div>
                     <p class="text-sm text-slate-600 mt-2">{{ $hydrationCompliance['users_on_track'] }} of {{ $hydrationCompliance['total_users'] }} users on track</p>
@@ -171,9 +166,9 @@
                 <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">At-Risk Users</h4>
                 <div>
                     <div class="text-3xl font-bold text-slate-900">{{ $atRiskUsersCount }}</div>
-                    <p class="text-sm text-slate-600 mt-2">Below 50% hydration goal</p>
+                    <p class="text-sm text-slate-600 mt-2">Below 50% beverage goal</p>
                     <a href="{{ route('admin.hydration.index') }}" class="mt-4 inline-block text-sm font-semibold text-blue-600 hover:text-blue-700">
-                        View Details →
+                        View Details ->
                     </a>
                 </div>
             </div>
@@ -232,7 +227,7 @@
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Platform Distribution</h3>
-                        <p class="text-slate-500 text-sm">iOS vs Android usage</p>
+                        <p class="text-slate-500 text-sm">Current mobile app deployment</p>
                     </div>
                 </div>
                 <div class="relative h-64 w-full flex items-center justify-center">
@@ -314,7 +309,7 @@
                     labels: platformData.map(item => item.platform),
                     datasets: [{
                         data: platformData.map(item => item.count),
-                        backgroundColor: ['#3B82F6', '#22C55E'],
+                        backgroundColor: ['#22C55E'],
                         borderWidth: 0,
                         hoverOffset: 4
                     }]

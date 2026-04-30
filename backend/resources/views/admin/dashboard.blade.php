@@ -70,17 +70,17 @@
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             <a href="{{ route('admin.hydration.index') }}" class="block p-6 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1">
                 <div class="flex items-center justify-between mb-4">
-                    <span class="text-blue-100 font-medium">Hydration Management</span>
+                    <span class="text-blue-100 font-medium">Beverage Intake</span>
                     <div class="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
                         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11z"></path>
                         </svg>
                     </div>
                 </div>
                 <div class="flex items-end justify-between">
                     <div>
                         <span class="text-3xl font-bold">Analytics</span>
-                        <p class="text-blue-100 text-sm mt-1">View hydration data</p>
+                        <p class="text-blue-100 text-sm mt-1">View beverage analytics</p>
                     </div>
                     <svg class="w-12 h-12 text-blue-300 opacity-50" fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clip-rule="evenodd"></path>
@@ -90,10 +90,10 @@
 
             <a href="{{ route('admin.medication.index') }}" class="block p-6 rounded-2xl bg-gradient-to-br from-teal-500 to-teal-600 text-white shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1">
                 <div class="flex items-center justify-between mb-4">
-                    <span class="text-teal-100 font-medium">Medication Management</span>
+                    <span class="text-teal-100 font-medium">Medication Adherence</span>
                     <div class="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
                         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
                         </svg>
                     </div>
                 </div>
@@ -110,7 +110,7 @@
                     <span class="text-purple-100 font-medium">Notifications</span>
                     <div class="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
                         <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-5 5v-5zM4.828 7l2.586 2.586a2 2 0 002.828 0L16 7l-4 4-4-4z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"></path>
                         </svg>
                     </div>
                 </div>
@@ -145,7 +145,7 @@
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Platform Split</h3>
-                        <p class="text-slate-500 text-sm">iOS vs Android distribution</p>
+                        <p class="text-slate-500 text-sm">Current mobile app deployment</p>
                     </div>
                 </div>
                 <div class="relative h-64 w-full flex items-center justify-center">
@@ -157,8 +157,8 @@
         <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm mb-8">
             <div class="flex items-center justify-between mb-6">
                 <div>
-                    <h3 class="text-lg font-bold text-slate-900">Hydration Statistics</h3>
-                    <p class="text-slate-500 text-sm">Average daily water intake (Last 30 days)</p>
+                    <h3 class="text-lg font-bold text-slate-900">Beverage Intake Statistics</h3>
+                    <p class="text-slate-500 text-sm">Average daily intake (Last 30 days)</p>
                 </div>
             </div>
             <div class="relative h-48 w-full">

@@ -4,7 +4,7 @@
     "slug": "IntakeSync",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/mainlogo.png",
+    "icon": "./assets/images/foregroundapp.png",
     "scheme": "intakesync",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -27,10 +27,11 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/mainlogo.png"
+      "favicon": "./assets/images/foregroundapp.png"
     },
     "plugins": [
       "expo-router",
+      "expo-font",
       [
         "expo-splash-screen",
         {

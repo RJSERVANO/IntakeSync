@@ -126,8 +126,8 @@
     <div class="container">
         <!-- Header -->
         <div class="header">
-            <h1>🌊 AQUA</h1>
-            <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Health Management System</p>
+            <h1>IntakeSync</h1>
+            <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Health Intake Management</p>
         </div>
 
         <!-- Content -->
@@ -137,7 +137,7 @@
             </div>
 
             <div class="message">
-                <p>We received a request to reset your AQUA password. Click the button below to create a new password:</p>
+                <p>We received a request to reset your IntakeSync password. Click the button below to create a new password:</p>
             </div>
 
             <!-- Reset Button -->
@@ -161,20 +161,20 @@
                 <strong>For your security:</strong>
                 <ul style="margin: 8px 0; padding-left: 20px;">
                     <li>Never share this link with anyone</li>
-                    <li>AQUA staff will never ask for your password</li>
+                    <li>IntakeSync staff will never ask for your password</li>
                     <li>Check that the URL starts with {{ url('/') }}</li>
                 </ul>
             </div>
 
             <div class="message" style="margin-top: 30px; font-size: 14px; color: #999;">
                 <p>If you have any questions or need assistance, please contact our support team.</p>
-                <p style="margin-top: 15px;"><strong>Best regards,</strong><br>The AQUA Team</p>
+                <p style="margin-top: 15px;"><strong>Best regards,</strong><br>The IntakeSync Team</p>
             </div>
         </div>
 
         <!-- Footer -->
         <div class="footer">
-            <p>© {{ date('Y') }} AQUA Health Management System. All rights reserved.</p>
+            <p>© {{ date('Y') }} IntakeSync. All rights reserved.</p>
             <p>This is an automated message. Please do not reply to this email.</p>
         </div>
     </div>

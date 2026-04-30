@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   Easing,
   StyleSheet,
@@ -17,6 +16,7 @@ import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authStyles } from '../components/auth/authStyles';
 import { useGoogleAuth } from '../hooks/useGoogleAuth';
+import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 
 export default function Login() {
   const router = useRouter();
@@ -28,6 +28,19 @@ export default function Login() {
   const cardTranslate = React.useRef(new Animated.Value(30)).current;
   const cardOpacity = React.useRef(new Animated.Value(0)).current;
   const { signInWithGoogle } = useGoogleAuth();
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+  } | null>(null);
+
+  const showNotice = (type: ThemedNoticeType, title: string, message: unknown) => {
+    setNoticeModal({
+      type,
+      title,
+      message: typeof message === 'string' ? message : JSON.stringify(message),
+    });
+  };
 
   useEffect(() => {
     Animated.parallel([
@@ -53,7 +66,7 @@ export default function Login() {
 
   async function onLogin() {
     if (!email || !password) {
-      Alert.alert('Validation', 'Please enter email and password');
+      showNotice('warning', 'Validation', 'Please enter email and password');
       return;
     }
     setLoading(true);
@@ -76,11 +89,11 @@ export default function Login() {
           router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
           return;
         }
-        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
         return;
       }
       const message = err?.data?.message || err?.data || err?.message || 'Login failed';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Login Failed', message);
     } finally {
       setLoading(false);
     }
@@ -110,25 +123,26 @@ export default function Login() {
           router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
           return;
         }
-        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
         return;
       }
       const message =
         err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Login Failed', message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <AuthLayout
-      title="Sign In"
-      subtitle="Welcome back"
-      helper="Sign in to continue."
-      headerAnimatedStyle={{ opacity: headerOpacity }}
-      cardAnimatedStyle={{ opacity: cardOpacity, transform: [{ translateY: cardTranslate }] }}
-    >
+    <>
+      <AuthLayout
+        title="Sign In"
+        subtitle="Welcome back"
+        helper="Sign in to continue."
+        headerAnimatedStyle={{ opacity: headerOpacity }}
+        cardAnimatedStyle={{ opacity: cardOpacity, transform: [{ translateY: cardTranslate }] }}
+      >
       <View style={authStyles.formSection}>
         <AuthField
           label="Email"
@@ -207,7 +221,16 @@ export default function Login() {
           </Text>
         </TouchableOpacity>
       </View>
-    </AuthLayout>
+      </AuthLayout>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
+    </>
   );
 }
 

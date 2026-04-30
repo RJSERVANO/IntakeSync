@@ -16,6 +16,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
 import { getCachedSession } from '../../../../services/offlineStorage';
 import BottomNavigation from '../../navigation/BottomNavigation';
+import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 
 type NotificationType = 'hydration' | 'medication' | 'general';
 type NotificationStatus =
@@ -590,17 +591,15 @@ export default function Activity() {
         </View>
       </Modal>
 
-      <Modal visible={Boolean(noticeModal)} transparent animationType="fade" onRequestClose={() => setNoticeModal(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.detailModal}>
-            <Text style={styles.modalTitle}>{noticeModal?.title}</Text>
-            <Text style={styles.modalMessage}>{noticeModal?.message}</Text>
-            <TouchableOpacity style={styles.primaryModalButton} onPress={() => setNoticeModal(null)}>
-              <Text style={styles.primaryModalText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type="error"
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        primaryText="Done"
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
 
       <BottomNavigation currentRoute="notification" />
     </SafeAreaView>

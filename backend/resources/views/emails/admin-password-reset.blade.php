@@ -128,7 +128,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔒 Aqua Admin Panel</h1>
+            <h1>IntakeSync Admin Panel</h1>
         </div>
 
         <div class="content">
@@ -161,14 +161,14 @@
             <ul style="color: #475569; font-size: 14px;">
                 <li>Never share this link with anyone</li>
                 <li>We will never ask for your password via email</li>
-                <li>Make sure you're on the official Aqua admin domain</li>
+                <li>Make sure you're on the official IntakeSync admin domain</li>
             </ul>
         </div>
 
         <div class="footer">
-            <p><strong>Aqua Admin Panel</strong></p>
+            <p><strong>IntakeSync Admin Panel</strong></p>
             <p>This is an automated message. Please do not reply to this email.</p>
-            <p>&copy; {{ date('Y') }} Aqua. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} IntakeSync. All rights reserved.</p>
         </div>
     </div>
 </body>

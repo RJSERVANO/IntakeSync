@@ -9,6 +9,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { notificationManager } from '../../../../services/notificationManager';
 import { getCachedSession } from '../../../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import InlineNotice from '../../common/InlineNotice';
 
 type MedicationItem = {
   id: string;
@@ -256,8 +257,10 @@ export default function Medication() {
     secondaryText?: string;
     onPrimary?: () => void | Promise<void>;
   } | null>(null);
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
   const shownReminderPopups = useRef<Set<string>>(new Set());
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // form state
   const [name, setName] = useState('');
@@ -629,6 +632,9 @@ export default function Medication() {
       } : null,
     };
 
+    const successMessage = editing ? 'Medication updated' : 'Medication added';
+    let savedSuccessfully = false;
+
     if (editing) {
       // Update existing medication
       const updatedMed: MedicationItem = { ...editing, ...medData };
@@ -641,10 +647,13 @@ export default function Medication() {
           await scheduleMedicationReminders(updatedMed);
           // Reload all data from server
           await reloadAllData({ [editing.id]: color });
+          savedSuccessfully = true;
         } catch (err) {
           console.log('Failed to update on server:', err);
           showNotice('warning', 'Saved Locally', 'Medication saved locally but failed to sync with server');
         }
+      } else {
+        savedSuccessfully = true;
       }
     } else {
       // Create new medication
@@ -662,6 +671,7 @@ export default function Medication() {
           await scheduleMedicationReminders(newMed);
           // Reload all data from server
           await reloadAllData({ [newMed.id]: newMed.color });
+          savedSuccessfully = true;
         } catch (err: any) {
           console.log('Failed to save to server:', err);
           showNotice('error', 'Action Failed', err?.data?.message || 'Failed to save medication. Please try again.');
@@ -671,9 +681,11 @@ export default function Medication() {
         // Offline mode - use local ID
         const newMed: MedicationItem = { id: uid(), ...medData };
         setMeds((s) => [newMed, ...s]);
+        savedSuccessfully = true;
       }
     }
     setModalVisible(false);
+    if (savedSuccessfully) showInlineNotice(successMessage);
   }
 
   async function scheduleMedicationReminders(medication: MedicationItem) {
@@ -713,6 +725,18 @@ export default function Medication() {
   function showNotice(type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') {
     setNoticeModal({ type, title, message, primaryText });
   }
+
+  function showInlineNotice(message: string) {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setInlineNotice(message);
+    noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2400);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
 
   function showMedicationReminderPopup(medication: MedicationItem, reminderTime: Date) {
     const timeLabel = reminderTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -854,7 +878,7 @@ export default function Medication() {
 
     if (deleted) {
       setDeleteTarget(null);
-      notificationManager.showCustomNotification('Deleted', `${deleteTarget.name} was removed from your schedule.`, 'toast', 'low');
+      showInlineNotice('Medication deleted');
     }
     setActionBusy(actionKey, false);
   }
@@ -1106,12 +1130,7 @@ export default function Medication() {
 
         // Also reload stats to update counters
         await reloadStatsAndUpcoming();
-        notificationManager.showCustomNotification(
-          isTakenLate(newHistoryEntry) ? 'Marked taken late' : 'Marked taken',
-          `${med.name} was added to your history.`,
-          'toast',
-          'low'
-        );
+        showInlineNotice(med.name ? `${med.name} marked as taken` : 'Medication marked as taken');
       } catch (err: any) {
         console.log('Error marking medication as taken:', err);
         console.log('Error details:', JSON.stringify(err, null, 2));
@@ -1138,6 +1157,7 @@ export default function Medication() {
       }
     } else {
       setActionBusy(actionKey, false);
+      showInlineNotice(med.name ? `${med.name} marked as taken` : 'Medication marked as taken');
     }
   }
 
@@ -1170,19 +1190,13 @@ export default function Medication() {
       });
     }
 
-    notificationManager.showCustomNotification(
-      'Snoozed',
-      `Reminder snoozed by ${mins} minutes`,
-      'toast',
-      'low'
-    );
-
     if (token) {
       try {
         const response = await api.post(`/medications/${medId}/history`, { status: 'snoozed', time: entry.time }, token as string);
         if (response?.id) {
           setHistory((current) => current.map((item) => item.id === entry.id ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.created_at || item.loggedAt }, medId) : item));
         }
+        showInlineNotice(`Reminder snoozed for ${mins} minutes`);
       } catch (err) {
         setHistory((current) => current.filter((item) => item.id !== entry.id));
         console.log('Snooze history sync failed:', err);
@@ -1197,6 +1211,7 @@ export default function Medication() {
       }
     } else {
       setActionBusy(actionKey, false);
+      showInlineNotice(`Reminder snoozed for ${mins} minutes`);
     }
   }
 
@@ -1223,7 +1238,7 @@ export default function Medication() {
           setClearedHistoryKeys(nextClearedKeys);
           setHistory(remainingHistory);
           setHistoryExpanded(false);
-          showNotice('success', 'History Cleared', 'Recent medication activity was cleared successfully.', 'Done');
+          showInlineNotice('Recent history cleared');
         } catch (error) {
           console.log('Error saving cleared time:', error);
           showNotice('error', 'Action Failed', 'We could not complete this action. Please try again.');
@@ -1528,6 +1543,11 @@ export default function Medication() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
+      <InlineNotice
+        visible={Boolean(inlineNotice) && !modalVisible && !deleteTarget && !noticeModal}
+        message={inlineNotice || ''}
+        top={Math.max(insets.top, 8) + 54}
+      />
       <Animated.ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}

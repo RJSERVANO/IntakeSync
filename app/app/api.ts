@@ -1,4 +1,8 @@
-const BASE_URL = 'http://192.168.254.101:8000/api';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.254.101:8000/api';
+
+if (__DEV__) {
+  console.log('API BASE_URL:', BASE_URL);
+}
 
 export type ApiErrorType = 'auth' | 'network' | 'timeout' | 'validation' | 'server' | 'unknown';
 

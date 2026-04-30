@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, FlatList, StyleSheet, Alert } from 'react-native';
+import { View, Text, Image, TouchableOpacity, FlatList, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ThemedNoticeModal, { ThemedNoticeType } from './common/ThemedNoticeModal';
 
 export const PRESET_AVATARS = [
   { id: 'avatar1', source: require('../../assets/images/avatar1.png') },
@@ -39,6 +40,11 @@ type AvatarSelectorProps = {
 export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
   const [selected, setSelected] = useState<SelectedAvatar | null>(null);
   const [loading, setLoading] = useState(true);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -77,7 +83,11 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Please allow photo access to upload a custom avatar.');
+        setNoticeModal({
+          type: 'warning',
+          title: 'Permission Needed',
+          message: 'Please allow photo access to upload a custom avatar.',
+        });
         return;
       }
 
@@ -96,7 +106,11 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
       persistSelection({ type: 'custom', uri });
     } catch (err) {
       console.warn('AvatarSelector: upload error', err);
-      Alert.alert('Upload failed', 'Could not select an image. Please try again.');
+      setNoticeModal({
+        type: 'error',
+        title: 'Upload Failed',
+        message: 'Could not select an image. Please try again.',
+      });
     }
   };
 
@@ -133,6 +147,14 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
             <Ionicons name="person-add-outline" size={24} color="#2563EB" />
           </TouchableOpacity>
         )}
+      />
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
       />
     </View>
   );

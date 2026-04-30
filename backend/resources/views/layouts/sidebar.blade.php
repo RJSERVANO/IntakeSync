@@ -50,11 +50,11 @@
         <a href="{{ route('admin.hydration.index') }}"
             class="flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-200 group relative
            {{ request()->is('admin/hydration*') ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}"
-            title="Hydration">
+            title="Beverage Intake">
             <svg class="w-6 h-6 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3C12 3 6 10 6 14a6 6 0 0012 0c0-4-6-11-6-11z" />
             </svg>
-            <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Beverages</span>
+            <span x-show="!collapsed" class="text-sm font-medium whitespace-nowrap transition-opacity duration-200">Beverage Intake</span>
         </a>
 
         <a href="{{ route('admin.medication.index') }}"
@@ -142,7 +142,7 @@
                                 Users
                             </a>
                             <a href="{{ route('admin.hydration.index') }}" @click="open = false" class="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium {{ request()->is('admin/hydration*') ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}">
-                                Hydration
+                                Beverage Intake
                             </a>
                             <a href="{{ route('admin.medication.index') }}" @click="open = false" class="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium {{ request()->is('admin/medication*') ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white' }}">
                                 Medication

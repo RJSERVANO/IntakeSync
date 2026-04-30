@@ -3,13 +3,13 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import { clearCachedSession, getCachedSession, hasValidCachedSession, updateCachedUser } from '../services/offlineStorage';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
+import InlineNotice from './components/common/InlineNotice';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
@@ -91,6 +91,7 @@ export default function Home() {
   const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
   const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -100,8 +101,21 @@ export default function Home() {
     onPrimary?: () => void;
   } | null>(null);
   const goalCompletionShownRef = useRef(false);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const avatarSource = getAvatarSource(selectedAvatar);
+
+  const showInlineNotice = useCallback((message: string) => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setInlineNotice(message);
+    noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2400);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
 
   const loadSelectedAvatar = useCallback(async () => {
     try {
@@ -704,6 +718,7 @@ export default function Home() {
           </TouchableOpacity>
         </View>
       </View>
+      <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
       {offlineMode ? (
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
@@ -894,14 +909,7 @@ export default function Home() {
                       hydrationGoal: goal
                     }));
                     
-                    Toast.show({
-                      type: 'success',
-                      text1: 'Beverage logged',
-                      text2: `+250ml - Total: ${todayTotal}ml / ${goal}ml (${hydrationPercentage}%)` ,
-                      position: 'top',
-                      visibilityTime: 3000,
-                      topOffset: 60,
-                    });
+                    showInlineNotice('250 ml water logged');
                   }
                 } catch (err: any) {
                   console.log('Home quick beverage log error:', {
@@ -909,13 +917,12 @@ export default function Home() {
                     message: err?.data?.message || err?.message,
                     data: err?.data,
                   });
-                  Toast.show({
-                    type: 'error',
-                    text1: 'Logging failed',
-                    text2: 'Failed to log beverage intake. Please try again.',
-                    position: 'top',
-                    visibilityTime: 3000,
-                    topOffset: 60,
+                  setNoticeModal({
+                    type: api.isNetworkError(err) ? 'warning' : 'error',
+                    title: api.isNetworkError(err) ? 'Saved Offline Unavailable' : 'Logging Failed',
+                    message: api.isNetworkError(err)
+                      ? 'Home quick logging could not reach the server. Please open Beverage to log offline.'
+                      : 'Failed to log beverage intake. Please try again.',
                   });
                 }
                 }}

@@ -1,3 +1,11 @@
 node_modules
 .expo/
 backend/.vite/
+
+# Local credentials and signing keys
+credentials.json
+app/credentials.json
+credentials/
+app/credentials/
+*.jks
+*.keystore

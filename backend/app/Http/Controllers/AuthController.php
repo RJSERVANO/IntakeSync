@@ -11,9 +11,52 @@ use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Auth\Events\PasswordReset;
+use Illuminate\Validation\Rules\Password as PasswordRule;
+use Carbon\Carbon;
 
 class AuthController extends Controller
 {
+    protected function strongPasswordRule(): PasswordRule
+    {
+        return PasswordRule::min(8)->mixedCase()->numbers()->symbols();
+    }
+
+    protected function dateOfBirthRule(): \Closure
+    {
+        return function (string $attribute, mixed $value, \Closure $fail) {
+            if ($value === null || $value === '') {
+                return;
+            }
+
+            try {
+                $date = Carbon::createFromFormat('Y-m-d', (string) $value);
+            } catch (\Throwable) {
+                $fail('The date of birth must be a valid date.');
+                return;
+            }
+
+            if (!$date || $date->format('Y-m-d') !== $value) {
+                $fail('The date of birth must be a valid date.');
+                return;
+            }
+
+            if ($date->isFuture()) {
+                $fail('The date of birth may not be in the future.');
+                return;
+            }
+
+            $age = $date->age;
+            if ($age < 13) {
+                $fail('You must be at least 13 years old.');
+                return;
+            }
+
+            if ($age > 120) {
+                $fail('The date of birth must be within the last 120 years.');
+            }
+        };
+    }
+
     protected function issueToken(User $user)
     {
         $token = Str::random(60);
@@ -31,10 +74,10 @@ class AuthController extends Controller
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6|confirmed',
-            'phone' => 'nullable|string|max:20',
-            'date_of_birth' => 'nullable|date|before:today',
-            'gender' => 'nullable|in:male,female,other',
+            'password' => ['required', 'string', 'confirmed', $this->strongPasswordRule()],
+            'phone' => ['nullable', 'string', 'regex:/^\+639\d{9}$/'],
+            'date_of_birth' => ['nullable', 'date_format:Y-m-d', $this->dateOfBirthRule()],
+            'gender' => 'nullable|in:male,female,prefer_not_to_say',
             'address' => 'nullable|string|max:500',
         ]);
 
@@ -73,12 +116,16 @@ class AuthController extends Controller
             'id_token' => 'required|string',
         ]);
 
-        $clientId = config('services.google.client_id');
-        if (!$clientId) {
+        $clientIds = config('services.google.client_ids', []);
+        if (empty($clientIds) && config('services.google.client_id')) {
+            $clientIds = [config('services.google.client_id')];
+        }
+
+        if (empty($clientIds)) {
             return response()->json(['message' => 'Google sign-in is not configured.'], 500);
         }
 
-        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientId);
+        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
         if (!$googleUser) {
             return response()->json([
                 'message' => 'Google sign-in could not be verified. Please try again.',
@@ -145,7 +192,7 @@ class AuthController extends Controller
         return $this->issueToken($user);
     }
 
-    protected function verifyGoogleIdToken(string $idToken, string $clientId): ?array
+    protected function verifyGoogleIdToken(string $idToken, array $clientIds): ?array
     {
         try {
             $response = Http::timeout(5)->get('https://oauth2.googleapis.com/tokeninfo', [
@@ -163,7 +210,7 @@ class AuthController extends Controller
         $issuer = $payload['iss'] ?? null;
         $emailVerified = $payload['email_verified'] ?? false;
 
-        if (($payload['aud'] ?? null) !== $clientId) {
+        if (!in_array(($payload['aud'] ?? null), $clientIds, true)) {
             return null;
         }
 
@@ -208,9 +255,9 @@ class AuthController extends Controller
         $data = $request->validate([
             'name' => 'sometimes|required|string|max:255',
             'email' => 'sometimes|required|email|unique:users,email,' . $user->id,
-            'phone' => 'sometimes|nullable|string|max:20',
-            'date_of_birth' => 'sometimes|nullable|date',
-            'gender' => 'sometimes|nullable|in:male,female,other',
+            'phone' => ['sometimes', 'nullable', 'string', 'regex:/^\+639\d{9}$/'],
+            'date_of_birth' => ['sometimes', 'nullable', 'date_format:Y-m-d', $this->dateOfBirthRule()],
+            'gender' => 'sometimes|nullable|in:male,female,prefer_not_to_say',
             'address' => 'sometimes|nullable|string|max:500',
             'emergency_contact' => 'sometimes|nullable|string|max:255',
             'emergency_contact_name' => 'sometimes|nullable|string|max:255',
@@ -278,7 +325,7 @@ class AuthController extends Controller
         $request->validate([
             'email' => 'required|email',
             'code' => 'required|string',
-            'password' => 'required|min:6|confirmed',
+            'password' => ['required', 'string', 'confirmed', $this->strongPasswordRule()],
         ]);
 
         // Find the reset token entry
@@ -328,5 +375,24 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Password has been reset successfully.'
         ]);
+    }
+
+    public function changePassword(Request $request)
+    {
+        $request->validate([
+            'current_password' => 'required|string',
+            'new_password' => ['required', 'string', $this->strongPasswordRule()],
+        ]);
+
+        $user = $request->user();
+        if (!$user || !Hash::check($request->current_password, $user->password)) {
+            return response()->json(['message' => 'Current password is incorrect.'], 422);
+        }
+
+        $user->forceFill([
+            'password' => $request->new_password,
+        ])->save();
+
+        return response()->json(['message' => 'Password updated successfully.']);
     }
 }

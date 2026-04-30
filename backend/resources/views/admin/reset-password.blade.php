@@ -202,7 +202,7 @@
 
             <!-- Logo -->
             <div class="flex justify-center mb-6">
-                <img src="{{ asset('images/mainlogo.png') }}" alt="Aqua Logo" class="h-16">
+                <img src="{{ asset('images/mainlogo.png') }}" alt="IntakeSync Logo" class="h-16">
             </div>
 
             <h1 class="text-2xl font-bold text-white mb-1 text-center">Set New Password</h1>
@@ -232,28 +232,28 @@
 
                 <!-- Email Display (read-only) -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
                     </div>
                     <input type="email" id="email_display" value="{{ $email ?? old('email') }}" readonly
-                        class="block w-full pl-14 pr-4 py-3 border border-gray-600 rounded-xl bg-slate-800 text-white cursor-not-allowed focus:outline-none text-sm">
+                        class="block w-full pl-12 pr-4 py-3 border border-gray-600 rounded-xl bg-slate-800 text-white cursor-not-allowed focus:outline-none text-sm">
                 </div>
 
                 <!-- New Password -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
                     </div>
-                    <input type="password" id="password" name="password" required placeholder="••••••••"
-                        class="block w-full pl-14 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    <input type="password" id="password" name="password" required placeholder="Password"
+                        class="block w-full pl-12 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
                     <button type="button" id="togglePassword"
-                        class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none">
+                        class="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none">
                         <svg id="eyeOpen" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -270,16 +270,16 @@
 
                 <!-- Confirm Password -->
                 <div class="relative">
-                    <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
+                    <div class="absolute inset-y-0 left-0 w-12 flex items-center justify-center pointer-events-none">
                         <svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                         </svg>
                     </div>
-                    <input type="password" id="password_confirmation" name="password_confirmation" required placeholder="••••••••"
-                        class="block w-full pl-14 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                    <input type="password" id="password_confirmation" name="password_confirmation" required placeholder="Confirm password"
+                        class="block w-full pl-12 pr-12 py-3 border border-gray-600 rounded-xl bg-white text-black placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
                     <button type="button" id="togglePasswordConfirmation"
-                        class="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 focus:outline-none">
+                        class="absolute inset-y-0 right-0 w-12 flex items-center justify-center text-gray-400 hover:text-gray-600 focus:outline-none">
                         <svg id="eyeOpenConfirm" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -302,7 +302,7 @@
                 <!-- Back to Login -->
                 <div class="text-center">
                     <a href="{{ route('admin.login') }}" class="text-sm text-blue-400 hover:text-blue-300 transition">
-                        ← Back to Login
+                        Back to Login
                     </a>
                 </div>
             </form>
@@ -311,7 +311,7 @@
 
     <!-- Footer -->
     <div class="absolute bottom-0 left-0 right-0 py-4 text-center text-white/70 text-xs">
-        <p>Aqua Admin Panel © {{ date('Y') }}</p>
+        <p>IntakeSync Admin Panel © {{ date('Y') }}</p>
 
     </div>
 </div>

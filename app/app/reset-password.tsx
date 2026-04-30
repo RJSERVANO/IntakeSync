@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -13,6 +12,8 @@ import * as api from './api';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authColors, authStyles } from '../components/auth/authStyles';
+import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
+import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../utils/passwordPolicy';
 
 export default function ResetPassword() {
   const router = useRouter();
@@ -24,6 +25,27 @@ export default function ResetPassword() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+    onPrimary?: () => void;
+  } | null>(null);
+
+  const closeNotice = () => setNoticeModal(null);
+  const showNotice = (
+    type: ThemedNoticeType,
+    title: string,
+    message: unknown,
+    onPrimary?: () => void
+  ) => {
+    setNoticeModal({
+      type,
+      title,
+      message: typeof message === 'string' ? message : JSON.stringify(message),
+      onPrimary,
+    });
+  };
 
   useEffect(() => {
     if (params.email) {
@@ -33,22 +55,22 @@ export default function ResetPassword() {
 
   async function onResetPassword() {
     if (!email || !code || !password || !confirmPassword) {
-      Alert.alert('Validation', 'Please fill all fields');
+      showNotice('warning', 'Validation', 'Please fill all fields');
       return;
     }
 
     if (code.length !== 6) {
-      Alert.alert('Validation', 'Verification code must be 6 digits');
+      showNotice('warning', 'Validation', 'Verification code must be 6 digits');
       return;
     }
 
     if (password !== confirmPassword) {
-      Alert.alert('Validation', 'Passwords do not match');
+      showNotice('warning', 'Validation', 'Passwords do not match');
       return;
     }
 
-    if (password.length < 6) {
-      Alert.alert('Validation', 'Password must be at least 6 characters');
+    if (!isStrongPassword(password)) {
+      showNotice('warning', 'Weak Password', PASSWORD_POLICY_MESSAGE);
       return;
     }
 
@@ -60,22 +82,20 @@ export default function ResetPassword() {
         password,
         password_confirmation: confirmPassword,
       });
-
-      Alert.alert(
+      showNotice(
+        'success',
         'Success',
         'Your password has been reset successfully. You can now login with your new password.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.replace({ pathname: '/login' } as any),
-          },
-        ]
+        () => {
+          closeNotice();
+          router.replace({ pathname: '/login' } as any);
+        }
       );
     } catch (err: any) {
       console.log('reset password error', err);
       const message =
         err?.data?.message || err?.data || err?.message || 'Failed to reset password';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Reset Failed', message);
     } finally {
       setLoading(false);
     }
@@ -111,6 +131,7 @@ export default function ResetPassword() {
           textContentType="emailAddress"
           editable={!params.email}
         />
+        <PasswordChecklist password={password} />
 
         <AuthField
           label="Verification Code"
@@ -192,7 +213,34 @@ export default function ResetPassword() {
           <Text style={[authStyles.secondaryActionText, styles.backLinkText]}>Back to Login</Text>
         </TouchableOpacity>
       </View>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        onPrimary={noticeModal?.onPrimary || closeNotice}
+        onClose={closeNotice}
+      />
     </AuthLayout>
+  );
+}
+
+function PasswordChecklist({ password }: { password: string }) {
+  return (
+    <View style={styles.passwordChecklist}>
+      {getPasswordRules(password).map((rule) => (
+        <View key={rule.id} style={styles.passwordRuleRow}>
+          <Ionicons
+            name={rule.valid ? 'checkmark-circle' : 'ellipse-outline'}
+            size={15}
+            color={rule.valid ? '#10B981' : '#94A3B8'}
+          />
+          <Text style={[styles.passwordRuleText, rule.valid && styles.passwordRuleTextValid]}>
+            {rule.label}
+          </Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -205,5 +253,28 @@ const styles = StyleSheet.create({
   },
   backLinkText: {
     marginLeft: 8,
+  },
+  passwordChecklist: {
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E3EAF5',
+    padding: 12,
+    gap: 7,
+    marginTop: -4,
+    marginBottom: 14,
+  },
+  passwordRuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  passwordRuleText: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  passwordRuleTextValid: {
+    color: '#047857',
   },
 });

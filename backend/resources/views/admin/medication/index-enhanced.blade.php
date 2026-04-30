@@ -12,10 +12,10 @@
                 <p class="text-slate-500 mt-2">Track medication schedules, adherence rates, and compliance issues</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
+                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" onchange="window.location='{{ route('admin.medication.index') }}?timeRange=' + this.value">
+                    <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
+                    <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
+                    <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
                 </select>
             </div>
         </div>
@@ -26,7 +26,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-teal-50 rounded-xl">
                         <svg class="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
                         </svg>
                     </div>
                 </div>
@@ -40,7 +40,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-green-50 rounded-xl">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"></path>
                         </svg>
                     </div>
                 </div>
@@ -55,7 +55,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-red-50 rounded-xl">
                         <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v5m0 4h.01M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
                         </svg>
                     </div>
                 </div>
@@ -70,7 +70,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-amber-50 rounded-xl">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H3v-2a4 4 0 014-4h2m4-7a4 4 0 11-8 0 4 4 0 018 0m3 3l2 2 4-4"></path>
                         </svg>
                     </div>
                 </div>
@@ -85,7 +85,7 @@
         <!-- Critical Missed Doses Alert -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
-                <h3 class="text-lg font-bold text-red-900">🚨 Critical Missed Doses Alert</h3>
+                <h3 class="text-lg font-bold text-red-900">Critical Missed Doses Alert</h3>
                 <p class="text-sm text-red-700 mt-1">Users with repeated missed medications requiring immediate follow-up</p>
             </div>
             <div class="overflow-x-auto">
@@ -115,7 +115,7 @@
                                 <p class="text-sm text-slate-600">{{ $record['medications'] }}</p>
                             </td>
                             <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="/admin/users/{{ $record['user_id'] }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View Profile →</a>
+                                <a href="{{ route('admin.users.show', $record['user_id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View Profile -></a>
                             </td>
                         </tr>
                         @empty
@@ -125,6 +125,7 @@
                             </td>
                         </tr>
                         @endforelse
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -134,7 +135,7 @@
             <!-- Top Performers -->
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 <div class="px-6 py-5 border-b border-slate-100 bg-green-50">
-                    <h3 class="text-lg font-bold text-green-900">⭐ Top Performers</h3>
+                    <h3 class="text-lg font-bold text-green-900">Top Performers</h3>
                     <p class="text-sm text-green-700 mt-1">Highest medication adherence rates</p>
                 </div>
                 <div class="divide-y divide-slate-100">
@@ -162,7 +163,7 @@
             <!-- Bottom Performers -->
             <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
-                    <h3 class="text-lg font-bold text-red-900">⚠️ Need Attention</h3>
+                    <h3 class="text-lg font-bold text-red-900">Need Attention</h3>
                     <p class="text-sm text-red-700 mt-1">Lowest medication adherence rates</p>
                 </div>
                 <div class="divide-y divide-slate-100">
@@ -193,8 +194,8 @@
             <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
-                        <h3 class="text-lg font-bold text-slate-900">Adherence by Medication Type</h3>
-                        <p class="text-slate-500 text-sm">Compliance rates by category</p>
+                        <h3 class="text-lg font-bold text-slate-900">Adherence by Medication</h3>
+                        <p class="text-slate-500 text-sm">Compliance rates from medication history records</p>
                     </div>
                 </div>
                 <div class="relative h-64 w-full">
@@ -219,7 +220,7 @@
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div class="px-6 py-5 border-b border-slate-100">
                 <h3 class="text-lg font-bold text-slate-900">Recent Problematic Entries</h3>
-                <p class="text-slate-500 text-sm">Missed and late medication records</p>
+                <p class="text-slate-500 text-sm">Missed and skipped medication records</p>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
@@ -258,7 +259,7 @@
                                 <p class="text-sm text-slate-600">{{ $entry->taken_time ?? '-' }}</p>
                             </td>
                             <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="/admin/users/{{ $entry->user_id }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View →</a>
+                                <a href="{{ route('admin.users.show', $entry->user_id) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View -></a>
                             </td>
                         </tr>
                         @empty
@@ -268,6 +269,7 @@
                             </td>
                         </tr>
                         @endforelse
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -281,7 +283,7 @@
     let medicationTypeChart, weeklyAdherenceChart;
 
     function initCharts() {
-        // Adherence by Medication Type
+        // Adherence by medication
         const typeCtx = document.getElementById('medicationTypeChart');
         if (typeCtx) {
             const medicationTypes = @json($medicationTypeData);
@@ -329,16 +331,17 @@
             });
         }
 
-        // Weekly Adherence Trend
+        // Medication adherence trend
         const weeklyCtx = document.getElementById('weeklyAdherenceChart');
         if (weeklyCtx) {
+            const weeklyData = @json($weeklyAdherenceData);
             weeklyAdherenceChart = new Chart(weeklyCtx.getContext('2d'), {
                 type: 'line',
                 data: {
-                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    labels: weeklyData.map(item => item.date),
                     datasets: [{
                         label: 'System-wide Adherence',
-                        data: [82, 85, 87, 89],
+                        data: weeklyData.map(item => item.adherence),
                         borderColor: '#22c55e',
                         backgroundColor: 'rgba(34, 197, 94, 0.1)',
                         tension: 0.4,

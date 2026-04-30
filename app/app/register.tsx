@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -17,6 +15,58 @@ import { AuthField, AuthSelectField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authColors, authStyles, authShadows } from '../components/auth/authStyles';
 import { useGoogleAuth } from '../hooks/useGoogleAuth';
+import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
+import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../utils/passwordPolicy';
+
+const GENDER_OPTIONS = [
+  { value: 'male', label: 'Male', icon: 'male-outline' },
+  { value: 'female', label: 'Female', icon: 'female-outline' },
+  { value: 'prefer_not_to_say', label: 'Prefer not to say', icon: 'person-circle-outline' },
+] as const;
+
+function normalizePhilippineMobile(value: string) {
+  const compact = value.replace(/[\s()-]/g, '');
+  if (/^\+639\d{9}$/.test(compact)) return compact;
+  if (/^09\d{9}$/.test(compact)) return `+63${compact.slice(1)}`;
+  if (/^9\d{9}$/.test(compact)) return `+63${compact}`;
+  return null;
+}
+
+function formatBirthDateInput(value: string) {
+  const digits = value.replace(/\D/g, '').slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function parseBirthDate(value: string) {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value);
+  if (!match) return null;
+
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  const today = new Date();
+  if (date > today) return null;
+
+  let age = today.getFullYear() - year;
+  const hadBirthday =
+    today.getMonth() > month - 1 ||
+    (today.getMonth() === month - 1 && today.getDate() >= day);
+  if (!hadBirthday) age -= 1;
+  if (age < 13 || age > 120) return null;
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
 export default function Register() {
   const router = useRouter();
@@ -31,33 +81,55 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showGenderPicker, setShowGenderPicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const { signInWithGoogle } = useGoogleAuth();
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+  } | null>(null);
+
+  const showNotice = (type: ThemedNoticeType, title: string, message: unknown) => {
+    setNoticeModal({
+      type,
+      title,
+      message: typeof message === 'string' ? message : JSON.stringify(message),
+    });
+  };
 
   const displayGender = gender
-    ? gender.replace(/\b\w/g, (letter) => letter.toUpperCase())
+    ? GENDER_OPTIONS.find((option) => option.value === gender)?.label || ''
     : '';
 
   const displayEmail = email ? email.charAt(0).toUpperCase() + email.slice(1) : '';
 
   async function onRegister() {
     if (!name || !email || !password || !confirmPassword) {
-      Alert.alert('Validation', 'Please fill all required fields');
+      showNotice('warning', 'Validation', 'Please fill all required fields');
       return;
     }
     if (password !== confirmPassword) {
-      Alert.alert('Validation', 'Passwords do not match');
+      showNotice('warning', 'Validation', 'Passwords do not match');
       return;
     }
-    if (password.length < 6) {
-      Alert.alert('Validation', 'Password must be at least 6 characters');
+    if (!isStrongPassword(password)) {
+      showNotice('warning', 'Weak Password', PASSWORD_POLICY_MESSAGE);
       return;
     }
     if (!agreeTerms) {
-      Alert.alert('Validation', 'Please agree to Terms of Use');
+      showNotice('warning', 'Validation', 'Please agree to Terms of Use');
+      return;
+    }
+    const normalizedPhone = phone.trim() ? normalizePhilippineMobile(phone) : null;
+    if (phone.trim() && !normalizedPhone) {
+      showNotice('warning', 'Invalid Phone Number', 'Enter a valid Philippine mobile number.');
+      return;
+    }
+    const birthDateForBackend = dateOfBirth.trim() ? parseBirthDate(dateOfBirth) : null;
+    if (dateOfBirth.trim() && !birthDateForBackend) {
+      showNotice('warning', 'Invalid Date of Birth', 'Use mm/dd/yyyy with a real date. You must be between 13 and 120 years old.');
       return;
     }
     setLoading(true);
@@ -67,13 +139,13 @@ export default function Register() {
         email,
         password,
         password_confirmation: confirmPassword,
-        phone: phone || null,
-        date_of_birth: dateOfBirth || null,
+        phone: normalizedPhone,
+        date_of_birth: birthDateForBackend,
         gender: gender || null,
         address: address || null,
       });
       if (!hasValidCachedSession({ token: res?.token })) {
-        Alert.alert('Registration Error', 'Registration succeeded but no valid session token was returned. Please sign in.');
+        showNotice('error', 'Registration Error', 'Registration succeeded but no valid session token was returned. Please sign in.');
         router.replace({ pathname: '/login' } as any);
         return;
       }
@@ -90,11 +162,11 @@ export default function Register() {
     } catch (err: any) {
       console.log('register error', err);
       if (api.isNetworkError(err)) {
-        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
         return;
       }
       const message = err?.data?.message || err?.data || err?.message || 'Registration failed';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Registration Failed', message);
     } finally {
       setLoading(false);
     }
@@ -108,7 +180,7 @@ export default function Register() {
         return;
       }
       if (!hasValidCachedSession({ token: res?.token })) {
-        Alert.alert('Registration Error', 'No valid session token was returned. Please sign in.');
+        showNotice('error', 'Registration Error', 'No valid session token was returned. Please sign in.');
         router.replace({ pathname: '/login' } as any);
         return;
       }
@@ -125,12 +197,12 @@ export default function Register() {
     } catch (err: any) {
       console.log('google register error', err);
       if (api.isNetworkError(err)) {
-        Alert.alert('Offline', 'Internet connection required for first-time login.');
+        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
         return;
       }
       const message =
         err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
-      Alert.alert('Error', typeof message === 'string' ? message : JSON.stringify(message));
+      showNotice('error', 'Registration Failed', message);
     } finally {
       setLoading(false);
     }
@@ -190,6 +262,7 @@ export default function Register() {
                 </TouchableOpacity>
               }
             />
+            <PasswordChecklist password={password} />
 
             <AuthField
               label="Confirm Password"
@@ -225,20 +298,22 @@ export default function Register() {
             <AuthField
               label="Phone Number"
               iconName="call-outline"
-              placeholder="Phone number"
+              placeholder="09123456789"
               value={phone}
               onChangeText={setPhone}
               keyboardType="phone-pad"
               optional
             />
 
-            <AuthSelectField
+            <AuthField
               label="Date of Birth"
               iconName="calendar-outline"
               value={dateOfBirth}
-              placeholder="Choose your birth date"
+              placeholder="mm/dd/yyyy"
               optional
-              onPress={() => setShowDatePicker(true)}
+              onChangeText={(value) => setDateOfBirth(formatBirthDateInput(value))}
+              keyboardType="number-pad"
+              maxLength={10}
             />
 
             <AuthSelectField
@@ -261,14 +336,22 @@ export default function Register() {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.termsCard} onPress={() => setAgreeTerms(!agreeTerms)}>
-          <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
+        <View style={styles.termsCard}>
+          <TouchableOpacity
+            style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}
+            onPress={() => setAgreeTerms(!agreeTerms)}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: agreeTerms }}
+          >
             {agreeTerms ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}
-          </View>
+          </TouchableOpacity>
           <Text style={styles.termsText}>
-            By signing up you agree with our <Text style={styles.termsHighlight}>Terms of Use</Text>
+            By signing up you agree with our{' '}
+            <Text style={styles.termsHighlight} onPress={() => setShowTermsModal(true)}>
+              Terms of Use
+            </Text>
           </Text>
-        </TouchableOpacity>
+        </View>
 
         <TouchableOpacity style={authStyles.primaryButton} onPress={onRegister} disabled={loading}>
           {loading ? (
@@ -314,19 +397,20 @@ export default function Register() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Gender</Text>
-            {['male', 'female', 'other'].map((option) => (
+            {GENDER_OPTIONS.map((option) => (
               <TouchableOpacity
-                key={option}
+                key={option.value}
                 style={styles.modalOption}
                 onPress={() => {
-                  setGender(option);
+                  setGender(option.value);
                   setShowGenderPicker(false);
                 }}
               >
-                <Text style={styles.modalOptionText}>
-                  {option.charAt(0).toUpperCase() + option.slice(1)}
-                </Text>
-                {gender === option ? (
+                <View style={styles.genderOptionCopy}>
+                  <Ionicons name={option.icon as any} size={20} color={authColors.primary} />
+                  <Text style={styles.modalOptionText}>{option.label}</Text>
+                </View>
+                {gender === option.value ? (
                   <Ionicons name="checkmark-circle" size={20} color={authColors.primary} />
                 ) : null}
               </TouchableOpacity>
@@ -339,117 +423,54 @@ export default function Register() {
       </Modal>
 
       <Modal
-        visible={showDatePicker}
+        visible={showTermsModal}
         transparent
-        animationType="slide"
-        onRequestClose={() => setShowDatePicker(false)}
+        animationType="fade"
+        onRequestClose={() => setShowTermsModal(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Date of Birth</Text>
-            <View style={styles.datePickerCard}>
-              <View style={styles.datePickerContainer}>
-                <View style={styles.dateColumn}>
-                  <Text style={styles.dateLabel}>Year</Text>
-                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map((year) => (
-                      <TouchableOpacity
-                        key={year}
-                        style={styles.dateOption}
-                        onPress={() => {
-                          const newDate = new Date(selectedDate);
-                          newDate.setFullYear(year);
-                          setSelectedDate(newDate);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.dateOptionText,
-                            selectedDate.getFullYear() === year && styles.dateOptionTextSelected,
-                          ]}
-                        >
-                          {year}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-
-                <View style={styles.dateColumn}>
-                  <Text style={styles.dateLabel}>Month</Text>
-                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
-                      <TouchableOpacity
-                        key={month}
-                        style={styles.dateOption}
-                        onPress={() => {
-                          const newDate = new Date(selectedDate);
-                          newDate.setMonth(month - 1);
-                          setSelectedDate(newDate);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.dateOptionText,
-                            selectedDate.getMonth() + 1 === month &&
-                              styles.dateOptionTextSelected,
-                          ]}
-                        >
-                          {month.toString().padStart(2, '0')}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-
-                <View style={styles.dateColumn}>
-                  <Text style={styles.dateLabel}>Day</Text>
-                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
-                      <TouchableOpacity
-                        key={day}
-                        style={styles.dateOption}
-                        onPress={() => {
-                          const newDate = new Date(selectedDate);
-                          newDate.setDate(day);
-                          setSelectedDate(newDate);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.dateOptionText,
-                            selectedDate.getDate() === day && styles.dateOptionTextSelected,
-                          ]}
-                        >
-                          {day.toString().padStart(2, '0')}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              </View>
-            </View>
-
+            <Text style={styles.modalTitle}>Terms of Use</Text>
+            <Text style={styles.termsModalText}>
+              IntakeSync helps you track wellness routines and reminders. It is not medical advice and does not replace care from a qualified professional. Keep your account information accurate and use the app responsibly.
+            </Text>
             <TouchableOpacity
               style={styles.modalConfirm}
-              onPress={() => {
-                const year = selectedDate.getFullYear();
-                const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
-                const day = String(selectedDate.getDate()).padStart(2, '0');
-                setDateOfBirth(`${year}-${month}-${day}`);
-                setShowDatePicker(false);
-              }}
+              onPress={() => setShowTermsModal(false)}
             >
-              <Text style={styles.modalConfirmText}>Confirm</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.modalCancel} onPress={() => setShowDatePicker(false)}>
-              <Text style={styles.modalCancelText}>Cancel</Text>
+              <Text style={styles.modalConfirmText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        onPrimary={() => setNoticeModal(null)}
+        onClose={() => setNoticeModal(null)}
+      />
     </>
+  );
+}
+
+function PasswordChecklist({ password }: { password: string }) {
+  return (
+    <View style={styles.passwordChecklist}>
+      {getPasswordRules(password).map((rule) => (
+        <View key={rule.id} style={styles.passwordRuleRow}>
+          <Ionicons
+            name={rule.valid ? 'checkmark-circle' : 'ellipse-outline'}
+            size={15}
+            color={rule.valid ? '#10B981' : '#94A3B8'}
+          />
+          <Text style={[styles.passwordRuleText, rule.valid && styles.passwordRuleTextValid]}>
+            {rule.label}
+          </Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -540,6 +561,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: authColors.text,
   },
+  genderOptionCopy: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   modalCancel: {
     minHeight: 52,
     borderRadius: 16,
@@ -554,6 +580,36 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: authColors.text,
+  },
+  termsModalText: {
+    color: authColors.textMuted,
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 18,
+    textAlign: 'center',
+  },
+  passwordChecklist: {
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E3EAF5',
+    padding: 12,
+    gap: 7,
+    marginTop: -4,
+    marginBottom: 14,
+  },
+  passwordRuleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  passwordRuleText: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  passwordRuleTextValid: {
+    color: '#047857',
   },
   datePickerCard: {
     borderRadius: 18,

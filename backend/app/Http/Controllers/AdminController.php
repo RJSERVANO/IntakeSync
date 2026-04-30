@@ -201,17 +201,32 @@ class AdminController extends Controller
 
     public function dashboard()
     {
-        $users = User::take(5)->get();
+        $users = User::where('role', '!=', 'admin')
+            ->latest('created_at')
+            ->take(5)
+            ->get();
 
-        // Calculate key metrics
         $totalUsers = User::where('role', '!=', 'admin')->count();
 
-        // DAU: Users who logged in today (using updated_at as proxy for last activity)
         $dau = User::where('role', '!=', 'admin')
-            ->whereDate('updated_at', Carbon::today())
+            ->where(function ($query) {
+                $query->whereDate('last_login_at', Carbon::today())
+                    ->orWhereDate('last_sync_at', Carbon::today())
+                    ->orWhereHas('hydrationEntries', fn($entryQuery) => $entryQuery->whereDate('created_at', Carbon::today()))
+                    ->orWhereHas('medicationHistory', fn($historyQuery) => $historyQuery->whereDate('created_at', Carbon::today()));
+            })
             ->count();
 
-        // User Growth: Last 30 days
+        $usersLast30Days = User::where('role', '!=', 'admin')
+            ->where('created_at', '>=', Carbon::now()->subDays(30))
+            ->count();
+        $usersPrevious30Days = User::where('role', '!=', 'admin')
+            ->whereBetween('created_at', [Carbon::now()->subDays(60), Carbon::now()->subDays(30)])
+            ->count();
+        $userGrowthChange = $usersPrevious30Days > 0
+            ? round((($usersLast30Days - $usersPrevious30Days) / $usersPrevious30Days) * 100, 1)
+            : ($usersLast30Days > 0 ? 100 : 0);
+
         $userGrowth = [];
         for ($i = 29; $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
@@ -224,7 +239,6 @@ class AdminController extends Controller
             ];
         }
 
-        // Hydration Stats: Average water intake per day (last 30 days)
         $hydrationStats = [];
         for ($i = 29; $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
@@ -239,28 +253,14 @@ class AdminController extends Controller
             ];
         }
 
-        // Platform Split: iOS vs Android (placeholder - using 50/50 for now)
-        // TODO: Add platform tracking to users table
         $platformSplit = [
-            ['platform' => 'iOS', 'count' => round($totalUsers * 0.5)],
-            ['platform' => 'Android', 'count' => round($totalUsers * 0.5)]
+            ['platform' => 'Android', 'count' => $totalUsers]
         ];
 
-        // ===== NEW ENHANCED DASHBOARD DATA =====
-
-        // Get recent activity feed
         $recentActivityFeed = $this->getRecentActivityFeed(15);
-
-        // Get system health status
         $systemHealth = $this->getSystemHealth();
-
-        // Get hydration compliance metrics
         $hydrationCompliance = $this->getHydrationCompliance(7);
-
-        // Get notification effectiveness
         $notificationEffectiveness = $this->getNotificationEffectiveness();
-
-        // Get at-risk users count
         $atRiskUsersCount = $this->getAtRiskHydrationUsers()->count();
 
         return view('admin.dashboard-enhanced', compact(
@@ -270,6 +270,8 @@ class AdminController extends Controller
             'userGrowth',
             'hydrationStats',
             'platformSplit',
+            'usersLast30Days',
+            'userGrowthChange',
             'recentActivityFeed',
             'systemHealth',
             'hydrationCompliance',
@@ -486,20 +488,26 @@ class AdminController extends Controller
         $timeRange = request('timeRange', 7);
         $userType = request('userType', 'all');
 
-        // Calculate metrics
-        $totalUsers = User::where('status', 'active')->count();
+        $totalUsers = User::where('role', '!=', 'admin')
+            ->where('status', 'active')
+            ->count();
 
-        $avgDailyIntake = HydrationEntry::where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->avg('amount_ml') ?? 0;
+        $dailyUserIntake = HydrationEntry::select('user_id', DB::raw('DATE(created_at) as intake_date'), DB::raw('SUM(amount_ml) as daily_total'))
+            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
+            ->groupBy('user_id', DB::raw('DATE(created_at)'))
+            ->get();
 
-        // Get hydration compliance for the time range
+        $avgDailyIntake = $dailyUserIntake->isNotEmpty() ? round($dailyUserIntake->avg('daily_total'), 0) : 0;
+
         $compliance = $this->getHydrationCompliance($timeRange);
         $goalAchievement = $compliance['compliance_rate'];
 
-        // Get at-risk users
         $atRiskUsers = $this->getAtRiskHydrationUsers();
 
-        // Get historical intake data for charts (goal vs actual)
+        $averageGoal = User::where('role', '!=', 'admin')
+            ->where('status', 'active')
+            ->avg('hydration_goal') ?: 2000;
+
         $chartData = [];
         for ($i = ($timeRange - 1); $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
@@ -511,9 +519,11 @@ class AdminController extends Controller
             $chartData[] = [
                 'date' => $date->format('M j'),
                 'actual' => $avgIntake,
-                'goal' => 2000  // Default daily goal
+                'goal' => round($averageGoal, 0)
             ];
         }
+
+        $lowIntakeEntries = $this->getLowHydrationEntries($timeRange);
 
         return view('admin.hydration.index-enhanced', compact(
             'totalUsers',
@@ -521,6 +531,7 @@ class AdminController extends Controller
             'goalAchievement',
             'atRiskUsers',
             'chartData',
+            'lowIntakeEntries',
             'timeRange',
             'userType'
         ));
@@ -549,17 +560,10 @@ class AdminController extends Controller
         // Get medication compliance ranking
         $complianceRanking = $this->getMedicationComplianceRanking();
 
-        // Get medication type adherence data
-        $medicationTypeData = [
-            ['type' => 'Antibiotics', 'adherence' => 92],
-            ['type' => 'Pain Relief', 'adherence' => 87],
-            ['type' => 'Vitamins', 'adherence' => 95],
-            ['type' => 'Blood Pressure', 'adherence' => 88],
-            ['type' => 'Diabetes', 'adherence' => 85]
-        ];
+        $medicationTypeData = $this->getMedicationAdherenceByName($timeRange);
+        $weeklyAdherenceData = $this->getMedicationAdherenceTrend($timeRange);
 
-        // Get problematic entries (missed and late doses)
-        $problematicEntries = MedicationHistory::whereIn('status', ['missed', 'late'])
+        $problematicEntries = MedicationHistory::whereIn('status', ['missed', 'skipped'])
             ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
             ->with('user', 'medication')
             ->latest('created_at')
@@ -573,6 +577,7 @@ class AdminController extends Controller
             'criticalMissedMedications',
             'complianceRanking',
             'medicationTypeData',
+            'weeklyAdherenceData',
             'problematicEntries',
             'timeRange'
         ));
@@ -595,9 +600,12 @@ class AdminController extends Controller
 
         $openRate = $totalNotifications > 0 ? round(($openedNotifications / $totalNotifications) * 100, 1) : 0;
 
-        // Get notification effectiveness
         $effectiveness = $this->getNotificationEffectiveness();
         $effectivenessRate = $effectiveness['rate'];
+        $avgResponseMinutes = $this->getNotificationAverageResponseMinutes($timeRange);
+        $notificationVolumeData = $this->getNotificationVolumeData($timeRange);
+        $notificationTypeData = $this->getNotificationTypeData($timeRange);
+        $engagementBreakdown = $this->getNotificationEngagementBreakdown($timeRange);
 
         // Get additional metrics
         $snoozedCount = Notification::where('status', 'snoozed')
@@ -627,6 +635,7 @@ class AdminController extends Controller
                 }
                 return [
                     'id' => $notif->id,
+                    'user_id' => $notif->user_id,
                     'user_name' => $notif->user->name,
                     'message' => $notif->body,
                     'type' => $notif->type ?? 'General',
@@ -641,6 +650,10 @@ class AdminController extends Controller
             'deliveredNotifications',
             'openRate',
             'effectivenessRate',
+            'avgResponseMinutes',
+            'notificationVolumeData',
+            'notificationTypeData',
+            'engagementBreakdown',
             'snoozedCount',
             'failedCount',
             'failedNotifications',
@@ -754,25 +767,27 @@ class AdminController extends Controller
         return [
             'email_service' => $this->checkEmailService(),
             'database' => $this->checkDatabase(),
-            'support_tickets' => $this->getSupportTicketCount(),
+            'password_resets' => $this->getPasswordResetTokenCount(),
         ];
     }
 
     private function checkEmailService()
     {
-        try {
-            return [
-                'status' => 'operational',
-                'message' => 'Email service is operational',
-                'color' => 'green'
-            ];
-        } catch (\Exception $e) {
+        $mailer = config('mail.default');
+
+        if (!$mailer) {
             return [
                 'status' => 'error',
-                'message' => 'Email service unavailable',
+                'message' => 'No default mailer configured',
                 'color' => 'red'
             ];
         }
+
+        return [
+            'status' => 'configured',
+            'message' => ucfirst($mailer) . ' mailer configured',
+            'color' => 'green'
+        ];
     }
 
     private function checkDatabase()
@@ -793,10 +808,11 @@ class AdminController extends Controller
         }
     }
 
-    private function getSupportTicketCount()
+    private function getPasswordResetTokenCount()
     {
-        // Placeholder - adjust based on your support ticket system
-        return 0;
+        return DB::table('password_reset_tokens')
+            ->where('created_at', '>=', Carbon::now()->subHour())
+            ->count();
     }
 
     /**
@@ -883,9 +899,8 @@ class AdminController extends Controller
      */
     public function getNotificationEffectiveness()
     {
-        $thirtyMinsAgo = Carbon::now()->subMinutes(30);
         $totalNotifications = Notification::count();
-        $engagedNotifications = Notification::where('opened_at', '!=', null)
+        $engagedNotifications = Notification::whereNotNull('actioned_at')
             ->count();
 
         return [
@@ -893,6 +908,116 @@ class AdminController extends Controller
             'engaged' => $engagedNotifications,
             'rate' => $totalNotifications > 0 ? round(($engagedNotifications / $totalNotifications) * 100, 1) : 0,
         ];
+    }
+
+    private function getNotificationAverageResponseMinutes($days)
+    {
+        $notifications = Notification::whereNotNull('opened_at')
+            ->whereNotNull('actioned_at')
+            ->where('created_at', '>=', Carbon::now()->subDays($days))
+            ->get(['opened_at', 'actioned_at']);
+
+        if ($notifications->isEmpty()) {
+            return null;
+        }
+
+        return round($notifications->avg(fn($notification) => $notification->opened_at->diffInMinutes($notification->actioned_at)), 1);
+    }
+
+    private function getNotificationVolumeData($days)
+    {
+        $data = [];
+        for ($i = ($days - 1); $i >= 0; $i--) {
+            $date = Carbon::now()->subDays($i);
+            $data[] = [
+                'date' => $date->format('M j'),
+                'count' => Notification::whereDate('created_at', $date)->count(),
+            ];
+        }
+
+        return $data;
+    }
+
+    private function getNotificationTypeData($days)
+    {
+        return Notification::select('type', DB::raw('COUNT(*) as count'))
+            ->where('created_at', '>=', Carbon::now()->subDays($days))
+            ->groupBy('type')
+            ->orderByDesc('count')
+            ->get()
+            ->map(fn($row) => [
+                'type' => ucfirst($row->type ?? 'General'),
+                'count' => (int) $row->count,
+            ]);
+    }
+
+    private function getNotificationEngagementBreakdown($days)
+    {
+        $baseQuery = Notification::where('created_at', '>=', Carbon::now()->subDays($days));
+        $total = (clone $baseQuery)->count();
+        $actioned = (clone $baseQuery)->whereNotNull('opened_at')->whereNotNull('actioned_at')->count();
+        $openedOnly = (clone $baseQuery)->whereNotNull('opened_at')->whereNull('actioned_at')->count();
+        $notOpened = max($total - $actioned - $openedOnly, 0);
+
+        return [
+            [
+                'label' => 'Opened and actioned',
+                'count' => $actioned,
+                'percent' => $total > 0 ? round(($actioned / $total) * 100, 1) : 0,
+                'color' => 'green',
+            ],
+            [
+                'label' => 'Opened only',
+                'count' => $openedOnly,
+                'percent' => $total > 0 ? round(($openedOnly / $total) * 100, 1) : 0,
+                'color' => 'blue',
+            ],
+            [
+                'label' => 'Not opened',
+                'count' => $notOpened,
+                'percent' => $total > 0 ? round(($notOpened / $total) * 100, 1) : 0,
+                'color' => 'slate',
+            ],
+        ];
+    }
+
+    private function getMedicationAdherenceByName($days)
+    {
+        return Medication::query()
+            ->join('medication_history', 'medications.id', '=', 'medication_history.medication_id')
+            ->where('medication_history.created_at', '>=', Carbon::now()->subDays($days))
+            ->groupBy('medications.id', 'medications.name')
+            ->select(
+                'medications.name',
+                DB::raw('COUNT(medication_history.id) as total_count'),
+                DB::raw("SUM(CASE WHEN medication_history.status = 'completed' THEN 1 ELSE 0 END) as completed_count")
+            )
+            ->orderByDesc('total_count')
+            ->limit(8)
+            ->get()
+            ->map(fn($row) => [
+                'type' => $row->name,
+                'adherence' => $row->total_count > 0 ? round(($row->completed_count / $row->total_count) * 100, 1) : 0,
+            ]);
+    }
+
+    private function getMedicationAdherenceTrend($days)
+    {
+        $data = [];
+        for ($i = ($days - 1); $i >= 0; $i--) {
+            $date = Carbon::now()->subDays($i);
+            $total = MedicationHistory::whereDate('created_at', $date)->count();
+            $completed = MedicationHistory::whereDate('created_at', $date)
+                ->where('status', 'completed')
+                ->count();
+
+            $data[] = [
+                'date' => $date->format('M j'),
+                'adherence' => $total > 0 ? round(($completed / $total) * 100, 1) : 0,
+            ];
+        }
+
+        return $data;
     }
 
     /**
@@ -907,6 +1032,7 @@ class AdminController extends Controller
             ->get()
             ->map(fn($notif) => [
                 'id' => $notif->id,
+                'user_id' => $notif->user_id,
                 'user_name' => $notif->user->name,
                 'user_email' => $notif->user->email,
                 'message' => $notif->body,
@@ -993,5 +1119,37 @@ class AdminController extends Controller
             }),
             'total_users' => $users->count(),
         ];
+    }
+
+    private function getLowHydrationEntries($days)
+    {
+        $startDate = Carbon::now()->subDays($days);
+
+        return HydrationEntry::query()
+            ->join('users', 'hydration_entries.user_id', '=', 'users.id')
+            ->where('hydration_entries.created_at', '>=', $startDate)
+            ->where('users.role', '!=', 'admin')
+            ->groupBy('hydration_entries.user_id', 'users.name', 'users.hydration_goal', DB::raw('DATE(hydration_entries.created_at)'))
+            ->select(
+                'hydration_entries.user_id',
+                'users.name',
+                DB::raw('COALESCE(users.hydration_goal, 2000) as goal'),
+                DB::raw('DATE(hydration_entries.created_at) as intake_date'),
+                DB::raw('SUM(hydration_entries.amount_ml) as actual')
+            )
+            ->havingRaw('SUM(hydration_entries.amount_ml) < (COALESCE(users.hydration_goal, 2000) * 0.5)')
+            ->orderByDesc('intake_date')
+            ->limit(15)
+            ->get()
+            ->map(function ($entry) {
+                return [
+                    'user_id' => $entry->user_id,
+                    'name' => $entry->name,
+                    'date' => Carbon::parse($entry->intake_date),
+                    'goal' => (int) $entry->goal,
+                    'actual' => (int) $entry->actual,
+                    'percentage' => $entry->goal > 0 ? round(($entry->actual / $entry->goal) * 100, 1) : 0,
+                ];
+            });
     }
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, SafeAreaView, ScrollView, Animated, Easing, Modal, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
@@ -8,6 +8,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCachedSession, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
 import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
+import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import InlineNotice from '../../common/InlineNotice';
 import { Ionicons } from '@expo/vector-icons';
 import { notificationManager } from '../../../../services/notificationManager';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
@@ -42,6 +44,14 @@ function createLocalId() {
 
 function entryKey(entry: any) {
   return String(entry?.id ?? entry?.local_id ?? `${entry?.timestamp ?? ''}:${entry?.amount_ml ?? ''}:${entry?.source ?? ''}:${entry?.drink_label ?? ''}`);
+}
+
+function getLocalDateKey(date: Date | string) {
+  const d = typeof date === 'string' ? new Date(date) : date;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function mergeEntries(primary: any[], secondary: any[]) {
@@ -211,13 +221,23 @@ export default function Hydration() {
   const [beverageNotes, setBeverageNotes] = useState('');
   const [customBeverageName, setCustomBeverageName] = useState('');
   const [initialGoalStep, setInitialGoalStep] = useState<'choice' | 'custom'>('choice');
-  const [deletedTimestamps, setDeletedTimestamps] = useState<Set<string>>(new Set()); // Track deleted entry timestamps
+  const [deletedEntryKeys, setDeletedEntryKeys] = useState<Set<string>>(new Set());
   const [hasScrolled, setHasScrolled] = useState(false);
   const [calendarExpanded, setCalendarExpanded] = useState(false);
   const [quickWaterFeedback, setQuickWaterFeedback] = useState<number | null>(null);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [noticeModal, setNoticeModal] = useState<{
+    type: ThemedNoticeType;
+    title: string;
+    message: string;
+    primaryText?: string;
+    secondaryText?: string;
+    loading?: boolean;
+    onPrimary?: () => void | Promise<void>;
+  } | null>(null);
 
   const anim = useRef(new Animated.Value(0)).current;
   const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
@@ -232,6 +252,11 @@ export default function Hydration() {
 
   const fmt = (n:number) => {
     try { return n.toLocaleString(); } catch { return String(n); }
+  };
+
+  const closeNotice = () => setNoticeModal(null);
+  const showNotice = (type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') => {
+    setNoticeModal({ type, title, message, primaryText });
   };
 
   useEffect(() => {
@@ -350,10 +375,10 @@ export default function Hydration() {
       const currentDate = new Date(startDate);
       currentDate.setDate(startDate.getDate() + i);
       
-      const dateStr = currentDate.toISOString().split('T')[0];
+      const dateStr = getLocalDateKey(currentDate);
       const dayData = calendarData.find(d => d.date === dateStr);
-      const isToday = dateStr === new Date().toISOString().split('T')[0];
-      const isSelected = dateStr === selectedDate.toISOString().split('T')[0];
+      const isToday = dateStr === getLocalDateKey(new Date());
+      const isSelected = dateStr === getLocalDateKey(selectedDate);
       
       days.push({
         date: new Date(currentDate), // Create a new Date object
@@ -382,13 +407,20 @@ export default function Hydration() {
   }
 
   function showInlineNotice(message: string) {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setInlineNotice(message);
-    setTimeout(() => setInlineNotice(null), 2400);
+    noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2400);
   }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
 
   async function showGoalReachedOnce() {
     if (goalReachedShownRef.current) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalDateKey(new Date());
     const shownKey = `${HYDRATION_GOAL_REACHED_SHOWN_PREFIX}.${today}`;
     const alreadyShown = await AsyncStorage.getItem(shownKey);
     if (alreadyShown === '1') {
@@ -421,7 +453,7 @@ export default function Hydration() {
           const parsed = local;
           setGoal(parsed.goal ?? 2000);
           const filteredEntries = (parsed.entries ?? []).filter((e: any) => 
-            !deletedTimestamps.has(e.timestamp)
+            !deletedEntryKeys.has(entryKey(e))
           );
           cachedEntries = filteredEntries;
           setEntries(filteredEntries);
@@ -447,7 +479,7 @@ export default function Hydration() {
             // Filter out deleted entries from server response
             const pendingEntries = cachedEntries.filter((e: any) => e.sync_status === 'pending' || e.sync_status === 'failed');
             const serverEntries = (res.entries ?? []).filter((e: any) => 
-              !deletedTimestamps.has(e.timestamp)
+              !deletedEntryKeys.has(entryKey(e))
             );
             const finalEntries = mergeEntries(serverEntries, pendingEntries);
             setEntries(finalEntries);
@@ -490,7 +522,7 @@ export default function Hydration() {
       }
     }
     load();
-  }, [token, deletedTimestamps]);
+  }, [token, deletedEntryKeys]);
 
   async function syncPendingBeverages(showResult = true) {
     if (!token) return;
@@ -544,7 +576,7 @@ export default function Hydration() {
         const endDate = new Date(year, month + 1, 0);
         
         // Get all entries for the month
-        const entries = await api.get(`/hydration/history?range=daily&start=${startDate.toISOString().split('T')[0]}&end=${endDate.toISOString().split('T')[0]}`, token as string);
+        const entries = await api.get(`/hydration/history?range=daily&start=${getLocalDateKey(startDate)}&end=${getLocalDateKey(endDate)}`, token as string);
         setCalendarData(entries || []);
       } catch (e) { 
         console.log('calendar data load err', e);
@@ -625,7 +657,7 @@ export default function Hydration() {
       if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
         const behindMessage = `Stay hydrated! Drink ${paceCheck.remaining}ml more today to reach your goal.`;
         setBehindAlert(behindMessage);
-        setShowBehindAlert(true);
+        showInlineNotice(behindMessage);
         
         // Show behind pace notification
         notificationManager.showBehindPaceAlert(paceCheck.remaining);
@@ -681,13 +713,18 @@ export default function Hydration() {
       setOfflineMode(true);
       showInlineNotice('Offline mode - changes will sync when connected.');
     }
+    closeNotice();
+    showInlineNotice(source === 'quick' ? `${amountMl} ml water logged` : 'Beverage logged');
   }
 
 
 
   async function submitCustom() {
     const val = parseInt(amountInput || '0', 10);
-    if (!val || val <= 0) return Alert.alert('Invalid', 'Enter a positive amount in ml');
+    if (!val || val <= 0) {
+      showNotice('warning', 'Invalid Amount', 'Enter a positive amount in ml');
+      return;
+    }
     const selectedDrinkOption = DRINK_OPTIONS.find((option) => option.value === selectedDrink) || DRINK_OPTIONS[0];
     const note = beverageNotes.trim();
     const drinkLabel = selectedDrink === 'other' ? customBeverageName.trim() : selectedDrinkOption.label;
@@ -719,11 +756,11 @@ export default function Hydration() {
   async function applyCustomGoal() {
     const val = parseInt(customGoalInput || '0', 10);
     if (!customGoalInput.trim() || !Number.isFinite(val)) {
-      Alert.alert('Invalid Input', 'Please enter a hydration goal in milliliters.');
+      showNotice('warning', 'Invalid Input', 'Please enter a hydration goal in milliliters.');
       return;
     }
     if (val < 1000 || val > 5000) {
-      Alert.alert('Invalid Range', 'Goal must be between 1000 and 5000 ml.');
+      showNotice('warning', 'Invalid Range', 'Goal must be between 1000 and 5000 ml.');
       return;
     }
     await applyGoalAndClose(val);
@@ -757,105 +794,104 @@ export default function Hydration() {
   }
 
   /**
-   * Permanently delete a hydration entry
-   * Updates local state, AsyncStorage, and syncs with backend
-   * @param index Index of the entry in the entries array
+   * Permanently delete a hydration entry.
+   * Updates local state, AsyncStorage, and syncs with backend.
    */
-  async function deleteEntry(index: number) {
-    Alert.alert(
-      'Delete Entry',
-      'Are you sure you want to delete this hydration entry?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const newEntries = [...entries];
-            const deletedEntry = newEntries[index];
-            
-            if (!deletedEntry) {
-              console.log('Entry not found at index:', index);
-              Alert.alert('Error', 'Entry not found');
-              return;
-            }
-            
-            // Track deleted timestamp to prevent restoration
-            setDeletedTimestamps(prev => new Set(prev).add(deletedEntry.timestamp));
-            
-            // Remove from array
-            newEntries.splice(index, 1);
-            
-            // Update local state immediately for instant UI update
-            setEntries(newEntries);
-            
-            // Persist to AsyncStorage to prevent restoration on refresh
-            try {
-              await writeHydrationCache({ 
-                goal, 
-                entries: newEntries 
-              });
-              console.log('Entry deleted from AsyncStorage');
-            } catch (storageErr) {
-              console.error('AsyncStorage delete error:', storageErr);
-            }
-            
-            // Sync deletion with backend server
-            if (token && deletedEntry) {
-              try {
-                // Use POST method for deletion (backend expects timestamp in body)
-                await api.post('/hydration/delete', { 
-                  timestamp: deletedEntry.timestamp 
-                }, token as string);
-                console.log('Entry deleted from server');
-                
-                // Reload full hydration data from server to ensure consistency
-                const refreshedData = await api.get('/hydration', token as string);
-                if (refreshedData && refreshedData.entries) {
-                  // Filter out deleted entries
-                  const filteredEntries = refreshedData.entries.filter((e: any) => 
-                    !deletedTimestamps.has(e.timestamp) && e.timestamp !== deletedEntry.timestamp
-                  );
-                  setEntries(filteredEntries);
-                  // Update AsyncStorage with server data
-                  await writeHydrationCache({
-                    goal,
-                    entries: filteredEntries
-                  });
-                }
-              } catch (err: any) {
-                console.error('Server delete sync error:', err);
-                // Keep local deletion even if server sync fails
-                Alert.alert(
-                  'Warning', 
-                  'Entry deleted locally but server sync failed. It will be removed on next sync.',
-                  [{ text: 'OK' }]
-                );
-              }
-            }
-            
-            // Reload calendar data to reflect deletion immediately
-            if (token) {
-              try {
-                const h = await api.get(`/hydration/history?range=${historyRange}`, token as string);
-                setHistoryData(h || []);
-              } catch (e) { 
-                console.log('History reload error:', e); 
-              }
-            }
-          }
+  async function performDeleteEntry(targetEntry: any) {
+    setNoticeModal((prev) => prev ? { ...prev, loading: true } : prev);
+    const targetKey = entryKey(targetEntry);
+    const index = entries.findIndex((entry) => entryKey(entry) === targetKey);
+    let syncWarning: string | null = null;
+
+    if (index === -1) {
+      console.log('Entry not found:', targetKey);
+      showNotice('error', 'Entry Not Found', 'This beverage entry could not be found.');
+      return;
+    }
+
+    const newEntries = [...entries];
+    const deletedEntry = newEntries[index];
+
+    setDeletedEntryKeys(prev => new Set(prev).add(entryKey(deletedEntry)));
+
+    // Remove from array
+    newEntries.splice(index, 1);
+
+    // Update local state immediately for instant UI update
+    setEntries(newEntries);
+
+    // Persist to AsyncStorage to prevent restoration on refresh
+    try {
+      await writeHydrationCache({
+        goal,
+        entries: newEntries
+      });
+      console.log('Entry deleted from AsyncStorage');
+    } catch (storageErr) {
+      console.error('AsyncStorage delete error:', storageErr);
+    }
+
+    // Sync deletion with backend server
+    if (token && deletedEntry) {
+      try {
+        // Use POST method for deletion (backend expects timestamp in body)
+        await api.post('/hydration/delete', {
+          timestamp: deletedEntry.timestamp
+        }, token as string);
+        console.log('Entry deleted from server');
+
+        // Reload full hydration data from server to ensure consistency
+        const refreshedData = await api.get('/hydration', token as string);
+        if (refreshedData && refreshedData.entries) {
+          // Filter out deleted entries
+          const filteredEntries = refreshedData.entries.filter((e: any) =>
+            !deletedEntryKeys.has(entryKey(e)) && entryKey(e) !== targetKey
+          );
+          setEntries(filteredEntries);
+          // Update AsyncStorage with server data
+          await writeHydrationCache({
+            goal,
+            entries: filteredEntries
+          });
         }
-      ]
-    );
+      } catch (err: any) {
+        console.error('Server delete sync error:', err);
+        // Keep local deletion even if server sync fails
+        syncWarning = 'Entry deleted locally but server sync failed. It will be removed on next sync.';
+      }
+    }
+
+    // Reload calendar data to reflect deletion immediately
+    if (token) {
+      try {
+        const h = await api.get(`/hydration/history?range=${historyRange}`, token as string);
+        setHistoryData(h || []);
+      } catch (e) {
+        console.log('History reload error:', e);
+      }
+    }
+
+    if (syncWarning) {
+      showNotice('warning', 'Sync Pending', syncWarning);
+    } else {
+      closeNotice();
+    }
+  }
+
+  async function deleteEntryByEntry(targetEntry: any) {
+    setNoticeModal({
+      type: 'destructive',
+      title: 'Delete Entry',
+      message: 'Are you sure you want to delete this beverage entry?',
+      primaryText: 'Delete',
+      secondaryText: 'Cancel',
+      onPrimary: () => performDeleteEntry(targetEntry),
+    });
   }
 
   function totalToday() {
-    const today = new Date().toISOString().slice(0,10);
-    return entries.reduce((sum, e) => sum + ((e.timestamp||'').slice(0,10) === today ? (e.amount_ml||0) : 0), 0);
-  }
-
-  function recentList() {
-    return [...entries].reverse().slice(0,8);
+    const today = getLocalDateKey(new Date());
+    return entries.reduce((sum, e) => sum + (e.timestamp && getLocalDateKey(e.timestamp) === today ? (e.amount_ml||0) : 0), 0);
   }
 
   function percent() {
@@ -863,8 +899,8 @@ export default function Hydration() {
   }
 
   function todayEntries() {
-    const today = new Date().toDateString();
-    return entries.filter((entry) => entry.timestamp && new Date(entry.timestamp).toDateString() === today);
+    const today = getLocalDateKey(new Date());
+    return entries.filter((entry) => entry.timestamp && getLocalDateKey(entry.timestamp) === today);
   }
 
   function awarenessFor(field: 'sugar_level' | 'caffeine_level') {
@@ -962,11 +998,11 @@ export default function Hydration() {
   async function handleSetCustomGoal() {
     const val = parseInt(customGoalInput || '0', 10);
     if (!val || val <= 0) {
-      Alert.alert('Invalid Input', 'Please enter a positive amount');
+      showNotice('warning', 'Invalid Input', 'Please enter a positive amount');
       return;
     }
     if (val < 1000 || val > 5000) {
-      Alert.alert('Invalid Range', 'Goal must be between 1000-5000ml');
+      showNotice('warning', 'Invalid Range', 'Goal must be between 1000-5000ml');
       return;
     }
     await updateGoal(val);
@@ -1005,6 +1041,13 @@ export default function Hydration() {
     );
   }
 
+  const selectedDateKey = getLocalDateKey(selectedDate);
+  const todayKey = getLocalDateKey(new Date());
+  const isFutureSelectedDate = selectedDateKey > todayKey;
+  const selectedDateEntries = entries
+    .filter(entry => entry.timestamp && getLocalDateKey(entry.timestamp) === selectedDateKey)
+    .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.stickyHeader, hasScrolled && styles.stickyHeaderScrolled, { paddingTop: Math.max(insets.top, 8) }]}>
@@ -1023,12 +1066,7 @@ export default function Hydration() {
         </TouchableOpacity>
       </View>
 
-      {inlineNotice && (
-        <View pointerEvents="none" style={[styles.inlineNotice, { top: Math.max(insets.top, 8) + 54 }]}>
-          <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
-          <Text style={styles.inlineNoticeText}>{inlineNotice}</Text>
-        </View>
-      )}
+      <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
       {(offlineMode || syncing) && !inlineNotice ? (
         <View pointerEvents="none" style={[styles.syncNotice, { top: Math.max(insets.top, 8) + 54 }]}>
           <Ionicons name={offlineMode ? 'cloud-offline-outline' : 'sync-outline'} size={15} color="#1E3A8A" />
@@ -1298,13 +1336,9 @@ export default function Hydration() {
                 {selectedDate.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' })}
               </Text>
               {(() => {
-                const selectedDateStr = selectedDate.toISOString().split('T')[0];
-                const dateEntries = entries.filter(e => 
-                  e.timestamp && e.timestamp.slice(0,10) === selectedDateStr
-                );
-                const amount = dateEntries.reduce((sum, entry) => sum + (entry.amount_ml || 0), 0);
-                const selectedCaffeine = awarenessForEntries(dateEntries, 'caffeine_level');
-                const selectedSugar = awarenessForEntries(dateEntries, 'sugar_level');
+                const amount = selectedDateEntries.reduce((sum, entry) => sum + (entry.amount_ml || 0), 0);
+                const selectedCaffeine = awarenessForEntries(selectedDateEntries, 'caffeine_level');
+                const selectedSugar = awarenessForEntries(selectedDateEntries, 'sugar_level');
                 
                 return (
                   <>
@@ -1326,71 +1360,50 @@ export default function Hydration() {
                       </View>
                     </View>
                     
-                    {/* Show actual logs for selected date */}
-                    {dateEntries.length > 0 && (
-                      <View style={styles.dateLogsContainer}>
-                        <Text style={styles.dateLogsTitle}>Beverage Logs:</Text>
-                        {dateEntries.map((entry, idx) => (
-                          <View key={idx} style={styles.dateLogRow}>
-                            <View style={styles.dateLogInfo}>
-                              <Text style={styles.dateLogTime}>
-                                {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </Text>
-                              <Text style={styles.dateLogSource} numberOfLines={2}>{formatLogTitle(entry)}</Text>
-                            </View>
-                            <Text style={styles.dateLogAmount}>{fmt(entry.amount_ml)} ml</Text>
-                          </View>
-                        ))}
+                    <View style={styles.dateLogsContainer}>
+                      <View style={styles.dateLogsHeader}>
+                        <View>
+                          <Text style={styles.dateLogsTitle}>Logs for Selected Date</Text>
+                          <Text style={styles.dateLogsSubtitle}>Entries recorded for the selected day.</Text>
+                        </View>
                       </View>
-                    )}
-                    
-                    {dateEntries.length === 0 && amount === 0 && (
-                      <Text style={styles.noLogsText}>No hydration logged for this date</Text>
-                    )}
+                      {selectedDateEntries.length > 0 ? (
+                        selectedDateEntries.map((entry, idx) => {
+                          const pending = entry.sync_status === 'pending' || entry.sync_status === 'failed';
+                          return (
+                            <View key={entryKey(entry)} style={[styles.selectedLogRow, idx % 2 === 0 ? styles.rowAltEven : styles.rowAltOdd]}>
+                              <View style={styles.selectedLogInfo}>
+                                <Text style={styles.selectedLogTitle} numberOfLines={2}>{formatLogTitle(entry)}</Text>
+                                <Text style={styles.selectedLogMeta}>
+                                  {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  {pending ? ` - ${entry.sync_status === 'failed' ? 'Sync failed' : 'Pending sync'}` : ''}
+                                </Text>
+                              </View>
+                              <View style={styles.selectedLogRight}>
+                                <Text style={styles.selectedLogAmount}>{fmt(entry.amount_ml || 0)} ml</Text>
+                                <TouchableOpacity
+                                  onPress={() => deleteEntryByEntry(entry)}
+                                  style={styles.deleteButton}
+                                  accessibilityLabel="Delete beverage entry"
+                                  accessibilityRole="button"
+                                >
+                                  <Ionicons name="trash-outline" size={17} color="#EF4444" />
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          );
+                        })
+                      ) : (
+                        <Text style={styles.noLogsText}>
+                          {isFutureSelectedDate ? 'No beverage logs for this future date.' : 'No beverage logs for this date.'}
+                        </Text>
+                      )}
+                    </View>
                   </>
                 );
               })()}
             </View>
           )}
-
-          {/* Recent entries with alternating rows and delete buttons */}
-          <View style={{marginTop:12}}>
-            <Text style={styles.recentEntriesTitle}>Recent Entries</Text>
-            {recentList().map((e:any, idx:number) => {
-              // Find the actual index in the original entries array by matching timestamp
-              const actualIndex = entries.findIndex(entry => 
-                entry.timestamp === e.timestamp && entry.amount_ml === e.amount_ml
-              );
-              return (
-                <View key={idx} style={[styles.historyRowAlt, idx % 2 === 0 ? styles.rowAltEven : styles.rowAltOdd]}>
-                  <View style={styles.historyRowContent}>
-                    <View style={styles.historyRowLeft}>
-                      <Text style={styles.historyText} numberOfLines={2}>{formatLogTitle(e)}</Text>
-                      <Text style={styles.historyMeta}>
-                        {new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        {e.sync_status === 'pending' || e.sync_status === 'failed' ? ' - Pending sync' : ''}
-                      </Text>
-                    </View>
-                    <View style={styles.historyRight}>
-                      <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
-                      <TouchableOpacity
-                        onPress={() => {
-                          if (actualIndex !== -1) {
-                            deleteEntry(actualIndex);
-                          } else {
-                            console.log('Entry not found in array');
-                          }
-                        }}
-                        style={styles.deleteButton}
-                      >
-                        <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                </View>
-              );
-            })}
-          </View>
         </View>
 
       </ScrollView>
@@ -1602,7 +1615,7 @@ export default function Hydration() {
               <View style={styles.celebrationProgressCard}>
                 <View style={styles.celebrationProgressHeader}>
                   <View>
-                    <Text style={styles.celebrationProgressLabel}>Today's intake</Text>
+                    <Text style={styles.celebrationProgressLabel}>Today&apos;s intake</Text>
                     <Text style={styles.celebrationProgressMeta}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
                   </View>
                   <Text style={styles.celebrationProgressValue}>{Math.max(100, Math.round(percent()))}%</Text>
@@ -1790,6 +1803,18 @@ export default function Hydration() {
           </View>
         </View>
       </Modal>
+      <ThemedNoticeModal
+        visible={Boolean(noticeModal)}
+        type={noticeModal?.type || 'info'}
+        title={noticeModal?.title || ''}
+        message={noticeModal?.message || ''}
+        primaryText={noticeModal?.primaryText}
+        secondaryText={noticeModal?.secondaryText}
+        loading={noticeModal?.loading}
+        onPrimary={noticeModal?.onPrimary || closeNotice}
+        onSecondary={closeNotice}
+        onClose={closeNotice}
+      />
     </SafeAreaView>
   );
 }
@@ -1980,14 +2005,17 @@ const styles = StyleSheet.create({
   statLabel: { fontSize:11, color:'#64748B', fontWeight:'800' },
   
   // Date-specific logs styles
-  dateLogsContainer: { marginTop: 12, backgroundColor: '#F9FAFB', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E5E7EB' },
-  dateLogsTitle: { fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  dateLogRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', marginBottom: 4 },
-  dateLogInfo: { flex: 1, minWidth: 0, paddingRight: 10 },
-  dateLogTime: { fontSize: 12, color: '#6B7280', fontWeight: '700', marginBottom: 2 },
-  dateLogAmount: { fontSize: 14, color: '#0F172A', fontWeight: '800', flexShrink: 0 },
-  dateLogSource: { fontSize: 12, color: '#475569', fontWeight: '700' },
-  noLogsText: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
+  dateLogsContainer: { marginTop: 12, backgroundColor: '#FFFFFF', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#DBEAFE' },
+  dateLogsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
+  dateLogsTitle: { fontSize: 15, fontWeight: '900', color: '#0F172A' },
+  dateLogsSubtitle: { fontSize: 12, color: '#64748B', fontWeight: '700', marginTop: 2 },
+  selectedLogRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 9, borderRadius: 10, marginBottom: 7 },
+  selectedLogInfo: { flex: 1, minWidth: 0, paddingRight: 10 },
+  selectedLogTitle: { color: '#334155', fontWeight: '900', lineHeight: 18, fontSize: 13 },
+  selectedLogMeta: { color: '#64748B', fontSize: 12, marginTop: 3, fontWeight: '700' },
+  selectedLogRight: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  selectedLogAmount: { fontWeight:'900', color:'#0F172A', minWidth: 54, textAlign: 'right' },
+  noLogsText: { fontSize: 13, color: '#64748B', textAlign: 'center', paddingVertical: 16, fontWeight: '700' },
   
   // Recent entries with delete functionality
   recentEntriesTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 8 },

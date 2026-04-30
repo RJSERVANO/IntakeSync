@@ -1,6 +1,6 @@
 @extends('layouts.app')
 
-@section('title', 'Hydration Management - Enhanced')
+@section('title', 'Beverage Management')
 
 @section('content')
 <div class="min-h-screen bg-slate-50 py-4">
@@ -9,16 +9,13 @@
         <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900">Beverage Management</h1>
-                <p class="text-slate-500 mt-2">Monitor user beverage goals and daily water intake with actionable insights</p>
+                <p class="text-slate-500 mt-2">Monitor beverage intake goals, daily fluid logs, and low-intake exceptions</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                    <option value="7">Last 7 days</option>
-                    <option value="30" selected>Last 30 days</option>
-                    <option value="90">Last 90 days</option>
-                </select>
-                <select id="userType" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                    <option value="">All Users</option>
+                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" onchange="window.location='{{ route('admin.hydration.index') }}?timeRange=' + this.value">
+                    <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
+                    <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
+                    <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
                 </select>
             </div>
         </div>
@@ -29,12 +26,12 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-blue-50 rounded-xl">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11z"></path>
                         </svg>
                     </div>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Total Users</p>
+                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Tracked Users</p>
                     <p class="text-3xl font-bold text-slate-900">{{ $totalUsers }}</p>
                 </div>
             </div>
@@ -43,7 +40,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-green-50 rounded-xl">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 19h16M7 19V9a5 5 0 0110 0v10M9 9h6m-6 4h6"></path>
                         </svg>
                     </div>
                 </div>
@@ -58,7 +55,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-amber-50 rounded-xl">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                     </div>
                 </div>
@@ -73,7 +70,7 @@
                 <div class="flex items-start justify-between mb-4">
                     <div class="p-3 bg-red-50 rounded-xl">
                         <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4v2m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3s6 6.7 6 11a6 6 0 11-12 0c0-4.3 6-11 6-11zM12 10v3m0 3h.01"></path>
                         </svg>
                     </div>
                 </div>
@@ -88,7 +85,7 @@
         <!-- At-Risk Users Table -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
-                <h3 class="text-lg font-bold text-red-900">⚠️ At-Risk Users (Below 50% Goal)</h3>
+                <h3 class="text-lg font-bold text-red-900">At-Risk Users (Below 50% Goal)</h3>
                 <p class="text-sm text-red-700 mt-1">Immediate intervention recommended for these users</p>
             </div>
             <div class="overflow-x-auto">
@@ -131,7 +128,7 @@
                                 <p class="text-sm text-slate-600">{{ $user['days_logged'] }} days</p>
                             </td>
                             <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="/admin/users/{{ $user['id'] }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View Profile →</a>
+                                <a href="{{ route('admin.users.show', $user['id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View Profile -></a>
                             </td>
                         </tr>
                         @empty
@@ -141,6 +138,7 @@
                             </td>
                         </tr>
                         @endforelse
+                    </tbody>
                 </table>
             </div>
         </div>
@@ -151,7 +149,7 @@
                 <div class="flex items-center justify-between mb-6">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Goal vs Actual Comparison</h3>
-                        <p class="text-slate-500 text-sm">Weekly hydration performance</p>
+                        <p class="text-slate-500 text-sm">Weekly beverage intake performance</p>
                     </div>
                 </div>
                 <div class="relative h-64 w-full">
@@ -162,7 +160,7 @@
             <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
                 <div class="flex items-center justify-between mb-6">
                     <div>
-                        <h3 class="text-lg font-bold text-slate-900">Weekly Hydration Trend</h3>
+                        <h3 class="text-lg font-bold text-slate-900">Weekly Beverage Trend</h3>
                         <p class="text-slate-500 text-sm">Last 30 days average</p>
                     </div>
                 </div>
@@ -191,11 +189,34 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100" id="lowIntakeTableBody">
-                        <tr>
-                            <td colspan="6" class="px-6 py-8 text-center text-slate-400">
-                                <p class="text-sm">Loading low intake entries...</p>
+                        @forelse($lowIntakeEntries as $entry)
+                        <tr class="hover:bg-slate-50 transition-colors">
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="text-sm text-slate-600">{{ $entry['date']->format('M d, Y') }}</span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <p class="font-medium text-slate-900">{{ $entry['name'] }}</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <p class="text-sm text-slate-600">{{ number_format($entry['goal']) }} ml</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <p class="text-sm text-slate-600">{{ number_format($entry['actual']) }} ml</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">{{ $entry['percentage'] }}%</span>
+                            </td>
+                            <td class="px-6 py-4 text-right whitespace-nowrap">
+                                <a href="{{ route('admin.users.show', $entry['user_id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View -></a>
                             </td>
                         </tr>
+                        @empty
+                        <tr>
+                            <td colspan="6" class="px-6 py-8 text-center text-slate-400">
+                                <p class="text-sm">No low intake exceptions found</p>
+                            </td>
+                        </tr>
+                        @endforelse
                     </tbody>
                 </table>
             </div>

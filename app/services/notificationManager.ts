@@ -6,13 +6,13 @@
  * 
  * Uses:
  * - react-native-toast-message for toast notifications
- * - React Native Alert for system-style dialogs
+ * - Themed toast fallback for dialog-style notifications
  * - Custom modals for rich notifications
  * - AppState listeners for app resume triggers
  * - JavaScript timers for in-app reminders
  */
 
-import { Alert, AppState } from 'react-native';
+import { AppState } from 'react-native';
 import Toast from 'react-native-toast-message';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -107,22 +107,20 @@ class NotificationManager {
   }
 
   /**
-   * Show a system alert dialog
+   * Service files do not render app modals directly. Dialog-style requests use
+   * a high-priority toast fallback so screens can own themed modal UX.
    */
   private showAlert(config: NotificationConfig) {
-    const { title, message, onPress } = config;
-    
-    Alert.alert(
+    const { type, title, message, priority = 'high', onPress } = config;
+
+    this.showToast({
+      type,
       title,
       message,
-      [
-        {
-          text: 'OK',
-          onPress: onPress,
-        },
-      ],
-      { cancelable: true }
-    );
+      priority,
+      duration: 7000,
+      onPress,
+    });
   }
 
   /**

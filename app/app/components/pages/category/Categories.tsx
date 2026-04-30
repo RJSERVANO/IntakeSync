@@ -137,7 +137,7 @@ export default function Categories() {
           style={styles.timelineCard}
         >
           <View style={styles.timelineHeaderRow}>
-            <Text style={styles.timelineTitle}>Today's Timeline</Text>
+            <Text style={styles.timelineTitle}>Today&apos;s Timeline</Text>
             <Ionicons name="chevron-forward" size={18} color="#6B7280" />
           </View>
           {(loadingTimeline ? [
@@ -157,7 +157,7 @@ export default function Categories() {
         <View style={styles.modalBackdrop}>
           <ModalSafeAreaView style={styles.timelineModal} edges={['top']}>
             <View style={styles.timelineModalHeader}>
-              <Text style={styles.timelineTitle}>Today's Timeline</Text>
+              <Text style={styles.timelineTitle}>Today&apos;s Timeline</Text>
               <TouchableOpacity onPress={() => setTimelineOpen(false)}>
                 <Ionicons name="close" size={22} color="#1F2937" />
               </TouchableOpacity>

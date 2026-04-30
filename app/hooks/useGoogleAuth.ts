@@ -8,7 +8,9 @@ import * as api from '../app/api';
 WebBrowser.maybeCompleteAuthSession();
 
 const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
-const hasGoogleClientId = Boolean(googleClientId);
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || googleClientId;
+const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
+const useProxy = process.env.EXPO_PUBLIC_GOOGLE_USE_PROXY === 'true';
 const isExpoGo =
   (Constants as any).appOwnership === 'expo' ||
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -64,25 +66,35 @@ function getFallbackExpoGoRedirectUri() {
   return `https://auth.expo.io/${expoProjectFullName}`;
 }
 
-// Expo Go uses the AuthSession proxy redirect with the Web OAuth client.
-// APK builds use the configured app scheme redirect and still request only an id_token.
-export const googleRedirectUri = isExpoGo ? makeExpoGoRedirectUri() : nativeRedirectUri;
+const selectedClientId = useProxy ? googleWebClientId : googleAndroidClientId;
+const selectedClientIdType = useProxy ? 'web' : 'android';
 
-console.log('Google Redirect URI:', googleRedirectUri);
-console.log('[GoogleAuth] proxy mode:', isExpoGo ? 'enabled' : 'disabled');
-if (isExpoGo && !expoProjectFullName) {
+// Expo Go fallback uses the AuthSession proxy redirect with the Web OAuth client.
+// APK builds use the configured app scheme redirect with the Android OAuth client.
+export const googleRedirectUri = useProxy ? makeExpoGoRedirectUri() : nativeRedirectUri;
+
+if (__DEV__) {
+  console.log('Google Redirect URI:', googleRedirectUri);
+  console.log('[GoogleAuth] proxy mode:', useProxy ? 'enabled' : 'disabled');
+  console.log('[GoogleAuth] selected client ID type:', selectedClientIdType);
+  console.log('[GoogleAuth] backend endpoint: /oauth/google');
+  if (isExpoGo && !useProxy) {
+    console.warn('[GoogleAuth] Expo Go is running with proxy disabled. APK mode is primary, but Expo Go Google sign-in may require EXPO_PUBLIC_GOOGLE_USE_PROXY=true.');
+  }
+}
+if (useProxy && !expoProjectFullName) {
   console.warn(
     '[GoogleAuth] Proxy mode was requested but Expo project full name is missing. ' +
       'Set EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME=@your-expo-username/IntakeSync so the logged redirect URI can be registered in Google Cloud.'
   );
 }
-if (isExpoGo && expoProjectFullName && googleRedirectUri !== getFallbackExpoGoRedirectUri()) {
+if (useProxy && expoProjectFullName && googleRedirectUri !== getFallbackExpoGoRedirectUri()) {
   console.log('[GoogleAuth] Expo proxy redirect fallback:', getFallbackExpoGoRedirectUri());
 }
 
 export function useGoogleAuth() {
   const [, , promptAsync] = Google.useAuthRequest({
-    clientId: googleClientId || 'missing-google-client-id',
+    clientId: selectedClientId || 'missing-google-client-id',
     redirectUri: googleRedirectUri,
     responseType: 'id_token',
     usePKCE: false,
@@ -92,8 +104,8 @@ export function useGoogleAuth() {
   });
 
   const signInWithGoogle = useCallback(async () => {
-    if (!hasGoogleClientId) {
-      throw new Error('Google sign-in is not configured yet.');
+    if (!selectedClientId) {
+      throw new Error(useProxy ? 'Google web client ID is missing.' : 'Google Android client ID is missing.');
     }
 
     const result = await promptAsync();
