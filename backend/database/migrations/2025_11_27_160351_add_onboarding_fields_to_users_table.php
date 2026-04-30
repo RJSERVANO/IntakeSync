@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('users', function (Blueprint $table) {
-            $table->boolean('onboarding_completed')->default(false)->after('subscription_expires_at');
+            $table->boolean('onboarding_completed')->default(false)->after('role');
             $table->string('nickname')->nullable()->after('onboarding_completed');
             $table->time('first_medication_time')->nullable()->after('nickname');
             $table->time('end_of_day_time')->nullable()->after('first_medication_time');

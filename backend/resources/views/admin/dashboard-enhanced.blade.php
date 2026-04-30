@@ -174,6 +174,41 @@
             </div>
         </div>
 
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Water Share</h4>
+                <div class="text-3xl font-bold text-slate-900">{{ $dashboardWaterShare }}%</div>
+                <p class="text-sm text-slate-600 mt-2">of beverage volume in the last 7 days</p>
+                <a href="{{ route('admin.hydration.index') }}" class="mt-4 inline-block text-sm font-semibold text-blue-600 hover:text-blue-700">
+                    Review Beverage Mix ->
+                </a>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Caffeine/Sugar Flags</h4>
+                <div class="text-3xl font-bold text-slate-900">{{ number_format($dashboardAwarenessFlags) }}</div>
+                <p class="text-sm text-slate-600 mt-2">medium or high awareness logs this week</p>
+                <a href="{{ route('admin.hydration.index') }}" class="mt-4 inline-block text-sm font-semibold text-blue-600 hover:text-blue-700">
+                    View Recent Logs ->
+                </a>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <h4 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Top Beverage Types</h4>
+                <div class="space-y-3">
+                    @forelse($dashboardBeverageBreakdown->take(3) as $item)
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium text-slate-700">{{ $item['label'] }}</span>
+                        <span class="text-sm font-semibold text-slate-900">{{ number_format($item['total_ml']) }} ml</span>
+                    </div>
+                    @empty
+                    <p class="text-sm text-slate-500">No beverage logs this week.</p>
+                    @endforelse
+                </div>
+                <p class="text-xs text-slate-500 mt-4">{{ number_format($dashboardMissedHydrationReminders) }} missed hydration reminders this week</p>
+            </div>
+        </div>
+
         <!-- Recent Activity Feed -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100">

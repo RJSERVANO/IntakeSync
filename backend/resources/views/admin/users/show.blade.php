@@ -69,7 +69,7 @@
                         </svg>
                     </div>
                     <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Hydration Entries</p>
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Beverage Logs</p>
                         <p class="text-2xl font-bold text-slate-900 mt-1">{{ $totalHydrationEntries }}</p>
                     </div>
                 </div>
@@ -118,6 +118,37 @@
             </div>
         </div>
 
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Today's Beverage Progress</p>
+                <p class="text-3xl font-bold text-slate-900 mt-2">{{ number_format($hydrationTodayTotal) }} ml</p>
+                <p class="text-sm text-slate-600 mt-1">{{ $hydrationTodayProgress }}% of {{ number_format($hydrationGoal) }} ml goal</p>
+                <div class="mt-4 w-full bg-slate-200 rounded-full h-2">
+                    <div class="bg-blue-600 h-2 rounded-full" style="width: {{ min($hydrationTodayProgress, 100) }}%"></div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">30-Day Beverage Mix</p>
+                <div class="mt-4 space-y-3">
+                    @forelse($userBeverageBreakdown->take(3) as $item)
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium text-slate-700">{{ $item['label'] }}</span>
+                        <span class="text-sm font-semibold text-slate-900">{{ number_format($item['total_ml']) }} ml</span>
+                    </div>
+                    @empty
+                    <p class="text-sm text-slate-500">No beverage logs in the last 30 days.</p>
+                    @endforelse
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Caffeine/Sugar Awareness</p>
+                <p class="text-3xl font-bold text-slate-900 mt-2">{{ number_format($userAwarenessFlags) }}</p>
+                <p class="text-sm text-slate-600 mt-1">medium or high caffeine/sugar logs in 30 days</p>
+            </div>
+        </div>
+
         <!-- Tabs -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <!-- Tab Navigation -->
@@ -152,30 +183,31 @@
 
             <!-- Hydration Tab -->
             <div id="hydration-content" class="tab-content p-8" role="tabpanel" aria-labelledby="hydration-tab">
-                <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Hydration Entries</h3>
+                <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Beverage Entries</h3>
                 @if($hydrationEntries->count() > 0)
                 <div class="overflow-x-auto">
                     <table class="w-full">
                         <thead>
                             <tr class="border-b border-slate-200">
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Drink</th>
                                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Amount</th>
-                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Goal</th>
-                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Progress</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Sugar</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Caffeine</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Source</th>
                                 <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Date</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                             @foreach($hydrationEntries as $entry)
                             <tr class="hover:bg-slate-50 transition-colors">
-                                <td class="px-4 py-3 text-sm font-medium text-slate-900">{{ $entry->amount }}ml</td>
-                                <td class="px-4 py-3 text-sm text-slate-600">{{ $entry->goal }}ml</td>
                                 <td class="px-4 py-3 text-sm">
-                                    @php
-                                    $progress = $entry->goal > 0 ? round(($entry->amount / $entry->goal) * 100) : 0;
-                                    $color = $progress >= 100 ? 'text-green-600' : ($progress >= 75 ? 'text-amber-600' : 'text-red-600');
-                                    @endphp
-                                    <span class="{{ $color }} font-semibold">{{ $progress }}%</span>
+                                    <p class="font-medium text-slate-900">{{ $entry->drink_label ?: \Illuminate\Support\Str::headline($entry->beverage_type ?: 'water') }}</p>
+                                    <p class="text-xs text-slate-500">{{ \Illuminate\Support\Str::headline($entry->beverage_type ?: 'water') }}</p>
                                 </td>
+                                <td class="px-4 py-3 text-sm font-medium text-slate-900">{{ number_format($entry->amount_ml) }} ml</td>
+                                <td class="px-4 py-3 text-sm text-slate-600">{{ \Illuminate\Support\Str::headline($entry->sugar_level ?: 'none') }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-600">{{ \Illuminate\Support\Str::headline($entry->caffeine_level ?: 'none') }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-600">{{ \Illuminate\Support\Str::headline($entry->source ?: 'manual') }}</td>
                                 <td class="px-4 py-3 text-sm text-slate-600">{{ $entry->created_at->format('M j, Y g:i A') }}</td>
                             </tr>
                             @endforeach
@@ -183,7 +215,7 @@
                     </table>
                 </div>
                 @else
-                <p class="text-center text-slate-500 py-8">No hydration entries found.</p>
+                <p class="text-center text-slate-500 py-8">No beverage entries found.</p>
                 @endif
             </div>
 

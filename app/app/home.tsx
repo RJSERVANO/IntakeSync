@@ -5,7 +5,8 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
-import { clearCachedSession, getCachedSession, hasValidCachedSession, updateCachedUser } from '../services/offlineStorage';
+import { clearCachedSession, getCachedSession, hasValidCachedSession, readMedicationCache, updateCachedUser } from '../services/offlineStorage';
+import { getSyncQueueSummary, processSyncQueue } from '../services/syncQueue';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
@@ -85,6 +86,7 @@ export default function Home() {
   const [upcomingMedications, setUpcomingMedications] = useState<any[]>([]);
   const [notificationStats, setNotificationStats] = useState<any>(null);
   const [offlineMode, setOfflineMode] = useState(offline === '1');
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -131,7 +133,13 @@ export default function Home() {
   useFocusEffect(
     useCallback(() => {
       loadSelectedAvatar();
-    }, [loadSelectedAvatar])
+      const syncToken = (token as string | undefined);
+      (async () => {
+        if (syncToken) await processSyncQueue(syncToken).catch(() => {});
+        const summary = await getSyncQueueSummary();
+        setPendingSyncCount(summary.pending);
+      })();
+    }, [loadSelectedAvatar, token])
   );
 
   // Debounce medicine search
@@ -212,6 +220,14 @@ export default function Home() {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
             setUser(cached.user || { name: 'User', email: '', nickname: 'User' });
+            const cachedMeds = await readMedicationCache<any[]>(cached.user);
+            if (cachedMeds) {
+              setQuickStatus((prev) => ({
+                ...prev,
+                medicationsLeft: cachedMeds.filter((med) => med?.reminder !== false).length,
+                medicationsTotal: cachedMeds.length,
+              }));
+            }
             setOfflineMode(true);
             clearTimeout(safetyTimeout);
             setLoading(false);
@@ -721,6 +737,12 @@ export default function Home() {
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
           <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+        </View>
+      ) : null}
+      {pendingSyncCount > 0 ? (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="sync-outline" size={15} color="#1E3A8A" />
+          <Text style={styles.offlineBannerText}>{pendingSyncCount} changes waiting to sync.</Text>
         </View>
       ) : null}
 

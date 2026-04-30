@@ -11,6 +11,7 @@ class Medication extends Model
 
     protected $fillable = [
         'user_id',
+        'client_uuid',
         'name',
         'dosage',
         'times',
@@ -24,6 +25,7 @@ class Medication extends Model
         'color',
         'otc_medicine_id',
         'otc_metadata',
+        'client_uuid',
     ];
 
     protected $casts = [

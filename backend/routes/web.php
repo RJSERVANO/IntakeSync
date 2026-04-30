@@ -6,7 +6,7 @@ use App\Http\Controllers\AdminController;
 // Simple API status route for web access
 Route::get('/', function () {
     return response()->json([
-        'message' => 'Aqua API Backend',
+        'message' => 'IntakeSync API Backend',
         'status' => 'active',
         'version' => '1.0.0'
     ]);

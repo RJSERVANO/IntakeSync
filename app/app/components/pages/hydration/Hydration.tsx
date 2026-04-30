@@ -12,6 +12,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import InlineNotice from '../../common/InlineNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { notificationManager } from '../../../../services/notificationManager';
+import { cancelHydrationNotifications, rescheduleHydrationNotifications } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
   calculatePersonalizedHydrationGoal,
@@ -267,6 +268,7 @@ export default function Hydration() {
 
   // Setup hydration reminder when component mounts
   useEffect(() => {
+    void rescheduleHydrationNotifications(goal, 120);
     // Schedule reminder to show every 2 hours while app is open
     const timerId = notificationManager.scheduleHydrationReminder(120, () => {
       const current = totalToday();
@@ -637,6 +639,7 @@ export default function Hydration() {
     const justReachedGoal = newTotal >= goal && oldTotal < goal;
     if (justReachedGoal) {
       await showGoalReachedOnce();
+      await cancelHydrationNotifications();
     }
     
     // Check for overhydration (>150% of goal) - only show modal once per session

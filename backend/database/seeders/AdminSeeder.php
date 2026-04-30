@@ -2,9 +2,8 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
-use Illuminate\Database\Seeder;
 use App\Models\User;
+use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 
 class AdminSeeder extends Seeder
@@ -14,19 +13,34 @@ class AdminSeeder extends Seeder
      */
     public function run(): void
     {
-        // Create admin user if doesn't exist
-        $admin = User::where('email', 'admin@aqua.com')->first();
+        $adminEmail = 'admin@aqua.com';
+        $intakeSyncAdminEmail = 'admin@intakesync.local';
+
+        // Keep the existing admin email stable so local logins and reset links keep working.
+        $admin = User::where('email', $adminEmail)->first();
+        $intakeSyncAdmin = User::where('email', $intakeSyncAdminEmail)->first();
+
+        if (!$admin && $intakeSyncAdmin) {
+            $intakeSyncAdmin->forceFill([
+                'email' => $adminEmail,
+                'role' => 'admin',
+                'email_verified_at' => $intakeSyncAdmin->email_verified_at ?? now(),
+            ])->save();
+
+            $this->command->info("Admin user restored: {$adminEmail} / admin123");
+            return;
+        }
         
         if (!$admin) {
             User::create([
                 'name' => 'Admin User',
-                'email' => 'admin@aqua.com',
+                'email' => $adminEmail,
                 'password' => Hash::make('admin123'),
                 'role' => 'admin',
                 'email_verified_at' => now(),
             ]);
             
-            $this->command->info('Admin user created: admin@aqua.com / admin123');
+            $this->command->info("Admin user created: {$adminEmail} / admin123");
         } else {
             $this->command->info('Admin user already exists');
         }

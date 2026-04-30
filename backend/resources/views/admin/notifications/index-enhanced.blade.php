@@ -12,7 +12,7 @@
                 <p class="text-slate-500 mt-2">Monitor notification delivery, engagement, and effectiveness metrics</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" onchange="window.location='{{ route('admin.notifications.index') }}?timeRange=' + this.value">
+                <select id="timeRange" data-base-url="{{ route('admin.notifications.index') }}" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
                     <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
                     <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
                     <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
@@ -413,7 +413,16 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', initCharts);
+    document.addEventListener('DOMContentLoaded', () => {
+        const timeRange = document.getElementById('timeRange');
+        if (timeRange) {
+            timeRange.addEventListener('change', () => {
+                window.location = `${timeRange.dataset.baseUrl}?timeRange=${timeRange.value}`;
+            });
+        }
+
+        initCharts();
+    });
 </script>
 @endpush
 @endsection

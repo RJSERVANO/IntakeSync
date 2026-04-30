@@ -12,7 +12,7 @@
                 <p class="text-slate-500 mt-2">Monitor beverage intake goals, daily fluid logs, and low-intake exceptions</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <select id="timeRange" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition" onchange="window.location='{{ route('admin.hydration.index') }}?timeRange=' + this.value">
+                <select id="timeRange" data-base-url="{{ route('admin.hydration.index') }}" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
                     <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
                     <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
                     <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
@@ -82,6 +82,72 @@
             </div>
         </div>
 
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Beverage Logs</p>
+                <p class="text-3xl font-bold text-slate-900">{{ number_format($totalBeverageLogs) }}</p>
+                <p class="text-xs text-slate-500 mt-2">entries in selected range</p>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Water Share</p>
+                <p class="text-3xl font-bold text-slate-900">{{ $waterShare }}%</p>
+                <p class="text-xs text-slate-500 mt-2">of total logged volume</p>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Caffeine/Sugar Flags</p>
+                <p class="text-3xl font-bold text-slate-900">{{ number_format($awarenessFlags) }}</p>
+                <p class="text-xs text-slate-500 mt-2">medium or high awareness logs</p>
+            </div>
+
+            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Missed Reminders</p>
+                <p class="text-3xl font-bold text-slate-900">{{ number_format($missedReminders) }}</p>
+                <p class="text-xs text-slate-500 mt-2">reported by hydration reminders</p>
+            </div>
+        </div>
+
+        <!-- IntakeSync Beverage Awareness -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="px-6 py-5 border-b border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-900">Beverage Mix</h3>
+                    <p class="text-slate-500 text-sm">Volume and log counts by IntakeSync category</p>
+                </div>
+                <div class="divide-y divide-slate-100">
+                    @forelse($beverageBreakdown as $item)
+                    <div class="px-6 py-4 flex items-center justify-between gap-4">
+                        <div>
+                            <p class="font-semibold text-slate-900">{{ $item['label'] }}</p>
+                            <p class="text-xs text-slate-500">{{ number_format($item['log_count']) }} logs</p>
+                        </div>
+                        <p class="text-sm font-bold text-slate-700">{{ number_format($item['total_ml']) }} ml</p>
+                    </div>
+                    @empty
+                    <div class="px-6 py-8 text-center text-sm text-slate-400">No beverage logs in this range</div>
+                    @endforelse
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="px-6 py-5 border-b border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-900">Log Sources</h3>
+                    <p class="text-slate-500 text-sm">Manual, quick add, custom, and reminder-driven entries</p>
+                </div>
+                <div class="divide-y divide-slate-100">
+                    @forelse($sourceBreakdown as $item)
+                    <div class="px-6 py-4 flex items-center justify-between gap-4">
+                        <p class="font-semibold text-slate-900">{{ $item['label'] }}</p>
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">{{ number_format($item['log_count']) }} logs</span>
+                    </div>
+                    @empty
+                    <div class="px-6 py-8 text-center text-sm text-slate-400">No source data in this range</div>
+                    @endforelse
+                </div>
+            </div>
+        </div>
+
         <!-- At-Risk Users Table -->
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
             <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
@@ -120,7 +186,7 @@
                                 <div class="flex items-center gap-2">
                                     <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-red-100 text-red-800">{{ $user['percentage'] }}%</span>
                                     <div class="w-12 h-2 bg-slate-200 rounded-full">
-                                        <div class="bg-red-600 h-2 rounded-full" style="width: {{ $user['percentage'] }}%"></div>
+                                        <div class="bg-red-600 h-2 rounded-full progress-width" data-width="{{ min($user['percentage'], 100) }}"></div>
                                     </div>
                                 </div>
                             </td>
@@ -171,6 +237,52 @@
         </div>
 
         <!-- Low Intake Entries Table -->
+        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
+            <div class="px-6 py-5 border-b border-slate-100">
+                <h3 class="text-lg font-bold text-slate-900">Recent Beverage Logs</h3>
+                <p class="text-slate-500 text-sm">Latest IntakeSync logs with category, source, caffeine, and sugar context</p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-slate-50 border-b border-slate-100">
+                        <tr>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Time</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">User</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Drink</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Amount</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Sugar</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Caffeine</th>
+                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        @forelse($recentBeverageEntries as $entry)
+                        <tr class="hover:bg-slate-50 transition-colors">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{{ $entry['created_at']->format('M d, g:i A') }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <a href="{{ route('admin.users.show', $entry['user_id']) }}" class="font-medium text-blue-600 hover:text-blue-800">{{ $entry['user_name'] }}</a>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <p class="font-medium text-slate-900">{{ $entry['beverage_label'] }}</p>
+                                <p class="text-xs text-slate-500">{{ $entry['beverage_type'] }}</p>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-slate-900">{{ number_format($entry['amount_ml']) }} ml</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{{ $entry['sugar_level'] }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{{ $entry['caffeine_level'] }}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{{ $entry['source'] }}</td>
+                        </tr>
+                        @empty
+                        <tr>
+                            <td colspan="7" class="px-6 py-8 text-center text-slate-400">
+                                <p class="text-sm">No recent beverage logs found</p>
+                            </td>
+                        </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div class="px-6 py-5 border-b border-slate-100">
                 <h3 class="text-lg font-bold text-slate-900">Low Intake Exceptions</h3>
@@ -227,14 +339,47 @@
 @push('scripts')
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <!-- htmlhint attr-unsafe-chars:false -->
+<template id="hydrationChartData">@json($chartData)</template>
 <script>
     let goalVsActualChart, weeklyTrendChart;
 
+    function readJsonTemplate(id) {
+        const template = document.getElementById(id);
+        if (!template) {
+            return [];
+        }
+
+        try {
+            return JSON.parse(template.textContent || '[]');
+        } catch (error) {
+            console.error(`Invalid chart data in ${id}`, error);
+            return [];
+        }
+    }
+
+    function initDynamicStyles() {
+        document.querySelectorAll('.progress-width[data-width]').forEach((bar) => {
+            const width = Number(bar.getAttribute('data-width'));
+            const boundedWidth = Number.isFinite(width) ? Math.max(0, Math.min(width, 100)) : 0;
+            bar.style.width = `${boundedWidth}%`;
+        });
+
+        const timeRange = document.getElementById('timeRange');
+        if (timeRange) {
+            timeRange.addEventListener('change', () => {
+                const url = new URL(timeRange.dataset.baseUrl || window.location.href, window.location.origin);
+                url.searchParams.set('timeRange', timeRange.value);
+                window.location.href = url.toString();
+            });
+        }
+    }
+
     function initCharts() {
+        const chartData = readJsonTemplate('hydrationChartData');
+
         // Goal vs Actual Chart
         const goalCtx = document.getElementById('goalVsActualChart');
         if (goalCtx) {
-            const chartData = @json($chartData);
             goalVsActualChart = new Chart(goalCtx.getContext('2d'), {
                 type: 'bar',
                 data: {
@@ -289,7 +434,6 @@
         // Weekly Trend Chart
         const weeklyCtx = document.getElementById('weeklyTrendChart');
         if (weeklyCtx) {
-            const chartData = @json($chartData);
             weeklyTrendChart = new Chart(weeklyCtx.getContext('2d'), {
                 type: 'line',
                 data: {
@@ -340,7 +484,10 @@
         }
     }
 
-    document.addEventListener('DOMContentLoaded', initCharts);
+    document.addEventListener('DOMContentLoaded', () => {
+        initDynamicStyles();
+        initCharts();
+    });
 </script>
 @endpush
 @endsection

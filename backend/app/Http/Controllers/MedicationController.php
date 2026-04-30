@@ -35,10 +35,27 @@ class MedicationController extends Controller
             'color' => 'nullable|string|max:7',
             'otc_medicine_id' => 'nullable|integer',
             'otc_metadata' => 'nullable|array',
+            'client_uuid' => 'nullable|string|max:191',
+            'local_id' => 'nullable|string|max:191',
         ], [
             'start_date.after_or_equal' => 'Start date cannot be in the past. Please select today or a future date.',
             'end_date.after_or_equal' => 'End date cannot be before the start date.',
         ]);
+
+        $clientUuid = $data['client_uuid'] ?? $data['local_id'] ?? null;
+        unset($data['local_id']);
+
+        if ($clientUuid) {
+            $existing = Medication::where('user_id', $user->id)
+                ->where('client_uuid', $clientUuid)
+                ->first();
+
+            if ($existing) {
+                return response()->json($existing, 200);
+            }
+
+            $data['client_uuid'] = $clientUuid;
+        }
 
         $data['user_id'] = $user->id;
 
@@ -78,6 +95,8 @@ class MedicationController extends Controller
             'color' => 'nullable|string|max:7',
             'otc_medicine_id' => 'nullable|integer',
             'otc_metadata' => 'nullable|array',
+            'client_uuid' => 'nullable|string|max:191',
+            'local_id' => 'nullable|string|max:191',
         ], [
             'end_date.after_or_equal' => 'End date cannot be before the start date.',
         ]);
@@ -95,6 +114,7 @@ class MedicationController extends Controller
             }
         }
 
+        unset($data['local_id'], $data['client_uuid']);
         $medication->update($data);
         Log::debug('Medication updated', ['medication_id' => $medication->id]);
         return response()->json($medication);
@@ -122,7 +142,20 @@ class MedicationController extends Controller
         $data = $request->validate([
             'status' => 'required|string',
             'time' => 'required|date',
+            'client_uuid' => 'nullable|string|max:191',
+            'local_id' => 'nullable|string|max:191',
         ]);
+
+        $clientUuid = $data['client_uuid'] ?? $data['local_id'] ?? null;
+        if ($clientUuid) {
+            $existingByClient = MedicationHistory::where('user_id', $user->id)
+                ->where('client_uuid', $clientUuid)
+                ->first();
+
+            if ($existingByClient) {
+                return response()->json($existingByClient, 200);
+            }
+        }
 
         Log::info('addHistory called', [
             'user_id' => $user->id,
@@ -179,6 +212,7 @@ class MedicationController extends Controller
         $hist = MedicationHistory::create([
             'medication_id' => $medication->id,
             'user_id' => $user->id,
+            'client_uuid' => $clientUuid,
             'status' => $data['status'],
             'time' => $scheduledTime,
             'scheduled_time' => $scheduledTime,

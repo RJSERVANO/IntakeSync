@@ -5,6 +5,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';
+import { enqueueSyncAction, mergeLatestPendingAction } from '../services/syncQueue';
+import { getCachedSession, updateCachedUser } from '../services/offlineStorage';
 import InlineNotice from './components/common/InlineNotice';
 
 const { height } = Dimensions.get('window');
@@ -185,6 +187,9 @@ export default function Onboarding() {
           await api.put('/onboarding/update', buildOnboardingPayload(), token);
         } catch (err) {
           console.log('Error saving onboarding data:', err);
+          if (api.isNetworkError(err)) {
+            await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', buildOnboardingPayload());
+          }
         }
       }
       setCurrentStep(currentStep + 1);
@@ -221,6 +226,10 @@ export default function Onboarding() {
       setCurrentStep(currentStep + 1);
     } catch (err) {
       console.log('Notification permission request failed:', err);
+      await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', {
+        ...buildOnboardingPayload(),
+        notification_permissions_accepted: false,
+      });
       showNotice('warning', 'Notifications Not Enabled', 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try again later from Notification Settings.');
       updateData('notification_permissions_accepted', false);
       setCurrentStep(currentStep + 1);
@@ -236,6 +245,12 @@ export default function Onboarding() {
       }, token);
     } catch (err) {
       console.log('Error saving reminder preference:', err);
+      if (api.isNetworkError(err)) {
+        await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', {
+          ...buildOnboardingPayload(),
+          notification_permissions_accepted: false,
+        });
+      }
     } finally {
       setCurrentStep(currentStep + 1);
     }
@@ -271,12 +286,26 @@ export default function Onboarding() {
           // Continue even if update fails
         }
       }
-      // Mark onboarding as complete
-      await api.post(
-        '/onboarding/complete',
-        { daily_hydration_goal: calculatePersonalizedHydrationGoal(getPayloadData()) },
-        token
-      );
+      try {
+        await api.post(
+          '/onboarding/complete',
+          { daily_hydration_goal: calculatePersonalizedHydrationGoal(getPayloadData()) },
+          token
+        );
+      } catch (completeErr: any) {
+        if (!api.isNetworkError(completeErr)) throw completeErr;
+        const cached = await getCachedSession();
+        if (!cached?.token) throw completeErr;
+        const payload = buildOnboardingPayload();
+        await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', payload);
+        await enqueueSyncAction({
+          action_type: 'UPDATE_PROFILE',
+          method: 'PUT',
+          local_id: 'profile',
+          payload: { ...payload, onboarding_completed: true },
+        });
+        await updateCachedUser({ ...(cached.user || {}), ...payload, onboarding_completed: true }, cached.token);
+      }
       router.replace({ pathname: '/home', params: { token } } as any);
     } catch (err: any) {
       console.log('Error completing onboarding:', err);

@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { notificationService } from '../../../../services/notificationService';
+import { cancelHydrationNotifications, notificationService } from '../../../../services/notificationService';
 import { get, post } from '../../../api';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
@@ -92,6 +92,8 @@ export default function NotificationSettings() {
     setPrefs(next);
     try {
       await persist(next);
+      if (key === 'hydrationReminders' && !value) await cancelHydrationNotifications();
+      if (key === 'allowNotifications' && !next.allowNotifications) await notificationService.cancelAllNotifications();
     } catch (error) {
       console.log('Notification settings save error:', error);
       setPrefs(previous);

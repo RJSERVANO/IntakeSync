@@ -5,6 +5,8 @@ import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import { mergeLatestPendingAction } from '../../../../services/syncQueue';
+import { writeProfileCache } from '../../../../services/offlineStorage';
 
 interface Props {
   visible: boolean;
@@ -101,11 +103,19 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         hydration_goal: hydrationGoal,
       };
 
-      const resp = await api.put('/me', payload, token as string);
-      const updated = resp?.user ? { ...(user || {}), ...(resp.user || {}) } : { ...(user || {}), ...payload };
+      let updated = { ...(user || {}), ...payload };
+      try {
+        const resp = await api.put('/me', payload, token as string);
+        updated = resp?.user ? { ...(user || {}), ...(resp.user || {}) } : updated;
+      } catch (err: any) {
+        if (!api.isNetworkError(err)) throw err;
+        await mergeLatestPendingAction('UPDATE_PROFILE', 'profile', payload);
+        setNotice({ type: 'info', title: 'Saved Offline', message: 'Profile saved offline. Will sync when connected.' });
+      }
+      await writeProfileCache(updated);
       onSaved(updated);
       onClose();
-      setNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
+      if (!notice) setNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
     } catch (err: any) {
       console.error('EditProfileModal saveChanges', err);
       setNotice({ type: 'error', title: 'Update Failed', message: err.data?.message || err.message || 'We could not save your changes. Please try again.' });

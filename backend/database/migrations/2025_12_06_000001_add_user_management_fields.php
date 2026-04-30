@@ -43,24 +43,6 @@ return new class extends Migration
             $table->index('user_id');
             $table->index('created_at');
         });
-
-        // Create subscription transactions table
-        Schema::create('subscription_transactions', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('user_id')->constrained()->onDelete('cascade');
-            $table->foreignId('subscription_id')->nullable()->constrained()->onDelete('set null');
-            $table->decimal('amount', 10, 2);
-            $table->string('currency')->default('PHP');
-            $table->string('payment_method'); // admin_grant, credit_card, etc.
-            $table->string('transaction_id')->unique();
-            $table->string('status'); // completed, pending, failed
-            $table->boolean('auto_renewal')->default(false);
-            $table->text('notes')->nullable();
-            $table->timestamps();
-
-            $table->index('user_id');
-            $table->index('created_at');
-        });
     }
 
     /**
@@ -68,7 +50,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('subscription_transactions');
         Schema::dropIfExists('user_activity_logs');
 
         Schema::table('users', function (Blueprint $table) {

@@ -14,9 +14,11 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
-import { getCachedSession } from '../../../../services/offlineStorage';
+import { getCachedSession, readNotificationsCache, writeNotificationsCache } from '../../../../services/offlineStorage';
+import { enqueueSyncAction, processSyncQueue } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
+import InlineNotice from '../../common/InlineNotice';
 
 type NotificationType = 'hydration' | 'medication' | 'general';
 type NotificationStatus =
@@ -142,6 +144,13 @@ export default function Activity() {
   const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
   const [noticeModal, setNoticeModal] = useState<{ title: string; message: string } | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!inlineNotice) return;
+    const timer = setTimeout(() => setInlineNotice(null), 2400);
+    return () => clearTimeout(timer);
+  }, [inlineNotice]);
 
   useEffect(() => {
     let mounted = true;
@@ -211,14 +220,18 @@ export default function Activity() {
   const loadNotifications = useCallback(async () => {
     if (!token) return;
     try {
+      await processSyncQueue(token);
       const [notificationRes, statsRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
         get('/notifications/stats', token, 5000).catch(() => null),
         get('/medications/upcoming', token, 5000).catch(() => []),
       ]);
-      setNotifications(normalizeNotifications(notificationRes));
+      const normalized = normalizeNotifications(notificationRes);
+      const fallback = normalizeMedicationFallbacks(medicationRes);
+      setNotifications(normalized);
       setStats(statsRes || null);
-      setMedicationFallbacks(normalizeMedicationFallbacks(medicationRes));
+      setMedicationFallbacks(fallback);
+      await writeNotificationsCache({ notifications: normalized, stats: statsRes || null, medicationFallbacks: fallback });
       setError(null);
       setOfflineMode(false);
     } catch (err) {
@@ -229,11 +242,21 @@ export default function Activity() {
       if (isNetworkError(err)) {
         setOfflineMode(true);
         setError('Offline mode - changes will sync when connected.');
+        const cached = await readNotificationsCache<any>();
+        if (cached) {
+          setNotifications(cached.notifications || []);
+          setStats(cached.stats || null);
+          setMedicationFallbacks(cached.medicationFallbacks || []);
+        }
         return;
       }
       setError(getErrorMessage(err, 'Could not load notifications from the backend.'));
     }
   }, [normalizeMedicationFallbacks, normalizeNotifications, router, token]);
+
+  const cacheCurrentNotifications = useCallback(async (nextNotifications: NotificationItem[], nextStats = stats) => {
+    await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks });
+  }, [medicationFallbacks, stats]);
 
   useFocusEffect(
     useCallback(() => {
@@ -253,44 +276,81 @@ export default function Activity() {
   }, [loadNotifications]);
 
   const markOneRead = useCallback(async (item: NotificationItem) => {
+    const openedAt = new Date().toISOString();
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, opened_at: openedAt, read_at: current.read_at || openedAt } : current);
+    setNotifications(nextNotifications);
+    await cacheCurrentNotifications(nextNotifications);
     try {
-      await put(`/notifications/${item.id}`, { opened_at: new Date().toISOString() }, token);
-      setSelectedNotification(prev => (prev?.id === item.id ? { ...prev, opened_at: new Date().toISOString() } : prev));
+      await put(`/notifications/${item.id}`, { opened_at: openedAt }, token);
+      setSelectedNotification(prev => (prev?.id === item.id ? { ...prev, opened_at: openedAt } : prev));
       await loadNotifications();
     } catch (err) {
-      setNoticeModal({ title: 'Could not mark read', message: getErrorMessage(err, 'Please try again.') });
+      if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'MARK_NOTIFICATION_READ', method: 'PUT', local_id: String(item.id), payload: { notification_id: item.id, opened_at: openedAt } });
+        setOfflineMode(true);
+        setInlineNotice('Saved offline. Will sync when connected.');
+      } else {
+        setNoticeModal({ title: 'Could not mark read', message: getErrorMessage(err, 'Please try again.') });
+      }
     }
-  }, [loadNotifications, token]);
+  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const completeNotification = useCallback(async (item: NotificationItem) => {
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'completed' as const } : current);
+    setNotifications(nextNotifications);
+    setSelectedNotification(null);
+    await cacheCurrentNotifications(nextNotifications);
     try {
       await post(`/notifications/${item.id}/complete`, {}, token);
-      setSelectedNotification(null);
       await loadNotifications();
     } catch (err) {
-      setNoticeModal({ title: 'Could not complete', message: getErrorMessage(err, 'Please try again.') });
+      if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'COMPLETE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id } });
+        setOfflineMode(true);
+        setInlineNotice('Saved offline. Will sync when connected.');
+      } else {
+        setNoticeModal({ title: 'Could not complete', message: getErrorMessage(err, 'Please try again.') });
+      }
     }
-  }, [loadNotifications, token]);
+  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const snoozeNotification = useCallback(async (item: NotificationItem) => {
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'snoozed' as const } : current);
+    setNotifications(nextNotifications);
+    setSelectedNotification(null);
+    await cacheCurrentNotifications(nextNotifications);
     try {
       await post(`/notifications/${item.id}/snooze`, { minutes: 10 }, token);
-      setSelectedNotification(null);
       await loadNotifications();
     } catch (err) {
-      setNoticeModal({ title: 'Could not snooze', message: getErrorMessage(err, 'Please try again.') });
+      if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'SNOOZE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id, minutes: 10 } });
+        setOfflineMode(true);
+        setInlineNotice('Saved offline. Will sync when connected.');
+      } else {
+        setNoticeModal({ title: 'Could not snooze', message: getErrorMessage(err, 'Please try again.') });
+      }
     }
-  }, [loadNotifications, token]);
+  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const clearNotification = useCallback(async (item: NotificationItem) => {
+    const nextNotifications = notifications.filter((current) => current.id !== item.id);
+    setNotifications(nextNotifications);
+    setSelectedNotification(null);
+    await cacheCurrentNotifications(nextNotifications);
     try {
       await del(`/notifications/${item.id}`, token);
-      setSelectedNotification(null);
       await loadNotifications();
     } catch (err) {
-      setNoticeModal({ title: 'Could not clear', message: getErrorMessage(err, 'Please try again.') });
+      if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'CLEAR_NOTIFICATION', method: 'DELETE', local_id: String(item.id), payload: { notification_id: item.id } });
+        setOfflineMode(true);
+        setInlineNotice('Saved offline. Will sync when connected.');
+      } else {
+        setNoticeModal({ title: 'Could not clear', message: getErrorMessage(err, 'Please try again.') });
+      }
     }
-  }, [loadNotifications, token]);
+  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const alertNotifications = useMemo(
     () => notifications.filter(item => isAlertStatus(item.status) || (isUnread(item) && isAlertStatus(item.status))),
@@ -600,6 +660,7 @@ export default function Activity() {
         onPrimary={() => setNoticeModal(null)}
         onClose={() => setNoticeModal(null)}
       />
+      <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
 
       <BottomNavigation currentRoute="notification" />
     </SafeAreaView>

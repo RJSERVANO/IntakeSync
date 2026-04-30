@@ -14,10 +14,12 @@ class MedicationHistory extends Model
     protected $fillable = [
         'medication_id',
         'user_id',
+        'client_uuid',
         'status',
         'scheduled_time',
         'taken_time',
         'time',
+        'client_uuid',
     ];
 
     protected $casts = [

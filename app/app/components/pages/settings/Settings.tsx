@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { getCachedSession } from '../../../../services/offlineStorage';
+import { processSyncQueue } from '../../../../services/syncQueue';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 
 type SettingPrefs = {
@@ -56,6 +57,7 @@ export default function Settings() {
       if (session?.token) {
         setCachedToken(session.token);
         setOfflineMode(true);
+        processSyncQueue(session.token).catch(() => {});
       } else {
         router.replace('/login');
       }

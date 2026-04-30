@@ -4,7 +4,7 @@
     <div class="flex items-center justify-between p-6 border-b border-slate-800">
         <div x-show="!collapsed" class="flex items-center gap-3 transition-opacity duration-200">
             <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white text-lg shadow-lg">
-                A
+                I
             </div>
             <div>
                 <h1 class="text-lg font-bold text-white tracking-tight">IntakeSync</h1>
@@ -121,7 +121,7 @@
                     <div class="flex h-full flex-col overflow-y-auto bg-slate-900 shadow-xl">
                         <div class="flex items-center justify-between px-6 py-6 border-b border-slate-800">
                             <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white text-lg shadow-lg">A</div>
+                                <div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white text-lg shadow-lg">I</div>
                                 <div>
                                     <h2 class="text-lg font-bold text-white tracking-tight">IntakeSync</h2>
                                     <p class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Admin Panel</p>

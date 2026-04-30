@@ -15,11 +15,14 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
 const HYDRATION_SOUND = 'hydration_reminder.wav';
 const MEDICATION_SOUND = 'medication_reminder.wav';
+const SCHEDULED_REFS_KEY = '@intakesync:scheduled_notification_refs';
+const PERMISSION_ASKED_KEY = '@intakesync:notification_permission_asked';
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
@@ -57,11 +60,11 @@ function getNotifications(): typeof ExpoNotifications | null {
     notificationsModule = require('expo-notifications');
     notificationsModule?.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowAlert: false,
-        shouldPlaySound: false,
-        shouldSetBadge: !isExpoGo, // Badge might not work in Expo Go
-        shouldShowBanner: false,
-        shouldShowList: false,
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
       }),
     });
     return notificationsModule;
@@ -79,8 +82,19 @@ export interface NotificationData {
   type: 'hydration' | 'medication';
   id?: string;
   medicationId?: string;
+  doseKey?: string;
+  scheduledAt?: string;
+  suggestedAmount?: number;
   amount?: number;
   [key: string]: any;
+}
+
+export interface ScheduledNotificationRef {
+  medicationId?: string;
+  doseKey: string;
+  notificationId: string;
+  type: 'medication' | 'hydration';
+  scheduledAt: string;
 }
 
 class NotificationService {
@@ -168,6 +182,9 @@ class NotificationService {
       let finalStatus = existingStatus;
 
       if (existingStatus !== 'granted') {
+        const asked = await AsyncStorage.getItem(PERMISSION_ASKED_KEY);
+        if (asked === '1') return false;
+        await AsyncStorage.setItem(PERMISSION_ASKED_KEY, '1');
         const { status } = await Notifications.requestPermissionsAsync();
         finalStatus = status;
       }
@@ -277,7 +294,6 @@ class NotificationService {
     backendNotificationId?: string
   ): Promise<void> {
     try {
-      // Cancel existing notifications for this medication
       await this.cancelMedicationNotifications(medicationId);
 
       for (const timeStr of times) {
@@ -304,12 +320,21 @@ class NotificationService {
           {
             type: 'medication',
             medicationId,
+            doseKey: `${medicationId}:${triggerDate.getHours()}:${triggerDate.getMinutes()}`,
+            scheduledAt: triggerDate.toISOString(),
             id: backendNotificationId,
           }
         );
 
-        if (notificationId && backendNotificationId) {
-          this.scheduledNotifications.set(backendNotificationId, notificationId);
+        if (notificationId) {
+          if (backendNotificationId) this.scheduledNotifications.set(backendNotificationId, notificationId);
+          await saveScheduledNotificationRef({
+            type: 'medication',
+            medicationId,
+            doseKey: `${medicationId}:${triggerDate.getHours()}:${triggerDate.getMinutes()}`,
+            notificationId,
+            scheduledAt: triggerDate.toISOString(),
+          });
         }
       }
     } catch (error) {
@@ -335,12 +360,21 @@ class NotificationService {
         {
           type: 'hydration',
           amount: amountMl,
+          suggestedAmount: amountMl,
+          doseKey: `hydration:${nextReminder.toISOString().slice(0, 16)}`,
+          scheduledAt: nextReminder.toISOString(),
           id: backendNotificationId,
         }
       );
 
-      if (notificationId && backendNotificationId) {
-        this.scheduledNotifications.set(backendNotificationId, notificationId);
+      if (notificationId) {
+        if (backendNotificationId) this.scheduledNotifications.set(backendNotificationId, notificationId);
+        await saveScheduledNotificationRef({
+          type: 'hydration',
+          doseKey: `hydration:${nextReminder.toISOString().slice(0, 16)}`,
+          notificationId,
+          scheduledAt: nextReminder.toISOString(),
+        });
       }
     } catch (error) {
       console.error('Error scheduling hydration reminder:', error);
@@ -394,6 +428,7 @@ class NotificationService {
       }
 
       await Notifications.cancelScheduledNotificationAsync(notificationId);
+      await removeScheduledNotificationRef(notificationId);
     } catch (error) {
       console.error('Error canceling notification:', error);
     }
@@ -415,8 +450,11 @@ class NotificationService {
         const data = notification.content.data as NotificationData;
         if (data?.medicationId === medicationId) {
           await Notifications.cancelScheduledNotificationAsync(notification.identifier);
+          await removeScheduledNotificationRef(notification.identifier);
         }
       }
+      const refs = await getScheduledNotificationRefs();
+      await writeScheduledNotificationRefs(refs.filter((ref) => ref.medicationId !== medicationId));
     } catch (error) {
       console.error('Error canceling medication notifications:', error);
     }
@@ -435,6 +473,7 @@ class NotificationService {
 
       await Notifications.cancelAllScheduledNotificationsAsync();
       this.scheduledNotifications.clear();
+      await writeScheduledNotificationRefs([]);
     } catch (error) {
       console.error('Error canceling all notifications:', error);
     }
@@ -513,5 +552,69 @@ export async function scheduleReminderInSeconds(title: string, body: string, sec
 
 export async function scheduleDailyReminder(title: string, body: string, hour: number, minute: number) {
   return notificationService.scheduleRecurringNotification(title, body, hour, minute);
+}
+
+async function writeScheduledNotificationRefs(refs: ScheduledNotificationRef[]) {
+  try {
+    await AsyncStorage.setItem(SCHEDULED_REFS_KEY, JSON.stringify(refs));
+  } catch {}
+}
+
+export async function getScheduledNotificationRefs(): Promise<ScheduledNotificationRef[]> {
+  try {
+    const raw = await AsyncStorage.getItem(SCHEDULED_REFS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveScheduledNotificationRef(ref: ScheduledNotificationRef) {
+  const refs = await getScheduledNotificationRefs();
+  const next = refs.filter((item) => !(item.type === ref.type && item.doseKey === ref.doseKey && item.medicationId === ref.medicationId));
+  next.push(ref);
+  await writeScheduledNotificationRefs(next);
+}
+
+async function removeScheduledNotificationRef(notificationId: string) {
+  const refs = await getScheduledNotificationRefs();
+  await writeScheduledNotificationRefs(refs.filter((ref) => ref.notificationId !== notificationId));
+}
+
+export async function cancelNotificationByRef(ref: ScheduledNotificationRef) {
+  await notificationService.cancelNotification(ref.notificationId);
+}
+
+export async function cancelMedicationNotifications(medicationId: string) {
+  await notificationService.cancelMedicationNotifications(medicationId);
+}
+
+export async function cancelHydrationNotifications() {
+  const refs = await getScheduledNotificationRefs();
+  await Promise.all(refs.filter((ref) => ref.type === 'hydration').map((ref) => notificationService.cancelNotification(ref.notificationId)));
+  await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'hydration'));
+}
+
+export async function clearStaleNotificationRefs() {
+  const scheduled = await notificationService.getAllScheduledNotifications();
+  const scheduledIds = new Set(scheduled.map((item) => item.identifier));
+  const refs = await getScheduledNotificationRefs();
+  await writeScheduledNotificationRefs(refs.filter((ref) => scheduledIds.has(ref.notificationId)));
+}
+
+export async function rescheduleMedicationNotifications(medications: Array<{ id: string; name: string; dosage?: string; times?: string[]; reminder?: boolean }>) {
+  await clearStaleNotificationRefs();
+  await Promise.all(medications.map((med) => (
+    med.reminder === false
+      ? notificationService.cancelMedicationNotifications(String(med.id))
+      : notificationService.scheduleMedicationNotifications(String(med.id), med.name, med.dosage || '', med.times || [])
+  )));
+}
+
+export async function rescheduleHydrationNotifications(goal = 2000, intervalMinutes = 120) {
+  await cancelHydrationNotifications();
+  const amount = Math.max(150, Math.round(goal / 8));
+  await notificationService.scheduleHydrationReminder(intervalMinutes, amount);
 }
 

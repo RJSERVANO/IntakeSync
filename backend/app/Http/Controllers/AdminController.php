@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
@@ -194,7 +195,12 @@ class AdminController extends Controller
         // Log the user out of all sessions for security
         DB::table('sessions')->where('user_id', $user->id)->delete();
 
-        return redirect()->route('admin.login')->with('status', 'Password reset successful! Please login with your new password.');
+        Auth::logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+        $request->session()->flash('status', 'Password reset successful! Please login with your new password.');
+
+        return new \Illuminate\Http\RedirectResponse(route('admin.login', [], false));
     }
 
     // ===== END PASSWORD RESET METHODS =====
@@ -260,6 +266,10 @@ class AdminController extends Controller
         $recentActivityFeed = $this->getRecentActivityFeed(15);
         $systemHealth = $this->getSystemHealth();
         $hydrationCompliance = $this->getHydrationCompliance(7);
+        $dashboardBeverageBreakdown = $this->getBeverageBreakdown(7);
+        $dashboardWaterShare = $this->getWaterShare(7);
+        $dashboardAwarenessFlags = $this->getHydrationAwarenessFlagCount(7);
+        $dashboardMissedHydrationReminders = $this->getMissedHydrationReminderCount(7);
         $notificationEffectiveness = $this->getNotificationEffectiveness();
         $atRiskUsersCount = $this->getAtRiskHydrationUsers()->count();
 
@@ -275,6 +285,10 @@ class AdminController extends Controller
             'recentActivityFeed',
             'systemHealth',
             'hydrationCompliance',
+            'dashboardAwarenessFlags',
+            'dashboardBeverageBreakdown',
+            'dashboardMissedHydrationReminders',
+            'dashboardWaterShare',
             'notificationEffectiveness',
             'atRiskUsersCount'
         ));
@@ -299,6 +313,33 @@ class AdminController extends Controller
             ->orderBy('created_at', 'desc')
             ->limit(10)
             ->get();
+        $hydrationGoal = $user->hydration_goal ?? 2000;
+        $hydrationTodayTotal = HydrationEntry::where('user_id', $user->id)
+            ->whereDate('created_at', Carbon::today())
+            ->sum('amount_ml');
+        $hydrationTodayProgress = $hydrationGoal > 0 ? round(($hydrationTodayTotal / $hydrationGoal) * 100, 1) : 0;
+        $userBeverageBreakdown = HydrationEntry::where('user_id', $user->id)
+            ->where('created_at', '>=', Carbon::now()->subDays(30))
+            ->selectRaw("CASE WHEN beverage_type IS NULL OR beverage_type = '' THEN 'water' ELSE beverage_type END as beverage_key")
+            ->selectRaw('COUNT(*) as log_count')
+            ->selectRaw('SUM(amount_ml) as total_ml')
+            ->groupBy('beverage_key')
+            ->orderByRaw('SUM(amount_ml) DESC')
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'label' => $this->formatBeverageType($row->beverage_key),
+                    'log_count' => (int) $row->log_count,
+                    'total_ml' => (int) $row->total_ml,
+                ];
+            });
+        $userAwarenessFlags = HydrationEntry::where('user_id', $user->id)
+            ->where('created_at', '>=', Carbon::now()->subDays(30))
+            ->where(function ($query) {
+                $query->whereIn('sugar_level', ['medium', 'high'])
+                    ->orWhereIn('caffeine_level', ['medium', 'high']);
+            })
+            ->count();
 
         $medications = Medication::where('user_id', $user->id)
             ->where('active', true)
@@ -327,13 +368,18 @@ class AdminController extends Controller
         return view('admin.users.show', compact(
             'user',
             'hydrationEntries',
+            'hydrationGoal',
+            'hydrationTodayProgress',
+            'hydrationTodayTotal',
             'medications',
             'medicationHistory',
             'notifications',
             'totalHydrationEntries',
             'totalMedicationEntries',
             'totalNotifications',
-            'recentActivity'
+            'recentActivity',
+            'userAwarenessFlags',
+            'userBeverageBreakdown'
         ));
     }
 
@@ -503,6 +549,13 @@ class AdminController extends Controller
         $goalAchievement = $compliance['compliance_rate'];
 
         $atRiskUsers = $this->getAtRiskHydrationUsers();
+        $beverageBreakdown = $this->getBeverageBreakdown($timeRange);
+        $sourceBreakdown = $this->getHydrationSourceBreakdown($timeRange);
+        $recentBeverageEntries = $this->getRecentBeverageEntries($timeRange);
+        $missedReminders = $this->getMissedHydrationReminderCount($timeRange);
+        $totalBeverageLogs = HydrationEntry::where('created_at', '>=', Carbon::now()->subDays($timeRange))->count();
+        $waterShare = $this->getWaterShare($timeRange);
+        $awarenessFlags = $this->getHydrationAwarenessFlagCount($timeRange);
 
         $averageGoal = User::where('role', '!=', 'admin')
             ->where('status', 'active')
@@ -530,9 +583,16 @@ class AdminController extends Controller
             'avgDailyIntake',
             'goalAchievement',
             'atRiskUsers',
+            'awarenessFlags',
+            'beverageBreakdown',
             'chartData',
             'lowIntakeEntries',
+            'missedReminders',
+            'recentBeverageEntries',
+            'sourceBreakdown',
             'timeRange',
+            'totalBeverageLogs',
+            'waterShare',
             'userType'
         ));
     }
@@ -829,6 +889,7 @@ class AdminController extends Controller
 
         $users = User::with('hydrationEntries')
             ->where('status', 'active')
+            ->where('role', '!=', 'admin')
             ->get()
             ->filter(function ($user) use ($weekAgo) {
                 $entries = $user->hydrationEntries()
@@ -1162,7 +1223,10 @@ class AdminController extends Controller
         $startDate = Carbon::now()->subDays($days);
         $users = User::with(['hydrationEntries' => function ($query) use ($startDate) {
             $query->where('created_at', '>=', $startDate);
-        }])->where('status', 'active')->get();
+        }])
+            ->where('status', 'active')
+            ->where('role', '!=', 'admin')
+            ->get();
 
         $avgComplianceRate = 0;
         if ($users->count() > 0) {
@@ -1193,6 +1257,129 @@ class AdminController extends Controller
             }),
             'total_users' => $users->count(),
         ];
+    }
+
+    private function getBeverageBreakdown($days)
+    {
+        return HydrationEntry::query()
+            ->where('created_at', '>=', Carbon::now()->subDays($days))
+            ->selectRaw("CASE WHEN beverage_type IS NULL OR beverage_type = '' THEN 'water' ELSE beverage_type END as beverage_key")
+            ->selectRaw('COUNT(*) as log_count')
+            ->selectRaw('SUM(amount_ml) as total_ml')
+            ->groupBy('beverage_key')
+            ->orderByRaw('SUM(amount_ml) DESC')
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'type' => $row->beverage_key,
+                    'label' => $this->formatBeverageType($row->beverage_key),
+                    'log_count' => (int) $row->log_count,
+                    'total_ml' => (int) $row->total_ml,
+                ];
+            });
+    }
+
+    private function getHydrationSourceBreakdown($days)
+    {
+        return HydrationEntry::query()
+            ->where('created_at', '>=', Carbon::now()->subDays($days))
+            ->selectRaw("CASE WHEN source IS NULL OR source = '' THEN 'manual' ELSE source END as source_key")
+            ->selectRaw('COUNT(*) as log_count')
+            ->groupBy('source_key')
+            ->orderByDesc('log_count')
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'source' => $row->source_key,
+                    'label' => Str::headline($row->source_key),
+                    'log_count' => (int) $row->log_count,
+                ];
+            });
+    }
+
+    private function getWaterShare($days): float
+    {
+        $since = Carbon::now()->subDays($days);
+        $totalBeverageVolume = HydrationEntry::where('created_at', '>=', $since)->sum('amount_ml');
+        $waterVolume = HydrationEntry::where('created_at', '>=', $since)
+            ->where(function ($query) {
+                $query->where('beverage_type', 'water')->orWhereNull('beverage_type');
+            })
+            ->sum('amount_ml');
+
+        return $totalBeverageVolume > 0 ? round(($waterVolume / $totalBeverageVolume) * 100, 1) : 0;
+    }
+
+    private function getHydrationAwarenessFlagCount($days): int
+    {
+        return HydrationEntry::where('created_at', '>=', Carbon::now()->subDays($days))
+            ->where(function ($query) {
+                $query->whereIn('sugar_level', ['medium', 'high'])
+                    ->orWhereIn('caffeine_level', ['medium', 'high']);
+            })
+            ->count();
+    }
+
+    private function getRecentBeverageEntries($days)
+    {
+        return HydrationEntry::with('user')
+            ->where('created_at', '>=', Carbon::now()->subDays($days))
+            ->orderByDesc('created_at')
+            ->limit(12)
+            ->get()
+            ->map(function (HydrationEntry $entry) {
+                return [
+                    'user_id' => $entry->user_id,
+                    'user_name' => $entry->user->name ?? 'Unknown User',
+                    'amount_ml' => (int) $entry->amount_ml,
+                    'beverage_label' => $entry->drink_label ?: $this->formatBeverageType($entry->beverage_type ?: 'water'),
+                    'beverage_type' => $this->formatBeverageType($entry->beverage_type ?: 'water'),
+                    'source' => Str::headline($entry->source ?: 'manual'),
+                    'sugar_level' => $this->formatHydrationLevel($entry->sugar_level ?: 'none'),
+                    'caffeine_level' => $this->formatHydrationLevel($entry->caffeine_level ?: 'none'),
+                    'created_at' => $entry->created_at,
+                ];
+            });
+    }
+
+    private function getMissedHydrationReminderCount($days): int
+    {
+        $since = Carbon::now()->subDays($days);
+        $count = 0;
+
+        foreach (Storage::files('hydration') as $file) {
+            $data = json_decode(Storage::get($file), true);
+            if (!is_array($data)) {
+                continue;
+            }
+
+            foreach (($data['missed'] ?? []) as $timestamp) {
+                try {
+                    if (Carbon::parse($timestamp)->greaterThanOrEqualTo($since)) {
+                        $count++;
+                    }
+                } catch (\Throwable $exception) {
+                    // Ignore malformed legacy timestamps.
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    private function formatBeverageType(?string $type): string
+    {
+        return match ($type) {
+            'sugar_sweetened' => 'Sugar Sweetened',
+            'caffeinated' => 'Caffeinated',
+            'other_non_alcoholic' => 'Other Non-Alcoholic',
+            default => 'Water',
+        };
+    }
+
+    private function formatHydrationLevel(?string $level): string
+    {
+        return Str::headline($level ?: 'none');
     }
 
     private function getLowHydrationEntries($days)

@@ -283,7 +283,7 @@
                             </svg>
                         </div>
                         <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus
-                            placeholder="admin@intakesync.local"
+                            placeholder="admin@aqua.com"
                             class="admin-field-input block w-full border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
                     </div>
                     @error('email')
