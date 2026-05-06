@@ -4,6 +4,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View
 import { useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
+import ScreenHeader from './components/common/ScreenHeader';
 
 interface DetailModalProps {
   visible: boolean;
@@ -372,7 +373,8 @@ export default function InsightsScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView edges={['top']} style={styles.container}>
+      <SafeAreaView edges={[]} style={styles.container}>
+        <ScreenHeader title="Routine Insights" subtitle="Patterns from your routine data" showBackButton />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1E3A8A" />
           <Text style={styles.loadingText}>Loading insights...</Text>
@@ -383,7 +385,8 @@ export default function InsightsScreen() {
 
   if (!insightsData) {
     return (
-      <SafeAreaView edges={['top']} style={styles.container}>
+      <SafeAreaView edges={[]} style={styles.container}>
+        <ScreenHeader title="Routine Insights" subtitle="Patterns from your routine data" showBackButton />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1E3A8A" />
           <Text style={styles.loadingText}>Loading your routine data...</Text>
@@ -401,13 +404,8 @@ export default function InsightsScreen() {
   const weeklyHasData = insights.weeklyData.some((item) => item.hasData);
 
   return (
-    <SafeAreaView edges={['top']} style={styles.container}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Routine Insights</Text>
-          <Text style={styles.headerSubtitle}>Patterns from your routine data</Text>
-        </View>
-      </View>
+    <SafeAreaView edges={[]} style={styles.container}>
+      <ScreenHeader title="Routine Insights" subtitle="Patterns from your routine data" showBackButton />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Hero Card - Routine Score */}
@@ -684,29 +682,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: '#6B7280',
     fontSize: 14,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-    fontWeight: '700',
-    lineHeight: 17,
   },
   scrollView: {
     flex: 1,

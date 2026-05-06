@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
+import ScreenHeader from '../../common/ScreenHeader';
 
 interface FAQItem {
   id: string;
@@ -11,7 +11,6 @@ interface FAQItem {
 }
 
 export default function HelpSupport() {
-  const insets = useSafeAreaInsets();
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
 
@@ -88,12 +87,7 @@ export default function HelpSupport() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.title}>Help & Support</Text>
-          <Text style={styles.subtitle}>Find answers about IntakeSync features and account settings.</Text>
-        </View>
-      </View>
+      <ScreenHeader title="Help & Support" subtitle="Find answers about IntakeSync features and account settings." showBackButton />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.sectionTitle}>Support</Text>
@@ -162,31 +156,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 56,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
-  headerCopy: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  subtitle: {
-    color: '#64748B',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-    lineHeight: 17,
   },
   sectionTitle: {
     fontSize: 16,

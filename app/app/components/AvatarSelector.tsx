@@ -3,6 +3,7 @@ import { View, Text, Image, TouchableOpacity, FlatList, StyleSheet } from 'react
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCacheOwner, getCachedSession, getUserScopedKey } from '../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from './common/ThemedNoticeModal';
 
 export const PRESET_AVATARS = [
@@ -35,9 +36,17 @@ export function getAvatarSource(selected: SelectedAvatar | null) {
 
 type AvatarSelectorProps = {
   onChange?: (selected: SelectedAvatar) => void;
+  owner?: any | null;
 };
 
-export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
+async function getAvatarStorageKey(owner?: any | null) {
+  const session = owner ? null : await getCachedSession();
+  const cacheOwner = getCacheOwner(owner ?? session?.user ?? null);
+  if (!cacheOwner.owner_id && !cacheOwner.owner_email) return null;
+  return getUserScopedKey(cacheOwner, 'avatar');
+}
+
+export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps) {
   const [selected, setSelected] = useState<SelectedAvatar | null>(null);
   const [loading, setLoading] = useState(true);
   const [noticeModal, setNoticeModal] = useState<{
@@ -49,7 +58,8 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(AVATAR_STORAGE_KEY);
+        const key = await getAvatarStorageKey(owner);
+        const raw = key ? await AsyncStorage.getItem(key) : null;
         if (raw) {
           const parsed = JSON.parse(raw) as SelectedAvatar;
           setSelected(parsed);
@@ -63,13 +73,14 @@ export default function AvatarSelector({ onChange }: AvatarSelectorProps) {
         setLoading(false);
       }
     })();
-  }, [onChange]);
+  }, [onChange, owner]);
 
   const persistSelection = async (next: SelectedAvatar) => {
     setSelected(next);
     onChange?.(next);
     try {
-      await AsyncStorage.setItem(AVATAR_STORAGE_KEY, JSON.stringify(next));
+      const key = await getAvatarStorageKey(owner);
+      if (key) await AsyncStorage.setItem(key, JSON.stringify(next));
     } catch (err) {
       console.warn('AvatarSelector: failed to save avatar', err);
     }

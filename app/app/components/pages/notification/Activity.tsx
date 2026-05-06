@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Modal,
   RefreshControl,
   ScrollView,
@@ -19,6 +18,7 @@ import { enqueueSyncAction, processSyncQueue } from '../../../../services/syncQu
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
+import InlineSyncNotice from '../../common/InlineSyncNotice';
 
 type NotificationType = 'hydration' | 'medication' | 'general';
 type NotificationStatus =
@@ -145,6 +145,8 @@ export default function Activity() {
   const [noticeModal, setNoticeModal] = useState<{ title: string; message: string } | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
     if (!inlineNotice) return;
@@ -165,6 +167,7 @@ export default function Activity() {
       if (!mounted) return;
       if (session?.token) {
         setCachedToken(session.token);
+        setCurrentUser(session.user ?? null);
         setOfflineMode(true);
       } else {
         router.replace('/login');
@@ -219,7 +222,11 @@ export default function Activity() {
 
   const loadNotifications = useCallback(async () => {
     if (!token) return;
+    setSyncing(true);
     try {
+      const session = await getCachedSession();
+      const sessionUser = currentUser || session?.user || null;
+      if (sessionUser && !currentUser) setCurrentUser(sessionUser);
       await processSyncQueue(token);
       const [notificationRes, statsRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
@@ -231,7 +238,7 @@ export default function Activity() {
       setNotifications(normalized);
       setStats(statsRes || null);
       setMedicationFallbacks(fallback);
-      await writeNotificationsCache({ notifications: normalized, stats: statsRes || null, medicationFallbacks: fallback });
+      await writeNotificationsCache({ notifications: normalized, stats: statsRes || null, medicationFallbacks: fallback }, sessionUser);
       setError(null);
       setOfflineMode(false);
     } catch (err) {
@@ -242,7 +249,7 @@ export default function Activity() {
       if (isNetworkError(err)) {
         setOfflineMode(true);
         setError('Offline mode - changes will sync when connected.');
-        const cached = await readNotificationsCache<any>();
+        const cached = await readNotificationsCache<any>(currentUser);
         if (cached) {
           setNotifications(cached.notifications || []);
           setStats(cached.stats || null);
@@ -251,22 +258,36 @@ export default function Activity() {
         return;
       }
       setError(getErrorMessage(err, 'Could not load notifications from the backend.'));
+    } finally {
+      setSyncing(false);
     }
-  }, [normalizeMedicationFallbacks, normalizeNotifications, router, token]);
+  }, [currentUser, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
   const cacheCurrentNotifications = useCallback(async (nextNotifications: NotificationItem[], nextStats = stats) => {
-    await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks });
-  }, [medicationFallbacks, stats]);
+    await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks }, currentUser);
+  }, [currentUser, medicationFallbacks, stats]);
 
   useFocusEffect(
     useCallback(() => {
+      let mounted = true;
       const run = async () => {
-        setLoading(true);
+        const session = await getCachedSession();
+        const sessionUser = currentUser || session?.user || null;
+        if (sessionUser && mounted) setCurrentUser(sessionUser);
+        const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
+        if (!mounted) return;
+        setNotifications(cached?.notifications || []);
+        setStats(cached?.stats || null);
+        setMedicationFallbacks(cached?.medicationFallbacks || []);
         await loadNotifications();
-        setLoading(false);
+        if (mounted) setLoading(false);
       };
       run();
-    }, [loadNotifications])
+      return () => {
+        mounted = false;
+        setSyncing(false);
+      };
+    }, [currentUser, loadNotifications])
   );
 
   const onRefresh = useCallback(async () => {
@@ -522,12 +543,7 @@ export default function Activity() {
 
         <Text style={styles.sectionTitle}>Upcoming Reminders</Text>
         <View style={styles.sectionCard}>
-          {loading ? (
-            <View style={styles.loadingBox}>
-              <ActivityIndicator size="small" color="#2563EB" />
-              <Text style={styles.loadingText}>Loading Notifications...</Text>
-            </View>
-          ) : upcomingReminders.length > 0 ? (
+          {upcomingReminders.length > 0 ? (
             upcomingReminders.map(renderReminder)
           ) : (
             <View style={styles.emptyBox}>
@@ -660,7 +676,16 @@ export default function Activity() {
         onPrimary={() => setNoticeModal(null)}
         onClose={() => setNoticeModal(null)}
       />
-      <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
+      <InlineSyncNotice
+        visible={syncing && !inlineNotice && !selectedNotification && !noticeModal}
+        message="Syncing..."
+        top={Math.max(insets.top, 8) + 54}
+      />
+      <InlineNotice
+        visible={Boolean(inlineNotice) && !selectedNotification && !noticeModal}
+        message={inlineNotice || ''}
+        top={Math.max(insets.top, 8) + 54}
+      />
 
       <BottomNavigation currentRoute="notification" />
     </SafeAreaView>

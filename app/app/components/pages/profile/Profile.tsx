@@ -1,14 +1,15 @@
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
-import AvatarSelector, { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
+import AvatarSelector, { SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
-import { clearCachedSession, getCachedSession } from '../../../../services/offlineStorage';
+import { clearCachedSession, getCacheOwner, getCachedSession, getUserScopedKey, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import InlineSyncNotice from '../../common/InlineSyncNotice';
 
 export default function Profile() {
   const router = useRouter();
@@ -16,7 +17,9 @@ export default function Profile() {
   const [cachedToken, setCachedToken] = React.useState<string | undefined>();
   const [offlineMode, setOfflineMode] = React.useState(false);
   const token = (routeToken as string | undefined) || cachedToken;
-  const { user, loading, reload } = useUser(token);
+  const { user } = useUser(token);
+  const [visibleUser, setVisibleUser] = React.useState<any>(null);
+  const [syncing, setSyncing] = React.useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = React.useState(false);
   const [signOutVisible, setSignOutVisible] = React.useState(false);
   const [signingOut, setSigningOut] = React.useState(false);
@@ -25,12 +28,21 @@ export default function Profile() {
   const avatarSource = getAvatarSource(selectedAvatar);
 
   React.useEffect(() => {
-    AsyncStorage.getItem(AVATAR_STORAGE_KEY)
+    let mounted = true;
+    (async () => {
+      const session = await getCachedSession();
+      const cacheOwner = getCacheOwner(visibleUser ?? session?.user ?? null);
+      const key = cacheOwner.owner_id || cacheOwner.owner_email ? getUserScopedKey(cacheOwner, 'avatar') : null;
+      return key ? AsyncStorage.getItem(key) : null;
+    })()
       .then((raw) => {
-        if (raw) setSelectedAvatar(JSON.parse(raw));
+        if (mounted && raw) setSelectedAvatar(JSON.parse(raw));
       })
       .catch((err) => console.log('Profile avatar load error:', err));
-  }, []);
+    return () => {
+      mounted = false;
+    };
+  }, [visibleUser]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -45,6 +57,7 @@ export default function Profile() {
       if (!mounted) return;
       if (session?.token) {
         setCachedToken(session.token);
+        setVisibleUser(session.user ?? null);
         setOfflineMode(true);
       } else {
         router.replace('/login');
@@ -102,9 +115,28 @@ export default function Profile() {
     },
   ];
 
-  const retryFetch = () => {
-    reload();
-  };
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const session = await getCachedSession();
+      const sessionUser = session?.user ?? null;
+      const cachedProfile = await readProfileCache<any>(sessionUser);
+      if (!mounted) return;
+      setVisibleUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
+      setSyncing(Boolean(token));
+      if (user) {
+        setVisibleUser(user);
+        await writeProfileCache(user, user);
+      }
+      setSyncing(false);
+    })().catch(() => {
+      if (mounted) setSyncing(false);
+    });
+    return () => {
+      mounted = false;
+      setSyncing(false);
+    };
+  }, [token, user]);
 
   const getInitials = (name: string = '') => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
@@ -124,32 +156,11 @@ export default function Profile() {
     }
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2563EB" />
-          <Text style={styles.loadingText}>Loading Profile...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!user) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Failed to load user data</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={retryFetch}>
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const displayUser = visibleUser || user || { name: 'User', email: '', nickname: 'User' };
 
   return (
     <SafeAreaView style={styles.container}>
+      <InlineSyncNotice visible={syncing && !avatarModalVisible && !signOutVisible} message="Syncing..." top={Math.max(insets.top, 8) + 54} />
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View>
           <Text style={styles.headerTitle}>Profile</Text>
@@ -177,7 +188,7 @@ export default function Profile() {
               {avatarSource ? (
                 <Image source={avatarSource as any} style={styles.avatarImage} />
               ) : (
-                <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
+                <Text style={styles.avatarText}>{getInitials(displayUser.name)}</Text>
               )}
             </View>
             <TouchableOpacity style={styles.cameraButton} onPress={() => setAvatarModalVisible(true)}>
@@ -185,8 +196,8 @@ export default function Profile() {
             </TouchableOpacity>
           </View>
           <View style={styles.profileCopy}>
-            <Text style={styles.userName} numberOfLines={1}>{user.name}</Text>
-            <Text style={styles.userEmail} numberOfLines={1}>{user.email}</Text>
+            <Text style={styles.userName} numberOfLines={1}>{displayUser.name}</Text>
+            <Text style={styles.userEmail} numberOfLines={1}>{displayUser.email}</Text>
             <View style={styles.avatarHint}>
               <Ionicons name="image-outline" size={13} color="#2563EB" />
               <Text style={styles.avatarHintText}>Customize avatar</Text>
@@ -204,7 +215,7 @@ export default function Profile() {
               <Ionicons name="call-outline" size={18} color="#2563EB" />
             </View>
             <Text style={styles.infoLabel}>Phone</Text>
-            <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
+            <Text style={styles.infoValue}>{displayUser.phone || 'Not set'}</Text>
           </View>
           
           <View style={styles.infoCard}>
@@ -212,7 +223,7 @@ export default function Profile() {
               <Ionicons name="calendar-outline" size={18} color="#2563EB" />
             </View>
             <Text style={styles.infoLabel}>Date of Birth</Text>
-            <Text style={styles.infoValue}>{user.dateOfBirth || 'Not set'}</Text>
+            <Text style={styles.infoValue}>{displayUser.dateOfBirth || 'Not set'}</Text>
           </View>
         </View>
 
@@ -255,7 +266,7 @@ export default function Profile() {
                 {avatarSource ? (
                   <Image source={avatarSource as any} style={styles.sheetPreviewImage} />
                 ) : (
-                  <Text style={styles.sheetPreviewText}>{getInitials(user.name)}</Text>
+                  <Text style={styles.sheetPreviewText}>{getInitials(displayUser.name)}</Text>
                 )}
               </View>
               <View style={styles.sheetTitleWrap}>
@@ -263,7 +274,7 @@ export default function Profile() {
                 <Text style={styles.sheetSubtitle}>Choose an avatar or upload your own image.</Text>
               </View>
             </View>
-            <AvatarSelector onChange={setSelectedAvatar} />
+            <AvatarSelector owner={displayUser} onChange={setSelectedAvatar} />
             <TouchableOpacity style={styles.sheetDoneButton} onPress={() => setAvatarModalVisible(false)}>
               <Text style={styles.sheetDoneText}>Done</Text>
             </TouchableOpacity>

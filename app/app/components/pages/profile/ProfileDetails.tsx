@@ -5,7 +5,8 @@ import { useLocalSearchParams } from 'expo-router';
 import EditProfileModal from './EditProfileModal';
 import ProfileInfoList from './ProfileInfoList';
 import useUser from '../../../../hooks/useUser';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import ScreenHeader from '../../common/ScreenHeader';
 
 interface UserDetails {
   name: string;
@@ -27,7 +28,6 @@ interface UserDetails {
 export default function ProfileDetails() {
   const { token } = useLocalSearchParams();
   const { user: fetchedUser, setUser: setFetchedUser, loading } = useUser(token as string | undefined);
-  const insets = useSafeAreaInsets();
 
   // local alias to satisfy existing code that used `user`
   const user = fetchedUser as unknown as UserDetails | null;
@@ -59,7 +59,8 @@ export default function ProfileDetails() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={[]}>
+        <ScreenHeader title="Profile Details" subtitle="View and update your account and hydration profile." showBackButton />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1E3A8A" />
         </View>
@@ -69,7 +70,8 @@ export default function ProfileDetails() {
 
   if (!user) {
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={[]}>
+        <ScreenHeader title="Profile Details" subtitle="View and update your account and hydration profile." showBackButton />
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Failed to load profile details</Text>
         </View>
@@ -79,15 +81,16 @@ export default function ProfileDetails() {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Profile Details</Text>
-          <Text style={styles.headerSubtitle}>View and update your account and hydration profile.</Text>
-        </View>
-        <TouchableOpacity style={styles.iconButton} onPress={openEditModal}>
-          <Ionicons name="create-outline" size={22} color="#2563EB" />
-        </TouchableOpacity>
-      </View>
+      <ScreenHeader
+        title="Profile Details"
+        subtitle="View and update your account and hydration profile."
+        showBackButton
+        rightAction={(
+          <TouchableOpacity style={styles.iconButton} onPress={openEditModal}>
+            <Ionicons name="create-outline" size={22} color="#2563EB" />
+          </TouchableOpacity>
+        )}
+      />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -194,16 +197,6 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
   iconButton: {
     width: 38,
     height: 38,
@@ -213,22 +206,6 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  headerCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  headerSubtitle: {
-    color: '#64748B',
-    fontSize: 12,
-    fontWeight: '700',
-    lineHeight: 17,
-    marginTop: 2,
   },
   section: {
     marginBottom: 24,

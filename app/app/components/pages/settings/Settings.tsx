@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch, Image } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
-import { getCachedSession } from '../../../../services/offlineStorage';
+import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
 import { processSyncQueue } from '../../../../services/syncQueue';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import InlineSyncNotice from '../../common/InlineSyncNotice';
+import ScreenHeader from '../../common/ScreenHeader';
 
 type SettingPrefs = {
   useMetricUnits: boolean;
@@ -15,8 +16,6 @@ type SettingPrefs = {
   smartHydrationGoals: boolean;
   flexibleSchedule: boolean;
 };
-
-const STORAGE_KEY = 'intakesync_settings_preferences_v1';
 
 const DEFAULT_PREFS: SettingPrefs = {
   useMetricUnits: true,
@@ -31,17 +30,36 @@ export default function Settings() {
   const insets = useSafeAreaInsets();
   const [prefs, setPrefs] = useState<SettingPrefs>(DEFAULT_PREFS);
   const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
   const token = (routeToken as string | undefined) || cachedToken;
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((raw) => {
-        if (raw) setPrefs({ ...DEFAULT_PREFS, ...JSON.parse(raw) });
-      })
-      .catch((err) => console.log('Settings preference load error:', err));
-  }, []);
+    let mounted = true;
+    (async () => {
+      const session = await getCachedSession();
+      const sessionUser = session?.user ?? null;
+      const cached = sessionUser ? await readSettingsCache<SettingPrefs>(sessionUser) : null;
+      if (!mounted) return;
+      setCurrentUser(sessionUser);
+      setPrefs({ ...DEFAULT_PREFS, ...(cached || {}) });
+      setSyncing(Boolean(token));
+      try {
+        if (token) await processSyncQueue(token as string);
+      } finally {
+        if (mounted) setSyncing(false);
+      }
+    })().catch((err) => {
+      console.log('Settings preference load error:', err);
+      if (mounted) setSyncing(false);
+    });
+    return () => {
+      mounted = false;
+      setSyncing(false);
+    };
+  }, [token]);
 
   useEffect(() => {
     let mounted = true;
@@ -56,6 +74,7 @@ export default function Settings() {
       if (!mounted) return;
       if (session?.token) {
         setCachedToken(session.token);
+        setCurrentUser(session.user ?? null);
         setOfflineMode(true);
         processSyncQueue(session.token).catch(() => {});
       } else {
@@ -73,7 +92,7 @@ export default function Settings() {
     const next = { ...prefs, [key]: value };
     setPrefs(next);
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      await writeSettingsCache(next, currentUser);
     } catch (error) {
       console.log('Settings preference save error:', error);
       setPrefs(previous);
@@ -91,12 +110,8 @@ export default function Settings() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle}>Settings</Text>
-          <Text style={styles.headerSubtitle}>Customize app behavior, units, and display preferences.</Text>
-        </View>
-      </View>
+      <InlineSyncNotice visible={syncing && !notice} message="Syncing..." top={Math.max(insets.top, 8) + 54} />
+      <ScreenHeader title="Settings" subtitle="Customize app behavior, units, and display preferences." showBackButton />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {offlineMode ? (
@@ -294,32 +309,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
-  headerCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  headerSubtitle: {
-    color: '#64748B',
-    fontSize: 12,
-    fontWeight: '700',
-    lineHeight: 17,
-    marginTop: 2,
   },
   scrollView: {
     flex: 1,

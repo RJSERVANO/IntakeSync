@@ -1,17 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, SafeAreaView, ScrollView, Animated, Easing, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getCachedSession, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
+import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
 import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
+import InlineSyncNotice from '../../common/InlineSyncNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { notificationManager } from '../../../../services/notificationManager';
 import { cancelHydrationNotifications, rescheduleHydrationNotifications } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
@@ -65,6 +65,13 @@ function mergeEntries(primary: any[], secondary: any[]) {
     merged.push(entry);
   });
   return merged.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+}
+
+function totalForLocalDay(sourceEntries: any[], date = new Date()) {
+  const dateKey = getLocalDateKey(date);
+  return sourceEntries.reduce((sum, entry) => (
+    sum + (entry?.timestamp && getLocalDateKey(entry.timestamp) === dateKey ? Number(entry.amount_ml || 0) : 0)
+  ), 0);
 }
 
 const DRINK_OPTIONS: {
@@ -196,7 +203,8 @@ export default function Hydration() {
   const [idealGoal, setIdealGoal] = useState<number | null>(null);
   const [entries, setEntries] = useState<any[]>([]);
   const [amountInput, setAmountInput] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [cacheReady, setCacheReady] = useState(false);
+  const [hasHydrationCache, setHasHydrationCache] = useState(false);
   const [historyRange] = useState<'daily'|'weekly'|'monthly'>('daily');
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [missedCount, setMissedCount] = useState<number>(0);
@@ -226,6 +234,10 @@ export default function Hydration() {
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
+  const canUseHydrationCacheRef = useRef(false);
+  const previousTokenRef = useRef<string | undefined>(undefined);
+  const entriesRef = useRef<any[]>([]);
+  const goalRef = useRef(goal);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -245,6 +257,14 @@ export default function Hydration() {
   const goalReachedShownRef = useRef(false);
   const overhydrationShownRef = useRef(false);
 
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
+
+  useEffect(() => {
+    goalRef.current = goal;
+  }, [goal]);
+
   const fmt = (n:number) => {
     try { return n.toLocaleString(); } catch { return String(n); }
   };
@@ -263,33 +283,12 @@ export default function Hydration() {
       .catch(() => {});
   }, [routeToken]);
 
-  // Hydration reminder timer ID
-  const [reminderTimerId, setReminderTimerId] = useState<string | null>(null);
-
-  // Setup hydration reminder when component mounts
-  useEffect(() => {
-    void rescheduleHydrationNotifications(goal, 120);
-    // Schedule reminder to show every 2 hours while app is open
-    const timerId = notificationManager.scheduleHydrationReminder(120, () => {
-      const current = totalToday();
-      const suggestedAmount = Math.round(goal / 8);
-      const remaining = Math.max(goal - current, 0);
-      showInlineNotice(
-        remaining > 0
-          ? `Time to hydrate: ${suggestedAmount} ml suggested`
-          : 'Hydration goal reached'
-      );
+  async function syncHydrationReminderLifecycle(total: number, nextGoal = goal) {
+    await rescheduleHydrationNotifications({
+      currentTotal: total,
+      goal: nextGoal,
     });
-    
-    setReminderTimerId(timerId);
-
-    // Cleanup on unmount
-    return () => {
-      if (timerId) {
-        notificationManager.cancelReminder(timerId);
-      }
-    };
-  }, [goal]);
+  }
 
   // FIX #3: Listen for notification taps to show confirmation modal
   useEffect(() => {
@@ -328,8 +327,11 @@ export default function Hydration() {
       
       const timer = setTimeout(() => {
         console.log('Midnight reset: clearing flags');
+        goalReachedShownRef.current = false;
+        overhydrationShownRef.current = false;
         setGoalReachedToday(false);
         setOverhydrationShownToday(false);
+        void syncHydrationReminderLifecycle(totalForLocalDay(entriesRef.current), goalRef.current);
         // Recursively check again for next midnight
         checkMidnight();
       }, msUntilMidnight);
@@ -339,24 +341,16 @@ export default function Hydration() {
     
     const timer = checkMidnight();
     return () => clearTimeout(timer);
+  // Uses refs for the latest entries/goal so the midnight timer is not recreated on every log.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Show initial goal modal on first load if no goal is set
+  // Show initial goal modal on first load if no current-user goal cache exists
   useEffect(() => {
-    async function checkInitialGoal() {
-      try {
-        const local = await readHydrationCache<any>();
-        if (!local && !loading) {
-          setShowInitialGoalModal(true);
-        }
-      } catch (err:any) {
-        console.log('Initial goal check error', err);
-      }
+    if (cacheReady && !hasHydrationCache) {
+      setShowInitialGoalModal(true);
     }
-    if (!loading) {
-      checkInitialGoal();
-    }
-  }, [loading]);
+  }, [cacheReady, hasHydrationCache]);
 
 
   // Calendar functions
@@ -424,7 +418,12 @@ export default function Hydration() {
   async function showGoalReachedOnce() {
     if (goalReachedShownRef.current) return;
     const today = getLocalDateKey(new Date());
-    const shownKey = `${HYDRATION_GOAL_REACHED_SHOWN_PREFIX}.${today}`;
+    const session = await getCachedSession();
+    const sessionMatchesToken = !token || session?.token === token;
+    const owner = getCacheOwner(sessionMatchesToken ? session?.user : null);
+    const shownKey = owner.owner_id || owner.owner_email
+      ? getUserScopedKey(owner, `hydration_goal_reached_shown:${today}`)
+      : `${HYDRATION_GOAL_REACHED_SHOWN_PREFIX}.${today}`;
     const alreadyShown = await AsyncStorage.getItem(shownKey);
     if (alreadyShown === '1') {
       goalReachedShownRef.current = true;
@@ -444,14 +443,37 @@ export default function Hydration() {
   }
 
   useEffect(() => {
-    async function load() {
-      let usedCache = false;
+    let cancelled = false;
+
+    async function initializeFromCacheThenRefresh() {
       let cachedEntries: any[] = [];
       try {
-        const local = await readHydrationCache<any>();
+        const activeToken = token as string | undefined;
+        const tokenChanged = previousTokenRef.current !== activeToken;
+        previousTokenRef.current = activeToken;
+
+        if (tokenChanged) {
+          setCacheReady(false);
+          setHasHydrationCache(false);
+          setEntries([]);
+          setHistoryData([]);
+          setCalendarData([]);
+          setMissedCount(0);
+          setUserProfile(null);
+          setIdealGoal(null);
+          setGoal(2000);
+        }
+
+        const session = await getCachedSession();
+        const sessionMatchesToken = !activeToken || session?.token === activeToken;
+        canUseHydrationCacheRef.current = Boolean(sessionMatchesToken && (session?.user?.id || session?.user?.user_id || session?.user?.email));
+        const local = canUseHydrationCacheRef.current ? await readHydrationCache<any>() : null;
+        if (cancelled) return;
+
         if (local && (Array.isArray(local.entries) || local.goal)) {
           const parsed = local;
-          setGoal(parsed.goal ?? 2000);
+          const parsedGoal = parsed.goal ?? resolveHydrationGoal(parsed.user_profile) ?? 2000;
+          setGoal(parsedGoal);
           const filteredEntries = (parsed.entries ?? []).filter((e: any) => 
             !deletedEntryKeys.has(entryKey(e))
           );
@@ -459,13 +481,22 @@ export default function Hydration() {
           setEntries(filteredEntries);
           setUserProfile(parsed.user_profile ?? null);
           setMissedCount((parsed.missed || []).length || 0);
-          setLoading(false);
-          usedCache = true;
+          setHasHydrationCache(true);
+          const cachedTodayTotal = totalForLocalDay(filteredEntries);
+          setGoalReachedToday(cachedTodayTotal >= parsedGoal);
+          await syncHydrationReminderLifecycle(cachedTodayTotal, parsedGoal);
         }
-        await syncPendingBeverages(false);
+
+        setCacheReady(true);
+
         if (token) {
-          if (usedCache) setSyncing(true);
-          const res = await api.get('/hydration', token as string, usedCache ? 5000 : 10000);
+          setSyncing(true);
+          await syncPendingBeverages(false);
+          if (cancelled) return;
+
+          setSyncing(true);
+          const res = await api.get('/hydration', token as string, cachedEntries.length > 0 ? 5000 : 10000);
+          if (cancelled) return;
           if (res) {
             setOfflineMode(false);
             setUserProfile(res.user_profile); // Store user profile for calculations
@@ -485,11 +516,14 @@ export default function Hydration() {
             setEntries(finalEntries);
             setMissedCount((res.missed || []).length || 0);
             
-            await writeHydrationCache({ 
-              ...res, 
-              goal: finalGoal,
-              entries: finalEntries 
-            });
+            if (canUseHydrationCacheRef.current) {
+              await writeHydrationCache({
+                ...res,
+                goal: finalGoal,
+                entries: finalEntries
+              });
+              setHasHydrationCache(true);
+            }
             
             // FIX #1: Check if goal was already reached today (prevent modal flashing on re-render)
             const todayTotal = finalEntries.filter((e: any) => {
@@ -501,6 +535,7 @@ export default function Hydration() {
             if (todayTotal >= finalGoal) {
               setGoalReachedToday(true);
             }
+            await syncHydrationReminderLifecycle(todayTotal, finalGoal);
             
             // Show ideal goal popup if it's different from current goal
             if (profileGoal && profileGoal !== finalGoal && finalGoal === 2000) {
@@ -517,11 +552,19 @@ export default function Hydration() {
           showInlineNotice('Offline mode - changes will sync when connected.');
         }
       } finally {
-        setLoading(false);
-        setSyncing(false);
+        if (!cancelled) {
+          setCacheReady(true);
+          setSyncing(false);
+        }
       }
     }
-    load();
+
+    initializeFromCacheThenRefresh();
+    return () => {
+      cancelled = true;
+    };
+  // Cache/backend hydration loading intentionally runs from token and local delete markers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, deletedEntryKeys]);
 
   async function syncPendingBeverages(showResult = true) {
@@ -596,6 +639,7 @@ export default function Hydration() {
 
   async function persistLocal(data?: any) {
     const payload = data ?? { goal, entries };
+    if (!canUseHydrationCacheRef.current) return;
     try { await writeHydrationCache(payload); } catch { }
   }
 
@@ -639,7 +683,11 @@ export default function Hydration() {
     const justReachedGoal = newTotal >= goal && oldTotal < goal;
     if (justReachedGoal) {
       await showGoalReachedOnce();
+    }
+    if (newTotal >= goal) {
       await cancelHydrationNotifications();
+    } else {
+      await syncHydrationReminderLifecycle(newTotal, goal);
     }
     
     // Check for overhydration (>150% of goal) - only show modal once per session
@@ -768,8 +816,13 @@ export default function Hydration() {
 
   async function updateGoal(newGoal: number) {
     setGoal(newGoal);
-    await updateCachedHydrationGoal(newGoal, token as string | undefined);
+    if (canUseHydrationCacheRef.current) {
+      await updateCachedHydrationGoal(newGoal, token as string | undefined);
+    }
     await persistLocal({ goal: newGoal, entries });
+    const currentTotal = totalForLocalDay(entries);
+    setGoalReachedToday(currentTotal >= newGoal);
+    await syncHydrationReminderLifecycle(currentTotal, newGoal);
     
     if (token) {
       try { 
@@ -821,15 +874,20 @@ export default function Hydration() {
     setEntries(newEntries);
 
     // Persist to AsyncStorage to prevent restoration on refresh
-    try {
-      await writeHydrationCache({
-        goal,
-        entries: newEntries
-      });
-      console.log('Entry deleted from AsyncStorage');
-    } catch (storageErr) {
-      console.error('AsyncStorage delete error:', storageErr);
+    if (canUseHydrationCacheRef.current) {
+      try {
+        await writeHydrationCache({
+          goal,
+          entries: newEntries
+        });
+        console.log('Entry deleted from AsyncStorage');
+      } catch (storageErr) {
+        console.error('AsyncStorage delete error:', storageErr);
+      }
     }
+    const updatedTodayTotal = totalForLocalDay(newEntries);
+    setGoalReachedToday(updatedTodayTotal >= goal);
+    await syncHydrationReminderLifecycle(updatedTodayTotal, goal);
 
     // Sync deletion with backend server
     if (token && deletedEntry) {
@@ -849,10 +907,12 @@ export default function Hydration() {
           );
           setEntries(filteredEntries);
           // Update AsyncStorage with server data
-          await writeHydrationCache({
-            goal,
-            entries: filteredEntries
-          });
+          if (canUseHydrationCacheRef.current) {
+            await writeHydrationCache({
+              goal,
+              entries: filteredEntries
+            });
+          }
         }
       } catch (err: any) {
         console.error('Server delete sync error:', err);
@@ -1032,15 +1092,6 @@ export default function Hydration() {
     return '#EF4444'; // Red
   }
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2563EB" />
-        <Text style={styles.loadingText}>Loading Beverage...</Text>
-      </SafeAreaView>
-    );
-  }
-
   const selectedDateKey = getLocalDateKey(selectedDate);
   const todayKey = getLocalDateKey(new Date());
   const isFutureSelectedDate = selectedDateKey > todayKey;
@@ -1068,12 +1119,12 @@ export default function Hydration() {
 
       <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
       {(offlineMode || syncing) && !inlineNotice ? (
-        <View pointerEvents="none" style={[styles.syncNotice, { top: Math.max(insets.top, 8) + 54 }]}>
-          <Ionicons name={offlineMode ? 'cloud-offline-outline' : 'sync-outline'} size={15} color="#1E3A8A" />
-          <Text style={styles.syncNoticeText}>
-            {offlineMode ? 'Offline mode - changes will sync when connected.' : 'Syncing...'}
-          </Text>
-        </View>
+        <InlineSyncNotice
+          visible
+          message={offlineMode ? 'Offline mode - changes will sync when connected.' : 'Syncing...'}
+          iconName={offlineMode ? 'cloud-offline-outline' : 'sync-outline'}
+          top={Math.max(insets.top, 8) + 54}
+        />
       ) : null}
 
       <ScrollView
@@ -1247,13 +1298,21 @@ export default function Hydration() {
               ))}
             </View>
 
-            <TextInput value={amountInput} onChangeText={setAmountInput} placeholder="Custom ml" keyboardType="numeric" style={styles.inputAltFull} />
+            <TextInput
+              value={amountInput}
+              onChangeText={setAmountInput}
+              placeholder="Custom ml"
+              placeholderTextColor="#64748B"
+              keyboardType="numeric"
+              style={styles.inputAltFull}
+            />
 
             <Text style={styles.formLabel}>Notes (optional)</Text>
             <TextInput
               value={beverageNotes}
               onChangeText={setBeverageNotes}
               placeholder={getNotesPlaceholder()}
+              placeholderTextColor="#64748B"
               maxLength={50}
               style={styles.notesInputAlt}
               returnKeyType="done"
@@ -1709,18 +1768,6 @@ export default function Hydration() {
 
 const styles = StyleSheet.create({
   container: { flex:1, backgroundColor:'#F8FAFC' },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-  },
-  loadingText: {
-    marginTop: 12,
-    color: '#64748B',
-    fontSize: 14,
-    fontWeight: '700',
-  },
   content: { padding:20 },
   header: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:16 },
   headerRow: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 },
@@ -1756,8 +1803,6 @@ const styles = StyleSheet.create({
   headerIconButton: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', alignItems: 'center', justifyContent: 'center' },
   inlineNotice: { position: 'absolute', left: 20, right: 20, zIndex: 60, backgroundColor: '#2563EB', borderRadius: 999, paddingVertical: 10, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 10, elevation: 8 },
   inlineNoticeText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
-  syncNotice: { position: 'absolute', left: 20, right: 20, zIndex: 55, backgroundColor: '#DBEAFE', borderRadius: 999, paddingVertical: 9, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: '#BFDBFE' },
-  syncNoticeText: { color: '#1E3A8A', fontSize: 12, fontWeight: '800' },
   headerRowAlt: { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:12 },
   goalWrap: { flexDirection: 'row', alignItems: 'center' },
   goalLabel: { color: '#6B7280', marginRight: 8, fontWeight: '600' },

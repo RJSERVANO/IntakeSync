@@ -1,16 +1,30 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
-import { clearCachedSession, getCachedSession, hasValidCachedSession, readMedicationCache, updateCachedUser } from '../services/offlineStorage';
+import {
+  clearCachedSession,
+  getCacheOwner,
+  getCachedSession,
+  getUserScopedKey,
+  hasValidCachedSession,
+  readHydrationCache,
+  readMedicationCache,
+  readOwnedOfflineCache,
+  searchCachedOtcMedicinesWithMeta,
+  updateCachedUser,
+  writeOwnedOfflineCache,
+  writeOtcSearchCache,
+} from '../services/offlineStorage';
 import { getSyncQueueSummary, processSyncQueue } from '../services/syncQueue';
 import BottomNavigation from './components/navigation/BottomNavigation';
-import { AVATAR_STORAGE_KEY, SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
+import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 import InlineNotice from './components/common/InlineNotice';
+import InlineSyncNotice from './components/common/InlineSyncNotice';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
@@ -90,8 +104,10 @@ export default function Home() {
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [medicineSearchMessage, setMedicineSearchMessage] = useState<string | null>(null);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -119,12 +135,15 @@ export default function Home() {
 
   const loadSelectedAvatar = useCallback(async () => {
     try {
-      const raw = await AsyncStorage.getItem(AVATAR_STORAGE_KEY);
+      const session = await getCachedSession();
+      const owner = getCacheOwner(session?.user ?? user);
+      const key = owner.owner_id || owner.owner_email ? getUserScopedKey(owner, 'avatar') : null;
+      const raw = key ? await AsyncStorage.getItem(key) : null;
       setSelectedAvatar(raw ? JSON.parse(raw) : null);
     } catch (err) {
       console.log('Home avatar load error:', err);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     loadSelectedAvatar();
@@ -148,16 +167,33 @@ export default function Home() {
       if (medicineSearch.trim().length < 2) {
         setMedicineSuggestions([]);
         setShowSuggestions(false);
+        setMedicineSearchMessage(null);
         return;
       }
 
       try {
         const response = await api.get(`/medicines/search?query=${encodeURIComponent(medicineSearch)}`);
-        setMedicineSuggestions(response.medicines || []);
+        const results = response.medicines || [];
+        await writeOtcSearchCache(medicineSearch, results);
+        setMedicineSuggestions(results);
+        setMedicineSearchMessage(null);
         setShowSuggestions(true);
-      } catch (err) {
+      } catch (err: any) {
         console.log('Medicine search error:', err);
-        setMedicineSuggestions([]);
+        const cached = await searchCachedOtcMedicinesWithMeta(medicineSearch);
+        const canUseCache = cached.results.length > 0 && (api.isNetworkError(err) || !cached.isStale);
+        setMedicineSuggestions(canUseCache ? cached.results : []);
+        if (canUseCache) {
+          setMedicineSearchMessage(cached.isStale ? 'Showing cached medication results. This data may be outdated.' : 'Showing cached medication results.');
+          setShowSuggestions(true);
+        } else {
+          setMedicineSearchMessage(
+            api.isNetworkError(err)
+              ? 'No offline medication search data available. Connect to the internet to search medications.'
+              : 'Could not search medications. Please try again.'
+          );
+          setShowSuggestions(true);
+        }
       }
     };
 
@@ -174,7 +210,10 @@ export default function Home() {
     if (currentPercentage >= 100 && previousHydrationPercentage < 100 && !goalCompletionShownRef.current) {
       const showOnce = async () => {
         const today = new Date().toISOString().slice(0, 10);
-        const key = `${HOME_GOAL_COMPLETION_SHOWN_PREFIX}.${today}`;
+        const owner = getCacheOwner(user);
+        const key = owner.owner_id || owner.owner_email
+          ? getUserScopedKey(owner, `hydration_goal_reached_shown:${today}`)
+          : `${HOME_GOAL_COMPLETION_SHOWN_PREFIX}.${today}`;
         const alreadyShown = await AsyncStorage.getItem(key);
         if (cancelled || alreadyShown === '1') return;
         goalCompletionShownRef.current = true;
@@ -202,7 +241,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [quickStatus.hydrationPercentage, previousHydrationPercentage, showInlineNotice]);
+  }, [quickStatus.hydrationPercentage, previousHydrationPercentage, showInlineNotice, user]);
 
   useEffect(() => {
     // Safety timeout - always set loading to false after 5 seconds max (very aggressive)
@@ -220,6 +259,9 @@ export default function Home() {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
             setUser(cached.user || { name: 'User', email: '', nickname: 'User' });
+            const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cached.user), 'home_summary'), cached.user);
+            if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
+            if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
             const cachedMeds = await readMedicationCache<any[]>(cached.user);
             if (cachedMeds) {
               setQuickStatus((prev) => ({
@@ -240,12 +282,44 @@ export default function Home() {
         }
         
         // Try to load user data with shorter timeout
+        let backgroundUser: any = null;
         try {
+          const cached = await getCachedSession();
+          const sessionUser = cached?.user ?? null;
+          backgroundUser = sessionUser;
+          if (sessionUser) {
+            const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser);
+            const hydrationCache = await readHydrationCache<any>();
+            const cachedMeds = await readMedicationCache<any[]>(sessionUser);
+            if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
+            if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
+            if (hydrationCache) {
+              const hydrationGoal = resolveHydrationGoal(hydrationCache);
+              setQuickStatus((prev) => ({
+                ...prev,
+                hydrationGoal,
+                hydrationTotal: resolveHydrationTotal(hydrationCache),
+                hydrationPercentage: resolveHydrationPercentage(hydrationCache, hydrationGoal),
+              }));
+            }
+            if (cachedMeds) {
+              setQuickStatus((prev) => ({
+                ...prev,
+                medicationsLeft: cachedMeds.filter((med) => med?.reminder !== false).length,
+                medicationsTotal: cachedMeds.length,
+              }));
+            }
+            setUser(sessionUser || { name: 'User', email: '', nickname: 'User' });
+            clearTimeout(safetyTimeout);
+            setLoading(false);
+            setSyncing(true);
+          }
           const me = await Promise.race([
             api.get('/me', token as string, 3000), // 3 second timeout - very short
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
           ]) as any;
           console.log('Home: /me response:', me);
+          backgroundUser = me;
           setUser(me);
           setOfflineMode(false);
           await updateCachedUser(me, token as string);
@@ -254,6 +328,7 @@ export default function Home() {
           setLoading(false);
         } catch (meErr: any) {
           console.log('Home: /me error:', meErr);
+          setSyncing(false);
           // If it's an auth error, redirect to login
           if (api.isAuthError(meErr)) {
             await clearCachedSession();
@@ -299,6 +374,20 @@ export default function Home() {
               medicationsTaken,
               medicationsTotal
             });
+            const owner = getCacheOwner(backgroundUser);
+            if (owner.owner_id || owner.owner_email) {
+              writeOwnedOfflineCache(getUserScopedKey(owner, 'home_summary'), backgroundUser, {
+                quickStatus: {
+                  medicationsLeft,
+                  hydrationPercentage,
+                  hydrationTotal,
+                  hydrationGoal,
+                  medicationsTaken,
+                  medicationsTotal,
+                },
+                upcomingMedications: Array.isArray(upcoming) ? upcoming : [],
+              }).catch(() => {});
+            }
           }).catch(() => {
             // Set defaults if all fail
             setQuickStatus({ 
@@ -330,10 +419,12 @@ export default function Home() {
             })
             .catch(() => {
               setNotificationStats(null);
-            });
+            })
+            .finally(() => setSyncing(false));
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
         console.log('Home load error:', err);
+        setSyncing(false);
         // Set default user immediately to allow UI to render
         setUser({ name: 'User', email: '', nickname: 'User' });
         clearTimeout(safetyTimeout);
@@ -472,16 +563,6 @@ export default function Home() {
 
     return () => clearInterval(pollInterval);
   }, [token, loading]);
-
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2563EB" />
-        <Text style={styles.loadingText}>Loading Home...</Text>
-      </SafeAreaView>
-    );
-  }
 
   // Use nickname if available, otherwise fall back to first name
   const displayName = user?.nickname || user?.name?.split(' ')[0] || 'User';
@@ -732,7 +813,16 @@ export default function Home() {
           </TouchableOpacity>
         </View>
       </View>
-      <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
+      <InlineSyncNotice
+        visible={syncing && !inlineNotice && !menuVisible && !noticeModal}
+        message="Syncing..."
+        top={Math.max(insets.top, 8) + 54}
+      />
+      <InlineNotice
+        visible={Boolean(inlineNotice) && !menuVisible && !noticeModal}
+        message={inlineNotice || ''}
+        top={Math.max(insets.top, 8) + 54}
+      />
       {offlineMode ? (
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
@@ -768,7 +858,10 @@ export default function Home() {
                 style={styles.searchInput}
                 placeholderTextColor="#9CA3AF"
                 value={medicineSearch}
-                onChangeText={setMedicineSearch}
+                onChangeText={(text) => {
+                  setMedicineSearch(text);
+                  setMedicineSearchMessage(null);
+                }}
                 onFocus={() => medicineSearch.length >= 2 && setShowSuggestions(true)}
               />
               {medicineSearch.length > 0 && (
@@ -777,6 +870,7 @@ export default function Home() {
                   onPress={() => {
                     setMedicineSearch('');
                     setShowSuggestions(false);
+                    setMedicineSearchMessage(null);
                   }}
                 >
                   <Ionicons name="close-circle" size={20} color="#9CA3AF" />
@@ -785,8 +879,11 @@ export default function Home() {
             </View>
             
             {/* Medicine Suggestions Dropdown */}
-            {showSuggestions && medicineSuggestions.length > 0 && (
+            {showSuggestions && (medicineSuggestions.length > 0 || medicineSearchMessage) && (
               <View style={styles.suggestionsContainer}>
+                {medicineSearchMessage ? (
+                  <Text style={styles.suggestionNotice}>{medicineSearchMessage}</Text>
+                ) : null}
                 <ScrollView style={styles.suggestionsList} nestedScrollEnabled>
                   {medicineSuggestions.map((medicine) => (
                     <TouchableOpacity
@@ -820,8 +917,18 @@ export default function Home() {
                                 medicineName: medicine.name,
                                 medicineDosage: medicine.dosage || '',
                                 medicineData: JSON.stringify({
+                                  id: medicine.id,
+                                  name: medicine.name,
+                                  generic_name: medicine.generic_name,
+                                  brand: medicine.brand,
                                   description: medicine.description,
                                   category: medicine.category,
+                                  dosage: medicine.dosage,
+                                  dosage_text: medicine.dosage_text,
+                                  interval_hours: medicine.interval_hours,
+                                  max_daily_doses: medicine.max_daily_doses,
+                                  timing_instructions: medicine.timing_instructions,
+                                  warnings: medicine.warnings,
                                   frequency,
                                 }),
                               },
@@ -1362,6 +1469,17 @@ const styles = StyleSheet.create({
   },
   suggestionsList: {
     maxHeight: 300,
+  },
+  suggestionNotice: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#1E3A8A',
+    fontWeight: '800',
+    backgroundColor: '#EFF6FF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#DBEAFE',
   },
   suggestionItem: {
     flexDirection: 'row',

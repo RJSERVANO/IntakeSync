@@ -1,20 +1,17 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Modal } from 'react-native';
+import { SafeAreaView, SafeAreaView as ModalSafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import BottomNavigation from '../../navigation/BottomNavigation';
-import { Modal } from 'react-native';
-import { SafeAreaView as ModalSafeAreaView } from 'react-native-safe-area-context';
 import api from '../../../api';
+import ScreenHeader from '../../common/ScreenHeader';
 
 const { width } = Dimensions.get('window');
 
 export default function Categories() {
   const router = useRouter();
   const { token } = useLocalSearchParams();
-  const insets = useSafeAreaInsets();
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [timeline, setTimeline] = useState<Array<{ time: string; label: string; icon?: string; color?: string }>>([]);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
@@ -91,17 +88,9 @@ export default function Categories() {
   ];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={[]}>
+      <ScreenHeader title="Categories" showBackButton />
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Categories</Text>
-          <View style={styles.placeholder} />
-        </View>
-
         {/* Categories Grid */}
         <View style={styles.categoriesContainer}>
           {categories.map((category) => (
@@ -188,34 +177,6 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     paddingHorizontal: 20,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 10,
-  },
-  backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#EFF6FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  placeholder: {
-    width: 38,
   },
   categoriesContainer: {
     flexDirection: 'row',

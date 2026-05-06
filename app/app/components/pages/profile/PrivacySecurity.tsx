@@ -5,6 +5,7 @@ import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import ScreenHeader from '../../common/ScreenHeader';
 import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
 
 export default function PrivacySecurity() {
@@ -62,12 +63,7 @@ export default function PrivacySecurity() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
-        <View style={styles.headerCopy}>
-          <Text style={styles.title}>Privacy & Security</Text>
-          <Text style={styles.subtitle}>Manage account security and privacy information.</Text>
-        </View>
-      </View>
+      <ScreenHeader title="Privacy & Security" subtitle="Manage account security and privacy information." showBackButton />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.sectionTitle}>Account Security</Text>
@@ -240,31 +236,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 56,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
-  headerCopy: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  subtitle: {
-    marginTop: 2,
-    color: '#64748B',
-    fontWeight: '700',
-    fontSize: 12,
-    lineHeight: 17,
   },
   sectionTitle: {
     fontSize: 16,

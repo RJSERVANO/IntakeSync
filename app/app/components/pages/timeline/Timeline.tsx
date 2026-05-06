@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Modal } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSnooze } from '../../../../hooks/useSnooze';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
+import ScreenHeader from '../../common/ScreenHeader';
 
 export default function Timeline() {
-  const router = useRouter();
   const { token } = useLocalSearchParams();
   const { logSnooze } = useSnooze();
   const [timelineData, setTimelineData] = useState<Array<{ id: number; time: string; title: string; body?: string; description?: string; status: string; type?: string; icon?: string }>>([]);
@@ -90,16 +90,8 @@ export default function Timeline() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <ScreenHeader title="Today's Timeline" showBackButton />
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Today&apos;s Timeline</Text>
-          <View style={styles.placeholder} />
-        </View>
-
         {/* Timeline Items */}
         <View style={styles.timelineContainer}>
           {timelineData.length > 0 ? (
@@ -209,34 +201,6 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     paddingHorizontal: 20,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 10,
-  },
-  backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#EFF6FF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  headerTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  placeholder: {
-    width: 38,
   },
   // removed date header to keep UI clean and avoid placeholder date
   timelineContainer: {

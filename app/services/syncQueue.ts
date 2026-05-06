@@ -5,12 +5,11 @@ import {
   getCacheOwner,
   getMedicationCacheKey,
   getUserCacheIdentifier,
+  getUserScopedKey,
   readOfflineCache,
   writeOfflineCache,
   getCachedSession,
 } from './offlineStorage';
-
-const SYNC_QUEUE_KEY = 'intakesync.sync_queue';
 
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 export type SyncQueueAction =
@@ -19,6 +18,7 @@ export type SyncQueueAction =
   | 'UPDATE_MEDICATION'
   | 'DELETE_MEDICATION'
   | 'MARK_MEDICATION_TAKEN'
+  | 'MARK_MEDICATION_MISSED'
   | 'SNOOZE_MEDICATION'
   | 'CLEAR_MEDICATION_HISTORY'
   | 'MARK_NOTIFICATION_READ'
@@ -100,7 +100,10 @@ function normalizeItem(raw: any): SyncQueueItem | null {
 
 async function readQueue(): Promise<SyncQueueItem[]> {
   try {
-    const raw = await AsyncStorage.getItem(SYNC_QUEUE_KEY);
+    const session = await getCachedSession();
+    const owner = getCacheOwner(session?.user);
+    if (!owner.owner_id && !owner.owner_email) return [];
+    const raw = await AsyncStorage.getItem(getUserScopedKey(owner, 'sync_queue'));
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.map(normalizeItem).filter(Boolean) as SyncQueueItem[] : [];
   } catch {
@@ -110,7 +113,10 @@ async function readQueue(): Promise<SyncQueueItem[]> {
 
 async function writeQueue(queue: SyncQueueItem[]): Promise<boolean> {
   try {
-    await AsyncStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+    const session = await getCachedSession();
+    const owner = getCacheOwner(session?.user);
+    if (!owner.owner_id && !owner.owner_email) return false;
+    await AsyncStorage.setItem(getUserScopedKey(owner, 'sync_queue'), JSON.stringify(queue));
     return true;
   } catch {
     return false;
@@ -145,12 +151,13 @@ function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQue
     case 'DELETE_MEDICATION':
       return { endpoint: `/medications/${item.payload.server_id || item.payload.id || item.local_id}`, method: 'DELETE', payload: {} };
     case 'MARK_MEDICATION_TAKEN':
+    case 'MARK_MEDICATION_MISSED':
     case 'SNOOZE_MEDICATION':
       return {
         endpoint: `/medications/${item.payload.server_id || item.payload.medication_id}/history`,
         method: 'POST',
         payload: {
-          status: item.action_type === 'MARK_MEDICATION_TAKEN' ? 'completed' : 'snoozed',
+          status: item.action_type === 'MARK_MEDICATION_TAKEN' ? 'completed' : item.action_type === 'MARK_MEDICATION_MISSED' ? 'missed' : 'snoozed',
           time: item.payload.time,
           local_id: item.local_id,
           client_uuid: item.local_id,
@@ -183,6 +190,7 @@ function isMedicationAction(actionType: SyncQueueAction) {
     'UPDATE_MEDICATION',
     'DELETE_MEDICATION',
     'MARK_MEDICATION_TAKEN',
+    'MARK_MEDICATION_MISSED',
     'SNOOZE_MEDICATION',
     'CLEAR_MEDICATION_HISTORY',
   ].includes(actionType);
@@ -219,7 +227,7 @@ async function sendItem(item: SyncQueueItem, token: string) {
   const request = buildRequest(item);
   if (!request.endpoint) throw new Error(`No endpoint for ${item.action_type}`);
 
-  if ((item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'MARK_MEDICATION_TAKEN' || item.action_type === 'SNOOZE_MEDICATION') && !request.endpoint.match(/\/\d+/)) {
+  if ((item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'MARK_MEDICATION_TAKEN' || item.action_type === 'MARK_MEDICATION_MISSED' || item.action_type === 'SNOOZE_MEDICATION') && !request.endpoint.match(/\/\d+/)) {
     throw new Error('Waiting for medication create to sync first');
   }
 
@@ -359,7 +367,7 @@ export async function processSyncQueue(
         await onSynced?.(item, response);
       } catch (error: any) {
         const status = error?.status;
-        const safeDuplicate = status === 409 && ['LOG_BEVERAGE', 'MARK_MEDICATION_TAKEN', 'SNOOZE_MEDICATION'].includes(item.action_type);
+        const safeDuplicate = status === 409 && ['LOG_BEVERAGE', 'MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item.action_type);
         const safeMissing = status === 404 && ['DELETE_MEDICATION', 'CLEAR_NOTIFICATION', 'MARK_NOTIFICATION_READ', 'COMPLETE_NOTIFICATION', 'SNOOZE_NOTIFICATION'].includes(item.action_type);
         if (safeDuplicate || safeMissing) {
           if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: 'synced', updated_at: new Date().toISOString(), last_error: null };

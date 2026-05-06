@@ -1,18 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { cancelHydrationNotifications, notificationService } from '../../../../services/notificationService';
+import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
 import { get, post } from '../../../api';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
+import ScreenHeader from '../../common/ScreenHeader';
 
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
 
 type NotificationPrefs = Record<SettingKey, boolean>;
-
-const STORAGE_KEY = 'intakesync_notification_preferences_v1';
 
 const DEFAULT_PREFS: NotificationPrefs = {
   allowNotifications: false,
@@ -23,12 +22,12 @@ const DEFAULT_PREFS: NotificationPrefs = {
 };
 
 export default function NotificationSettings() {
-  const insets = useSafeAreaInsets();
   const { token } = useLocalSearchParams();
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [notificationRecordCount, setNotificationRecordCount] = useState<number | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [clearModalVisible, setClearModalVisible] = useState(false);
   const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
 
@@ -38,10 +37,10 @@ export default function NotificationSettings() {
 
   const loadSettings = async () => {
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        setPrefs({ ...DEFAULT_PREFS, ...JSON.parse(raw) });
-      }
+      const session = await getCachedSession();
+      setCurrentUser(session?.user ?? null);
+      const cached = session?.user ? await readSettingsCache<any>(session.user) : null;
+      setPrefs({ ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) });
     } catch (error) {
       console.log('Notification settings load error:', error);
       setNoticeModal({ type: 'warning', title: 'Notice', message: 'Could not load saved notification preferences.' });
@@ -68,7 +67,8 @@ export default function NotificationSettings() {
   }, [loadNotificationStats]);
 
   const persist = async (next: NotificationPrefs) => {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const existing = currentUser ? await readSettingsCache<any>(currentUser) : null;
+    await writeSettingsCache({ ...(existing || {}), notificationPreferences: next }, currentUser);
   };
 
   const updateSetting = async (key: SettingKey, value: boolean) => {
@@ -150,25 +150,9 @@ export default function NotificationSettings() {
     }
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2563EB" />
-          <Text style={styles.loadingText}>Loading preferences...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Notifications</Text>
-          <Text style={styles.subtitle}>Manage reminders for hydration and medication schedules.</Text>
-        </View>
-      </View>
+      <ScreenHeader title="Notifications" subtitle="Manage reminders for hydration and medication schedules." showBackButton />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.card}>
           <SettingRow
@@ -356,32 +340,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: '#64748B',
     fontWeight: '700',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    backgroundColor: '#F8FAFC',
-    borderBottomWidth: 1,
-    borderBottomColor: 'transparent',
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 22,
-    lineHeight: 27,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  subtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    lineHeight: 17,
-    color: '#64748B',
-    fontWeight: '600',
   },
   sectionTitle: {
     fontSize: 15,

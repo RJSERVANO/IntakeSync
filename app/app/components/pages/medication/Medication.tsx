@@ -13,13 +13,16 @@ import {
   getUserCacheIdentifier,
   readMedicationCache,
   readMedicationHistoryCache,
+  searchCachedOtcMedicinesWithMeta,
   writeMedicationCache,
   writeMedicationHistoryCache,
+  writeOtcSearchCache,
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, mergeLatestPendingAction, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
-import { cancelMedicationNotifications, notificationService } from '../../../../services/notificationService';
+import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService } from '../../../../services/notificationService';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
+import InlineSyncNotice from '../../common/InlineSyncNotice';
 
 type MedicationItem = {
   id: string;
@@ -66,6 +69,13 @@ type HistoryEntry = {
   loggedAt?: string;
 };
 
+type DoseChipStatus = 'upcoming' | 'completed' | 'missed' | 'skipped';
+
+type DoseChip = {
+  time: string;
+  status: DoseChipStatus;
+};
+
 type ThemedPopup = {
   title: string;
   message: string;
@@ -76,6 +86,7 @@ type ThemedPopup = {
 const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
+const MISSED_DOSE_GRACE_MS = 60 * 1000;
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -125,17 +136,17 @@ function buildCalendarDays(monthDate: Date) {
   });
 }
 
-function roundToNextMinutes(date: Date, increment = 15) {
-  const rounded = new Date(date);
-  rounded.setSeconds(0, 0);
-  const minutes = rounded.getMinutes();
-  const nextMinutes = Math.ceil(minutes / increment) * increment;
-  if (nextMinutes === 60) {
-    rounded.setHours(rounded.getHours() + 1, 0, 0, 0);
+function getNextMedicationTimeSlot(now = new Date(), intervalMinutes = 10): Date {
+  const next = new Date(now);
+  next.setSeconds(0, 0);
+  const minutes = next.getMinutes();
+  const nextBoundary = Math.ceil((minutes + 1) / intervalMinutes) * intervalMinutes;
+  if (nextBoundary >= 60) {
+    next.setHours(next.getHours() + 1, 0, 0, 0);
   } else {
-    rounded.setMinutes(nextMinutes);
+    next.setMinutes(nextBoundary);
   }
-  return rounded;
+  return next;
 }
 
 function inferScheduleFromText(text = '', frequency?: string) {
@@ -179,7 +190,7 @@ function generateSuggestedTimes({
   const inferred = inferScheduleFromText('', frequency);
   const interval = Number(intervalHours || inferred.intervalHours || 24);
   const maxDoses = Math.max(1, Math.min(Number(maxDosesToday || inferred.maxDosesToday || 1), 6));
-  const first = roundToNextMinutes(startTime);
+  const first = getNextMedicationTimeSlot(startTime);
   const seen = new Set<string>();
   const times: string[] = [];
 
@@ -290,10 +301,11 @@ export default function Medication() {
   const [editing, setEditing] = useState<MedicationItem | null>(null);
   const [stats, setStats] = useState<any>(null);
   const [upcoming, setUpcoming] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showMedicineSuggestions, setShowMedicineSuggestions] = useState(false);
+  const [medicineSearchMessage, setMedicineSearchMessage] = useState<string | null>(null);
   const [selectedOtcMedicine, setSelectedOtcMedicine] = useState<OtcMedicineSuggestion | null>(null);
   const [lastClearedTime, setLastClearedTime] = useState<number>(0);
   const [clearedHistoryKeys, setClearedHistoryKeys] = useState<string[]>([]);
@@ -314,13 +326,15 @@ export default function Medication() {
     onPrimary?: () => void | Promise<void>;
   } | null>(null);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
   const shownReminderPopups = useRef<Set<string>>(new Set());
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const missedDoseSyncKeys = useRef<Set<string>>(new Set());
   const medicationCacheOwner = getUserCacheIdentifier(currentUser);
   const clearedHistoryCacheKey = medicationCacheOwner
     ? getMedicationClearedHistoryCacheKey(medicationCacheOwner)
-    : getMedicationClearedHistoryCacheKey('unknown');
+    : null;
 
   // form state
   const [name, setName] = useState('');
@@ -401,16 +415,33 @@ export default function Medication() {
       if (name.trim().length < 2) {
         setMedicineSuggestions([]);
         setShowMedicineSuggestions(false);
+        setMedicineSearchMessage(null);
         return;
       }
 
       try {
         const response = await api.get(`/medicines/search?query=${encodeURIComponent(name)}`);
-        setMedicineSuggestions(response.medicines || []);
+        const results = response.medicines || [];
+        await writeOtcSearchCache(name, results);
+        setMedicineSuggestions(results);
+        setMedicineSearchMessage(null);
         setShowMedicineSuggestions(true);
-      } catch (err) {
+      } catch (err: any) {
         console.log('Medicine search error:', err);
-        setMedicineSuggestions([]);
+        const cached = await searchCachedOtcMedicinesWithMeta(name);
+        const canUseCache = cached.results.length > 0 && (api.isNetworkError(err) || !cached.isStale);
+        setMedicineSuggestions(canUseCache ? cached.results : []);
+        if (canUseCache) {
+          setMedicineSearchMessage(cached.isStale ? 'Showing cached medication results. This data may be outdated.' : 'Showing cached medication results.');
+          setShowMedicineSuggestions(true);
+        } else {
+          setMedicineSearchMessage(
+            api.isNetworkError(err)
+              ? 'No offline medication search data available. Connect to the internet to search medications.'
+              : 'Could not search medications. Please try again.'
+          );
+          setShowMedicineSuggestions(true);
+        }
       }
     };
 
@@ -419,6 +450,11 @@ export default function Medication() {
   }, [name]);
 
   useEffect(() => {
+    if (!clearedHistoryCacheKey) {
+      setLastClearedTime(0);
+      setClearedHistoryKeys([]);
+      return;
+    }
     (async () => {
       try {
         const [clearedTime, clearedKeys] = await Promise.all([
@@ -434,27 +470,40 @@ export default function Medication() {
   }, [clearedHistoryCacheKey]);
 
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
-        setLoading(true);
-        if (token) {
+        if (!token) {
           const session = await getCachedSession();
           const sessionUser = currentUser || session?.user || null;
-          if (sessionUser && !currentUser) setCurrentUser(sessionUser);
-          const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
-          const localColorById = new Map(localMeds.map((med) => [med.id.toString(), med.color]));
-          if (localMeds.length > 0) {
-            setMeds(localMeds);
-            setLoading(false);
-          } else {
-            setMeds([]);
-            setHistory([]);
-          }
+          if (sessionUser && mounted) setCurrentUser(sessionUser);
+          const localMeds = sessionUser ? await readMedicationCache<MedicationItem[]>(sessionUser) : null;
+          const localHistory = sessionUser ? await readMedicationHistoryCache<HistoryEntry[]>(sessionUser) : null;
+          if (!mounted) return;
+          setMeds(localMeds || []);
+          setHistory(dedupeMedicationHistory(localHistory || []));
+          setLoading(false);
+          return;
+        }
 
+        const session = await getCachedSession();
+        const sessionUser = currentUser || session?.user || null;
+        if (sessionUser && !currentUser && mounted) setCurrentUser(sessionUser);
+        const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
+        const localHistory: HistoryEntry[] = sessionUser ? (await readMedicationHistoryCache<HistoryEntry[]>(sessionUser)) || [] : [];
+        const localColorById = new Map(localMeds.map((med) => [med.id.toString(), med.color]));
+        if (!mounted) return;
+        setMeds(localMeds);
+        setHistory(dedupeMedicationHistory(localHistory));
+        setLoading(false);
+        setSyncing(true);
+
+        if (token) {
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
           // Ensure all IDs are strings for consistency
           const normalizedMeds = (serverMeds || []).map(m => normalizeMedication(m, localColorById.get(m.id.toString())));
+          if (!mounted) return;
           setMeds(normalizedMeds);
           if (sessionUser) await writeMedicationCache(sessionUser, normalizedMeds);
 
@@ -479,7 +528,8 @@ export default function Medication() {
           if (historyResults.status === 'fulfilled') {
             const allHistory = historyResults.value.flat();
             console.log('Initial history loaded:', allHistory.length, 'entries');
-            const nextHistory = dedupeMedicationHistory(allHistory);
+            const nextHistory = dedupeMedicationHistory([...allHistory, ...localHistory]);
+            if (!mounted) return;
             setHistory(nextHistory);
             if (sessionUser) await writeMedicationHistoryCache(sessionUser, nextHistory);
           } else {
@@ -488,11 +538,11 @@ export default function Medication() {
 
           // Load last cleared timestamp
           try {
-            const clearedTime = await AsyncStorage.getItem(`${clearedHistoryCacheKey}:cleared_time`);
+            const clearedTime = clearedHistoryCacheKey ? await AsyncStorage.getItem(`${clearedHistoryCacheKey}:cleared_time`) : null;
             if (clearedTime) {
               setLastClearedTime(parseInt(clearedTime, 10));
             }
-            const clearedKeys = await AsyncStorage.getItem(clearedHistoryCacheKey);
+            const clearedKeys = clearedHistoryCacheKey ? await AsyncStorage.getItem(clearedHistoryCacheKey) : null;
             if (clearedKeys) {
               setClearedHistoryKeys(JSON.parse(clearedKeys));
             }
@@ -502,6 +552,7 @@ export default function Medication() {
 
           // Set stats
           if (statsData.status === 'fulfilled') {
+            if (!mounted) return;
             setStats(statsData.value || {
               total_medications: 0,
               active_medications: 0,
@@ -519,16 +570,10 @@ export default function Medication() {
 
           // Set upcoming
           if (upcomingData.status === 'fulfilled') {
+            if (!mounted) return;
             setUpcoming(upcomingData.value || []);
           }
           setOfflineMode(false);
-        } else {
-          const session = await getCachedSession();
-          const sessionUser = currentUser || session?.user || null;
-          const localMeds = sessionUser ? await readMedicationCache<MedicationItem[]>(sessionUser) : null;
-          const localHistory = sessionUser ? await readMedicationHistoryCache<HistoryEntry[]>(sessionUser) : null;
-          setMeds(localMeds || []);
-          setHistory(dedupeMedicationHistory(localHistory || []));
         }
       } catch (err) {
         if (api.isAuthError(err)) {
@@ -537,23 +582,21 @@ export default function Medication() {
         }
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
-          try {
-            const session = await getCachedSession();
-            const sessionUser = currentUser || session?.user || null;
-            const localMeds = sessionUser ? await readMedicationCache<MedicationItem[]>(sessionUser) : null;
-            const localHistory = sessionUser ? await readMedicationHistoryCache<HistoryEntry[]>(sessionUser) : null;
-            setMeds(localMeds || []);
-            setHistory(dedupeMedicationHistory(localHistory || []));
-          } catch {
-            // Keep whatever is already visible.
-          }
+          showInlineNotice('Offline mode - changes will sync when connected.');
         } else {
           console.log('Failed to load meds');
         }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+          setSyncing(false);
+        }
       }
     })();
+    return () => {
+      mounted = false;
+      setSyncing(false);
+    };
   }, [clearedHistoryCacheKey, currentUser, router, token]);
 
   // Persist medications to local storage
@@ -598,7 +641,7 @@ export default function Medication() {
       if (medicineData) {
         try {
           const data = JSON.parse(medicineData as string);
-          const selectedMedicine = data as OtcMedicineSuggestion;
+          const selectedMedicine = { ...data, name: data.name || medicineName, dosage: data.dosage || medicineDosage } as OtcMedicineSuggestion;
           setSelectedOtcMedicine(selectedMedicine);
           const recommendedTimes = buildTimesForMedicine(selectedMedicine);
           if (recommendedTimes.length > 0) setTimes(recommendedTimes);
@@ -631,7 +674,7 @@ export default function Medication() {
             // ignore per-med history errors
           }
         }
-        setHistory(dedupeMedicationHistory(allHistory));
+        setHistory((current) => dedupeMedicationHistory([...allHistory, ...current]));
       } catch (e) {
         console.log('Failed to reload stats/history:', e);
       }
@@ -646,12 +689,42 @@ export default function Medication() {
     return () => clearInterval(interval);
   }, [token, meds]);
 
+  useEffect(() => {
+    if (!currentUser || meds.length === 0) return;
+    const newMissed = getNewMissedDoseEntries(history);
+    if (newMissed.length === 0) return;
+    setHistory((current) => dedupeMedicationHistory([...newMissed, ...current]));
+    newMissed.forEach((entry) => {
+      syncMissedDose(entry);
+    });
+  // Dose reconciliation is intentionally keyed to state snapshots; helper identities change every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, history, meds, nowTick]);
+
+  useEffect(() => {
+    if (!currentUser || meds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      notificationManager.cancelAllReminders('medication');
+      for (const med of meds.filter(isMedicationActive)) {
+        if (cancelled) return;
+        await scheduleMedicationReminders(med);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  // Reminder scheduling is idempotent through user-scoped refs; avoid rescheduling due to helper identity churn.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, meds]);
+
   function openAdd() {
     console.log('Medication: openAdd called');
     setEditing(null);
     setName('');
     setDosage('');
-    setTimes([]);
+    setTimes([getNextMedicationTimeSlot().toISOString()]);
+    setMedicineSearchMessage(null);
     setSelectedOtcMedicine(null);
     setReminder(true);
     setStartDate(todayDateString());
@@ -731,7 +804,7 @@ export default function Medication() {
         try {
           await api.put(`/medications/${editing.server_id || editing.id}`, medData, token as string);
           // Schedule medication reminders
-          await scheduleMedicationReminders(updatedMed);
+          await scheduleMedicationReminders(updatedMed, true);
           // Reload all data from server
           await reloadAllData({ [editing.id]: color });
           savedSuccessfully = true;
@@ -745,7 +818,7 @@ export default function Medication() {
             } else {
               await mergeLatestPendingAction('UPDATE_MEDICATION', localId, { ...nextMed, server_id: editing.server_id || editing.id });
             }
-            await scheduleMedicationReminders(nextMed);
+            await scheduleMedicationReminders(nextMed, true);
             setOfflineMode(true);
             showInlineNotice('Saved offline. Will sync when connected.');
             savedSuccessfully = true;
@@ -755,7 +828,7 @@ export default function Medication() {
         }
       } else {
         await mergeLatestPendingAction(editing.server_id ? 'UPDATE_MEDICATION' : 'CREATE_MEDICATION', localId, updatedMed);
-        await scheduleMedicationReminders({ ...updatedMed, sync_status: 'pending' });
+        await scheduleMedicationReminders({ ...updatedMed, sync_status: 'pending' }, true);
         showInlineNotice('Saved offline. Will sync when connected.');
         savedSuccessfully = true;
       }
@@ -808,12 +881,17 @@ export default function Medication() {
     if (savedSuccessfully) showInlineNotice(successMessage);
   }
 
-  async function scheduleMedicationReminders(medication: MedicationItem) {
+  async function scheduleMedicationReminders(medication: MedicationItem, replaceExisting = false) {
+    const notificationMedicationId = getNotificationMedicationId(medication);
+    if (replaceExisting) {
+      notificationManager.cancelAllReminders('medication');
+      await cancelMedicationNotifications(notificationMedicationId);
+    }
     if (!medication.reminder) {
       // If reminder is disabled, cancel existing reminders
       if (medication.id) {
         notificationManager.cancelAllReminders('medication');
-        await cancelMedicationNotifications(String(medication.local_id || medication.id));
+        await cancelMedicationNotifications(notificationMedicationId);
       }
       return;
     }
@@ -821,10 +899,17 @@ export default function Medication() {
     try {
       // Schedule in-app reminders for each time
       await notificationService.scheduleMedicationNotifications(
-        String(medication.local_id || medication.id),
+        notificationMedicationId,
         medication.name,
         medication.dosage || '',
-        medication.times || []
+        medication.times || [],
+        undefined,
+        {
+          startDate: medication.start_date || todayDateString(),
+          endDate: medication.end_date || null,
+          frequency: medication.frequency,
+          daysOfWeek: medication.days_of_week || [],
+        }
       );
       medication.times.forEach((timeStr) => {
         const targetTime = new Date(timeStr);
@@ -939,7 +1024,7 @@ export default function Medication() {
         const allHistory = historyResults.value.flat();
         console.log('Reloaded history:', allHistory.length, 'entries');
         console.log('Sample entries:', allHistory.slice(0, 3));
-        setHistory(dedupeMedicationHistory(allHistory));
+        setHistory((current) => dedupeMedicationHistory([...allHistory, ...current]));
       } else {
         console.log('Failed to reload history:', historyResults.reason);
       }
@@ -1264,6 +1349,7 @@ export default function Medication() {
       )
       );
     };
+    await cancelMedicationDoseNotifications(getNotificationMedicationId(med), scheduledTime);
 
     // Save to server if token exists
     if (token) {
@@ -1433,8 +1519,10 @@ export default function Medication() {
         const nextClearedKeys = Array.from(new Set([...clearedHistoryKeys, ...keysToClear]));
         const remainingHistory = history.filter((entry) => !keysToClear.includes(entry.id) && !keysToClear.includes(getHistoryCompositeKey(entry)));
         try {
-          await AsyncStorage.setItem(`${clearedHistoryCacheKey}:cleared_time`, now.toString());
-          await AsyncStorage.setItem(clearedHistoryCacheKey, JSON.stringify(nextClearedKeys));
+          if (clearedHistoryCacheKey) {
+            await AsyncStorage.setItem(`${clearedHistoryCacheKey}:cleared_time`, now.toString());
+            await AsyncStorage.setItem(clearedHistoryCacheKey, JSON.stringify(nextClearedKeys));
+          }
           await writeMedicationHistoryCache(currentUser, remainingHistory);
           setLastClearedTime(now);
           setClearedHistoryKeys(nextClearedKeys);
@@ -1495,6 +1583,182 @@ export default function Medication() {
       && entry.getMinutes() === scheduled.getMinutes();
   }
 
+  function getNotificationMedicationId(med: MedicationItem) {
+    return String(med.local_id || med.id);
+  }
+
+  function getMedicationOwnerKey() {
+    return String(currentUser?.id ?? currentUser?.user_id ?? currentUser?.email ?? 'local');
+  }
+
+  function getDoseOccurrenceKey(medId: string, scheduledTime: string) {
+    const date = new Date(scheduledTime);
+    const datePart = toDateStringLocal(date);
+    const timePart = `${date.getHours()}`.padStart(2, '0') + ':' + `${date.getMinutes()}`.padStart(2, '0');
+    return `medication:${getMedicationOwnerKey()}:${medId}:${datePart}:${timePart}`;
+  }
+
+  function getStableHistoryId(medId: string, scheduledTime: string, status: HistoryEntry['status']) {
+    return `${getDoseOccurrenceKey(medId, scheduledTime)}:${status}`.replace(/[^a-zA-Z0-9:_-]+/g, '_');
+  }
+
+  function isMedicationScheduledOnDate(med: MedicationItem, date: Date) {
+    if (!med.times?.length || med.deleted_at) return false;
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    if (med.start_date && parseDateStringLocal(med.start_date).getTime() > dayStart.getTime()) return false;
+    if (med.end_date) {
+      const end = parseDateStringLocal(med.end_date);
+      end.setHours(23, 59, 59, 999);
+      if (end.getTime() < dayStart.getTime()) return false;
+    }
+    if (med.frequency === 'weekly' && med.days_of_week?.length) {
+      return med.days_of_week.includes(date.getDay());
+    }
+    return true;
+  }
+
+  function getMedicationDoseOccurrencesForDate(med: MedicationItem, date: Date) {
+    if (!isMedicationScheduledOnDate(med, date)) return [];
+    return (med.times || [])
+      .map((time) => {
+        const source = new Date(time);
+        if (Number.isNaN(source.getTime())) return null;
+        const occurrence = new Date(date);
+        occurrence.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), 0);
+        return occurrence;
+      })
+      .filter((item): item is Date => !!item)
+      .sort((a, b) => a.getTime() - b.getTime());
+  }
+
+  function getDoseHistoryEntry(medId: string, scheduledTime: string) {
+    return dedupeMedicationHistory(history).find((entry) => (
+      entry.medId.toString() === medId.toString()
+      && !isClearedHistory(entry)
+      && isSameDoseTime(entry.time, scheduledTime)
+      && (entry.status === 'completed' || entry.status === 'skipped' || entry.status === 'missed')
+    ));
+  }
+
+  function getDoseChipStatus(medId: string, scheduledTime: string, now = new Date(nowTick)): DoseChipStatus {
+    const entry = getDoseHistoryEntry(medId, scheduledTime);
+    if (entry?.status === 'completed') return 'completed';
+    if (entry?.status === 'skipped') return 'skipped';
+    if (entry?.status === 'missed') return 'missed';
+    return new Date(scheduledTime).getTime() + MISSED_DOSE_GRACE_MS < now.getTime() ? 'missed' : 'upcoming';
+  }
+
+  function getTodayDoseChips(med: MedicationItem): DoseChip[] {
+    return getMedicationDoseOccurrencesForDate(med, new Date(nowTick)).map((occurrence) => {
+      const time = occurrence.toISOString();
+      return { time, status: getDoseChipStatus(med.id, time) };
+    });
+  }
+
+  function getDoseSummary(chips: DoseChip[]) {
+    const missed = chips.filter((chip) => chip.status === 'missed');
+    const taken = chips.filter((chip) => chip.status === 'completed');
+    const skipped = chips.filter((chip) => chip.status === 'skipped');
+    const upcomingDose = chips.find((chip) => chip.status === 'upcoming');
+    const lastMissed = missed[missed.length - 1];
+    return {
+      missedCount: missed.length,
+      takenCount: taken.length,
+      skippedCount: skipped.length,
+      nextDose: upcomingDose?.time || null,
+      lastMissed: lastMissed?.time || null,
+    };
+  }
+
+  function getDoseChipLabel(status: DoseChipStatus) {
+    if (status === 'completed') return 'Taken';
+    if (status === 'missed') return 'Missed';
+    if (status === 'skipped') return 'Skipped';
+    return 'Upcoming';
+  }
+
+  function getDoseChipIcon(status: DoseChipStatus): keyof typeof Ionicons.glyphMap {
+    if (status === 'completed') return 'checkmark-circle-outline';
+    if (status === 'missed') return 'alert-circle-outline';
+    if (status === 'skipped') return 'remove-circle-outline';
+    return 'time-outline';
+  }
+
+  function getDoseChipStyle(status: DoseChipStatus) {
+    if (status === 'completed') {
+      return { badgeStyle: styles.timeBadgeTaken, textStyle: styles.timeTextTaken, iconColor: '#047857' };
+    }
+    if (status === 'missed') {
+      return { badgeStyle: styles.timeBadgeMissed, textStyle: styles.timeTextMissed, iconColor: '#DC2626' };
+    }
+    if (status === 'skipped') {
+      return { badgeStyle: styles.timeBadgeSkipped, textStyle: styles.timeTextSkipped, iconColor: '#B45309' };
+    }
+    return { badgeStyle: styles.timeBadgeUpcoming, textStyle: styles.timeTextUpcoming, iconColor: '#2563EB' };
+  }
+
+  function getNewMissedDoseEntries(currentHistory: HistoryEntry[]) {
+    const current = dedupeMedicationHistory(currentHistory);
+    const now = new Date(nowTick);
+    const today = new Date(now);
+    return meds.flatMap((med) => {
+      if (!isMedicationActive(med)) return [];
+      return getMedicationDoseOccurrencesForDate(med, today)
+        .filter((occurrence) => occurrence.getTime() + MISSED_DOSE_GRACE_MS < now.getTime())
+        .filter((occurrence) => !current.some((entry) => (
+          entry.medId.toString() === med.id.toString()
+          && (entry.status === 'completed' || entry.status === 'skipped' || entry.status === 'missed')
+          && isSameDoseTime(entry.time, occurrence.toISOString())
+        )))
+        .map((occurrence) => {
+          const time = occurrence.toISOString();
+          return {
+            id: getStableHistoryId(med.id, time, 'missed'),
+            medId: med.id,
+            time,
+            status: 'missed' as const,
+            loggedAt: new Date().toISOString(),
+          };
+        });
+    });
+  }
+
+  async function syncMissedDose(entry: HistoryEntry) {
+    if (missedDoseSyncKeys.current.has(entry.id)) return;
+    missedDoseSyncKeys.current.add(entry.id);
+    const med = meds.find((item) => item.id.toString() === entry.medId.toString());
+    if (!med) return;
+    const payload = {
+      status: 'missed',
+      time: entry.time,
+      client_uuid: entry.id,
+      local_id: entry.id,
+    };
+    if (token) {
+      try {
+        await api.post(`/medications/${med.server_id || med.id}/history`, payload, token as string);
+        return;
+      } catch (err: any) {
+        if (!api.isNetworkError(err) && err?.status !== 409) {
+          console.log('Failed to sync missed medication dose:', err);
+          return;
+        }
+      }
+    }
+    await enqueueSyncAction({
+      action_type: 'MARK_MEDICATION_MISSED',
+      method: 'POST',
+      local_id: entry.id,
+      payload: {
+        ...payload,
+        medId: med.id,
+        medication_id: med.id,
+        server_id: med.server_id || med.id,
+      },
+    });
+  }
+
   function getHistoryLoggedAt(entry: HistoryEntry) {
     return entry.loggedAt || entry.time;
   }
@@ -1515,6 +1779,9 @@ export default function Medication() {
     }
     if (entry.status === 'snoozed') {
       return { label: 'Snoozed', badgeStyle: styles.statusSnoozed, textStyle: styles.statusSnoozedText };
+    }
+    if (entry.status === 'skipped') {
+      return { label: 'Skipped', badgeStyle: styles.statusSkipped, textStyle: styles.statusSkippedText };
     }
     return { label: 'Missed', badgeStyle: styles.statusSkipped, textStyle: styles.statusSkippedText };
   }
@@ -1581,18 +1848,7 @@ export default function Medication() {
   }
 
   function isMedicationScheduledToday(med: MedicationItem) {
-    if (!med.times?.length) return false;
-    const today = new Date(nowTick);
-    if (med.start_date && new Date(med.start_date).getTime() > today.getTime()) return false;
-    if (med.end_date) {
-      const end = new Date(med.end_date);
-      end.setHours(23, 59, 59, 999);
-      if (end.getTime() < today.getTime()) return false;
-    }
-    if (med.frequency === 'weekly' && med.days_of_week?.length) {
-      return med.days_of_week.includes(today.getDay());
-    }
-    return true;
+    return getMedicationDoseOccurrencesForDate(med, new Date(nowTick)).length > 0;
   }
 
   function getStatsModalItems() {
@@ -1632,14 +1888,10 @@ export default function Medication() {
       const day = new Date(now);
       day.setDate(now.getDate() + offset);
 
-      if (med.frequency === 'weekly' && med.days_of_week?.length && !med.days_of_week.includes(day.getDay())) {
-        continue;
-      }
-
-      med.times.forEach((time) => {
-        const source = new Date(time);
-        const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), source.getHours(), source.getMinutes(), source.getSeconds(), 0);
-        if (candidate.getTime() > now.getTime()) candidates.push(candidate);
+      getMedicationDoseOccurrencesForDate(med, day).forEach((candidate) => {
+        if (candidate.getTime() <= now.getTime()) return;
+        if (getDoseHistoryEntry(med.id, candidate.toISOString())) return;
+        candidates.push(candidate);
       });
     }
 
@@ -1657,13 +1909,13 @@ export default function Medication() {
       const med = normalizeMedication(rawMed, matchedMed?.color);
       const nextReminder = item?.next_reminder;
       if (!nextReminder || new Date(nextReminder).getTime() <= now.getTime()) return;
-      if (hasCompletedDose(med.id.toString(), nextReminder)) return;
+      if (getDoseHistoryEntry(med.id.toString(), nextReminder)) return;
       items.push({ medication: med, next_reminder: nextReminder });
     });
 
     meds.forEach((med) => {
       const nextReminder = getNextLocalReminder(med);
-      if (nextReminder && !hasCompletedDose(med.id, nextReminder)) {
+      if (nextReminder && !getDoseHistoryEntry(med.id, nextReminder)) {
         items.push({ medication: med, next_reminder: nextReminder });
       }
     });
@@ -1675,9 +1927,11 @@ export default function Medication() {
       if (!deduped.has(key)) deduped.set(key, item);
     });
 
-    return Array.from(deduped.values()).sort((a, b) => (
+    const sorted = Array.from(deduped.values()).sort((a, b) => (
       new Date(a.next_reminder).getTime() - new Date(b.next_reminder).getTime()
     ));
+    const firstTime = sorted[0] ? new Date(sorted[0].next_reminder).getTime() : null;
+    return firstTime === null ? [] : sorted.filter((item) => new Date(item.next_reminder).getTime() === firstTime);
   }
 
   async function handleExport() {
@@ -1722,19 +1976,15 @@ export default function Medication() {
     }
   }
 
-  if (loading) {
-  return (
-    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2563EB" />
-          <Text style={styles.loadingText}>Loading Medication...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   const displayUpcoming = getDisplayUpcoming();
   const validHistory = getValidHistoryEntries();
+  const displayStats = {
+    ...stats,
+    total_medications: meds.length,
+    active_medications: meds.filter(isMedicationActive).length,
+    completed_today: validHistory.filter((entry) => entry.status === 'completed' && isSameCalendarDay(new Date(entry.time), new Date(nowTick))).length,
+    missed_today: validHistory.filter((entry) => entry.status === 'missed' && isSameCalendarDay(new Date(entry.time), new Date(nowTick))).length,
+  };
   const planHistoryLimit = getPlanHistoryLimit();
   const historyLimit = historyExpanded ? planHistoryLimit : 5;
   const displayHistory = validHistory.slice(0, historyLimit);
@@ -1751,6 +2001,11 @@ export default function Medication() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
+      <InlineSyncNotice
+        visible={syncing && !inlineNotice && !modalVisible && !deleteTarget && !noticeModal}
+        message="Syncing..."
+        top={Math.max(insets.top, 8) + 54}
+      />
       <InlineNotice
         visible={Boolean(inlineNotice) && !modalVisible && !deleteTarget && !noticeModal}
         message={inlineNotice || ''}
@@ -1802,37 +2057,37 @@ export default function Medication() {
             <View style={styles.statIcon}>
               <Ionicons name="medkit" size={16} color="#2563EB" />
             </View>
-            <Text style={styles.statNumber}>{stats?.total_medications ?? 0}</Text>
+            <Text style={styles.statNumber}>{displayStats.total_medications ?? 0}</Text>
             <Text style={styles.statLabel}>Total meds</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('active')} activeOpacity={0.85}>
             <View style={styles.statIcon}>
               <Ionicons name="checkmark-circle" size={16} color="#2563EB" />
             </View>
-            <Text style={styles.statNumber}>{stats?.active_medications ?? 0}</Text>
+            <Text style={styles.statNumber}>{displayStats.active_medications ?? 0}</Text>
             <Text style={styles.statLabel}>Active</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('today')} activeOpacity={0.85}>
             <View style={styles.statIcon}>
               <Ionicons name="calendar" size={16} color="#2563EB" />
             </View>
-            <Text style={styles.statNumber}>{stats?.completed_today ?? 0}</Text>
+            <Text style={styles.statNumber}>{displayStats.completed_today ?? 0}</Text>
             <Text style={styles.statLabel}>Taken today</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.statCard, styles.statCardMissed]} onPress={() => setStatsModalType('missed')} activeOpacity={0.85}>
             <View style={[styles.statIcon, styles.statIconMissed]}>
               <Ionicons name="alert-circle" size={16} color="#C2410C" />
             </View>
-            <Text style={styles.statNumber}>{stats?.missed_today ?? 0}</Text>
+            <Text style={styles.statNumber}>{displayStats.missed_today ?? 0}</Text>
             <Text style={styles.statLabel}>Missed</Text>
           </TouchableOpacity>
         </View>
 
         {/* Upcoming Medications */}
-        {displayUpcoming.length > 0 && (
-          <View style={styles.sectionContainer}>
-            <Text style={styles.sectionTitle}>Upcoming</Text>
-            {displayUpcoming.slice(0, 3).map((item) => (
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Upcoming</Text>
+          {displayUpcoming.length > 0 ? (
+            displayUpcoming.map((item) => (
               <View key={`${item.medication.id}-${item.next_reminder}`} style={styles.upcomingCard}>
                 <View style={[styles.upcomingIcon, { backgroundColor: getMedicationColor(item.medication) }]}>
                   <Ionicons name="medkit-outline" size={18} color="#FFFFFF" />
@@ -1849,9 +2104,14 @@ export default function Medication() {
                   </Text>
                 </View>
               </View>
-            ))}
-          </View>
-        )}
+            ))
+          ) : (
+            <View style={styles.upcomingEmptyCard}>
+              <Ionicons name="checkmark-circle-outline" size={18} color="#64748B" />
+              <Text style={styles.upcomingEmptyText}>No upcoming medication today</Text>
+            </View>
+          )}
+        </View>
 
         {/* Medications List */}
         <View style={styles.sectionContainer}>
@@ -1866,6 +2126,11 @@ export default function Medication() {
             meds.map((med) => {
               const scheduledTime = getScheduledTimeForMedication(med);
               const doseCompleted = hasCompletedDose(med.id, scheduledTime);
+              const doseChips = getTodayDoseChips(med);
+              const doseSummary = getDoseSummary(doseChips);
+              const visibleDoseChips = doseChips.length > 4 && doseSummary.missedCount > 2
+                ? doseChips.filter((chip) => chip.status !== 'missed').slice(0, 3)
+                : doseChips.slice(0, 6);
               const taking = !!busyActions[`taken:${med.id}`];
               const snoozing = !!busyActions[`snooze:${med.id}`];
               const deleting = !!busyActions[`delete:${med.id}`];
@@ -1880,15 +2145,32 @@ export default function Medication() {
                     <Text style={styles.medicationName}>{med.name}</Text>
                     <Text style={styles.medicationDosage}>{med.dosage}</Text>
 
+                    <View style={styles.doseSummaryRow}>
+                      {doseSummary.nextDose ? (
+                        <Text style={styles.doseSummaryText}>Next dose: {new Date(doseSummary.nextDose).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
+                      ) : (
+                        <Text style={styles.doseSummaryText}>No future dose left today</Text>
+                      )}
+                      {doseSummary.missedCount > 0 && (
+                        <Text style={[styles.doseSummaryText, styles.doseSummaryMissed]}>{doseSummary.missedCount} missed today</Text>
+                      )}
+                      {doseSummary.lastMissed && (
+                        <Text style={styles.doseSummaryMuted}>Last missed: {new Date(doseSummary.lastMissed).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
+                      )}
+                    </View>
+
                     <View style={styles.medicationTimes}>
-                      {med.times.map((time, index) => (
-                        <View key={index} style={styles.timeBadge}>
-                           <Ionicons name="time-outline" size={11} color="#2563EB" />
-                           <Text style={styles.timeText}>
-                             {new Date(time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
-                           </Text>
-                        </View>
-                      ))}
+                      {visibleDoseChips.map((chip) => {
+                        const chipStyle = getDoseChipStyle(chip.status);
+                        return (
+                          <View key={chip.time} style={[styles.timeBadge, chipStyle.badgeStyle]}>
+                            <Ionicons name={getDoseChipIcon(chip.status)} size={11} color={chipStyle.iconColor} />
+                            <Text style={[styles.timeText, chipStyle.textStyle]}>
+                              {new Date(chip.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })} - {getDoseChipLabel(chip.status)}
+                            </Text>
+                          </View>
+                        );
+                      })}
                     </View>
 
                     {med.notes && (
@@ -2041,6 +2323,7 @@ export default function Medication() {
                   value={name}
                   onChangeText={(text) => {
                     setName(text);
+                    setMedicineSearchMessage(null);
                     if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) setSelectedOtcMedicine(null);
                   }}
                   style={styles.input}
@@ -2049,8 +2332,11 @@ export default function Medication() {
                 />
 
                 {/* Medicine Suggestions in Modal */}
-                {showMedicineSuggestions && medicineSuggestions.length > 0 && (
+                {showMedicineSuggestions && (medicineSuggestions.length > 0 || medicineSearchMessage) && (
                   <View style={styles.modalSuggestionsContainer}>
+                    {medicineSearchMessage ? (
+                      <Text style={styles.modalSuggestionNotice}>{medicineSearchMessage}</Text>
+                    ) : null}
                     <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
                       {medicineSuggestions.map((medicine: OtcMedicineSuggestion) => (
                         <TouchableOpacity
@@ -2864,6 +3150,17 @@ const styles = StyleSheet.create({
   upcomingTime: { fontSize: 12, color: '#64748B', marginTop: 3, fontWeight: '700' },
   upcomingRight: { alignItems: 'flex-end' },
   upcomingCountdown: { fontSize: 12, fontWeight: '900', color: '#1E3A8A', backgroundColor: '#EFF6FF', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, overflow: 'hidden' },
+  upcomingEmptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  upcomingEmptyText: { fontSize: 12, color: '#64748B', fontWeight: '800' },
 
   // Medication Cards
   medicationCard: {
@@ -2894,6 +3191,10 @@ const styles = StyleSheet.create({
   medicationContent: { flex: 1 },
   medicationName: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
   medicationDosage: { fontSize: 12, color: '#64748B', marginTop: 3, fontWeight: '700' },
+  doseSummaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 7, alignItems: 'center' },
+  doseSummaryText: { fontSize: 11, color: '#334155', fontWeight: '800' },
+  doseSummaryMissed: { color: '#DC2626' },
+  doseSummaryMuted: { fontSize: 11, color: '#64748B', fontWeight: '700' },
   medicationTimes: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, gap: 6 },
   medicationNotes: { fontSize: 12, color: '#64748B', marginTop: 5, lineHeight: 16, fontWeight: '600' },
 
@@ -2910,6 +3211,14 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
   },
   timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 11 },
+  timeBadgeUpcoming: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
+  timeBadgeTaken: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
+  timeBadgeMissed: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
+  timeBadgeSkipped: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
+  timeTextUpcoming: { color: '#1E3A8A' },
+  timeTextTaken: { color: '#047857' },
+  timeTextMissed: { color: '#DC2626' },
+  timeTextSkipped: { color: '#B45309' },
 
   // Action Buttons
   medicationActions: {
@@ -3474,6 +3783,17 @@ const styles = StyleSheet.create({
   },
   modalSuggestionsList: {
     maxHeight: 250,
+  },
+  modalSuggestionNotice: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#1E3A8A',
+    fontWeight: '800',
+    backgroundColor: '#EFF6FF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#DBEAFE',
   },
   modalSuggestionItem: {
     flexDirection: 'row',

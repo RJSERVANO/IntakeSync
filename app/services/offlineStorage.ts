@@ -5,8 +5,12 @@ export const HYDRATION_CACHE_KEY = 'hydration';
 export const PROFILE_CACHE_KEY = '@intakesync:profile';
 export const SETTINGS_CACHE_KEY = '@intakesync:settings';
 export const NOTIFICATIONS_CACHE_KEY = '@intakesync:notifications';
+export const OTC_SEARCH_CACHE_KEY = '@intakesync:otc_search_cache:v1';
+export const OTC_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type CacheOwner = {
+  id?: string | number | null;
+  email?: string | null;
   owner_id?: string | number | null;
   owner_email?: string | null;
 };
@@ -14,6 +18,16 @@ export type CacheOwner = {
 export type OwnedCachePayload<T = any> = CacheOwner & {
   data: T;
   saved_at: string;
+};
+
+type OtcCacheEntry = {
+  saved_at: string;
+  source: 'backend';
+  data: any[];
+};
+
+type OtcSearchCachePayload = OtcCacheEntry & {
+  queries?: Record<string, OtcCacheEntry>;
 };
 
 export interface CachedSession {
@@ -119,27 +133,6 @@ export async function updateCachedHydrationGoal(hydrationGoal: number, token?: s
   }
 }
 
-export async function readHydrationCache<T = any>(): Promise<T | null> {
-  try {
-    const raw = await AsyncStorage.getItem(HYDRATION_CACHE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function writeHydrationCache(data: any): Promise<void> {
-  try {
-    await AsyncStorage.setItem(HYDRATION_CACHE_KEY, JSON.stringify(data));
-    const goal = Number(data?.goal ?? data?.daily_goal_ml ?? data?.hydration_goal ?? 0);
-    if (Number.isFinite(goal) && goal > 0) {
-      await updateCachedHydrationGoal(goal);
-    }
-  } catch {
-    // Screens can still operate from in-memory state if a cache write fails.
-  }
-}
-
 export async function readOfflineCache<T = any>(key: string): Promise<T | null> {
   try {
     const raw = await AsyncStorage.getItem(key);
@@ -157,37 +150,160 @@ export async function writeOfflineCache(key: string, data: any): Promise<void> {
   }
 }
 
-export async function readProfileCache<T = any>() {
-  return readOfflineCache<T>(PROFILE_CACHE_KEY);
-}
-
-export async function writeProfileCache(data: any) {
-  await writeOfflineCache(PROFILE_CACHE_KEY, data);
-  await updateCachedUser(data);
-}
-
-export async function readSettingsCache<T = any>() {
-  return readOfflineCache<T>(SETTINGS_CACHE_KEY);
-}
-
-export async function writeSettingsCache(data: any) {
-  await writeOfflineCache(SETTINGS_CACHE_KEY, data);
-}
-
-export async function readNotificationsCache<T = any>() {
-  return readOfflineCache<T>(NOTIFICATIONS_CACHE_KEY);
-}
-
-export async function writeNotificationsCache(data: any) {
-  await writeOfflineCache(NOTIFICATIONS_CACHE_KEY, data);
-}
-
 function normalizeCachePart(value: string | number) {
   return String(value).trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '_');
 }
 
+export function normalizeOtcSearchQuery(query: string) {
+  return query.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function getOtcSearchableText(item: any) {
+  return [
+    item?.name,
+    item?.generic_name,
+    item?.brand,
+    item?.category,
+    item?.description,
+    item?.common_use,
+    item?.dosage,
+    item?.dosage_text,
+    item?.frequency,
+    item?.timing_instructions,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function getOtcCacheId(item: any) {
+  return String(item?.id ?? item?.name ?? JSON.stringify(item));
+}
+
+function dedupeOtcResults(items: any[]) {
+  const byId = new Map<string, any>();
+  items.filter(Boolean).forEach((item) => byId.set(getOtcCacheId(item), item));
+  return Array.from(byId.values());
+}
+
+function isOtcCacheStale(savedAt?: string | null) {
+  if (!savedAt) return true;
+  const savedTime = new Date(savedAt).getTime();
+  return !Number.isFinite(savedTime) || Date.now() - savedTime > OTC_CACHE_MAX_AGE_MS;
+}
+
+export async function readOtcSearchCache(): Promise<OtcSearchCachePayload | null> {
+  const payload = await readOfflineCache<any>(OTC_SEARCH_CACHE_KEY);
+  if (!payload || typeof payload !== 'object') return null;
+
+  if (Array.isArray(payload.data)) {
+    return {
+      saved_at: payload.saved_at || new Date(0).toISOString(),
+      source: 'backend',
+      data: payload.data,
+      queries: payload.queries && typeof payload.queries === 'object' ? payload.queries : {},
+    };
+  }
+
+  if (payload.data && typeof payload.data === 'object') {
+    const queries: Record<string, OtcCacheEntry> = {};
+    Object.entries(payload.data).forEach(([query, results]) => {
+      queries[query] = {
+        saved_at: payload.saved_at || new Date(0).toISOString(),
+        source: 'backend',
+        data: Array.isArray(results) ? results : [],
+      };
+    });
+    return {
+      saved_at: payload.saved_at || new Date(0).toISOString(),
+      source: 'backend',
+      data: dedupeOtcResults(Object.values(queries).flatMap((entry) => entry.data)),
+      queries,
+    };
+  }
+
+  return null;
+}
+
+export async function writeOtcSearchCache(query: string, results: any[]): Promise<void> {
+  const normalizedQuery = normalizeOtcSearchQuery(query);
+  if (!normalizedQuery) return;
+  const current = await readOtcSearchCache();
+  const now = new Date().toISOString();
+  const safeResults = Array.isArray(results) ? results : [];
+  const queries = {
+    ...(current?.queries || {}),
+    [normalizedQuery]: {
+      saved_at: now,
+      source: 'backend' as const,
+      data: safeResults,
+    },
+  };
+  await writeOfflineCache(OTC_SEARCH_CACHE_KEY, {
+    saved_at: now,
+    source: 'backend',
+    data: dedupeOtcResults([...(current?.data || []), ...safeResults]),
+    queries,
+  });
+}
+
+export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{ results: any[]; isStale: boolean; savedAt: string | null; hasCache: boolean }> {
+  const normalizedQuery = normalizeOtcSearchQuery(query);
+  if (!normalizedQuery) return { results: [], isStale: false, savedAt: null, hasCache: false };
+  const cache = await readOtcSearchCache();
+  if (!cache) return { results: [], isStale: false, savedAt: null, hasCache: false };
+
+  const exact = cache.queries?.[normalizedQuery];
+  if (exact && exact.data.length > 0) {
+    return {
+      results: exact.data,
+      isStale: isOtcCacheStale(exact.saved_at),
+      savedAt: exact.saved_at,
+      hasCache: true,
+    };
+  }
+
+  const terms = normalizedQuery.split(' ').filter(Boolean);
+  const byId = new Map<string, any>();
+  cache.data.forEach((item: any) => {
+    const text = getOtcSearchableText(item);
+    if (terms.every((term) => text.includes(term))) {
+      byId.set(getOtcCacheId(item), item);
+    }
+  });
+  return {
+    results: Array.from(byId.values()),
+    isStale: isOtcCacheStale(cache.saved_at),
+    savedAt: cache.saved_at,
+    hasCache: cache.data.length > 0,
+  };
+}
+
+export async function searchCachedOtcMedicines(query: string): Promise<any[]> {
+  return (await searchCachedOtcMedicinesWithMeta(query)).results;
+}
+
+export function normalizeOwnerKey(owner: CacheOwner): string {
+  const id = owner?.id ?? owner?.owner_id;
+  const email = owner?.email ?? owner?.owner_email;
+  if (id !== null && id !== undefined && String(id).trim()) return `id:${normalizeCachePart(id)}`;
+  if (typeof email === 'string' && email.trim()) return `email:${normalizeCachePart(email.trim().toLowerCase())}`;
+  return 'anonymous';
+}
+
+export function getUserScopedKey(owner: CacheOwner, resource: string): string {
+  return `@intakesync:user:${normalizeOwnerKey(owner)}:${resource}`;
+}
+
+export async function getCurrentCacheOwner() {
+  const session = await getCachedSession();
+  return {
+    id: session?.user?.id ?? session?.user?.user_id ?? null,
+    email: typeof session?.user?.email === 'string' ? session.user.email.trim().toLowerCase() : null,
+  };
+}
+
 export function getCacheOwner(user?: any | null): CacheOwner {
   return {
+    id: user?.id ?? user?.user_id ?? null,
+    email: typeof user?.email === 'string' ? user.email.trim().toLowerCase() : null,
     owner_id: user?.id ?? user?.user_id ?? null,
     owner_email: typeof user?.email === 'string' ? user.email.trim().toLowerCase() : null,
   };
@@ -205,18 +321,15 @@ export function getUserCacheIdentifier(user?: any | null) {
 }
 
 export function getMedicationCacheKey(userIdOrEmail?: string | number | null) {
-  const owner = userIdOrEmail ? normalizeCachePart(userIdOrEmail) : 'unknown';
-  return `@intakesync:user:${owner}:medications`;
+  return getUserScopedKey({ id: userIdOrEmail || null }, 'medications');
 }
 
 export function getMedicationHistoryCacheKey(userIdOrEmail?: string | number | null) {
-  const owner = userIdOrEmail ? normalizeCachePart(userIdOrEmail) : 'unknown';
-  return `@intakesync:user:${owner}:med_history`;
+  return getUserScopedKey({ id: userIdOrEmail || null }, 'medication_history');
 }
 
 export function getMedicationClearedHistoryCacheKey(userIdOrEmail?: string | number | null) {
-  const owner = userIdOrEmail ? normalizeCachePart(userIdOrEmail) : 'unknown';
-  return `@intakesync:user:${owner}:med_history_cleared_keys`;
+  return getUserScopedKey({ id: userIdOrEmail || null }, 'medication_history_cleared_keys');
 }
 
 export function cacheOwnerMatches(payload: any, user?: any | null) {
@@ -272,4 +385,85 @@ export async function writeMedicationHistoryCache(user: any | null | undefined, 
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationHistoryCacheKey(ownerKey), user, data);
+}
+
+export async function readHydrationCache<T = any>(): Promise<T | null> {
+  try {
+    const session = await getCachedSession();
+    const user = session?.user ?? null;
+    const owner = getCacheOwner(user);
+    if (!owner.owner_id && !owner.owner_email) return null;
+    const payload = await readOwnedOfflineCache<T>(getUserScopedKey(owner, 'hydration_cache'), user);
+    return payload?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeHydrationCache(data: any): Promise<void> {
+  try {
+    const session = await getCachedSession();
+    const user = session?.user ?? null;
+    const owner = getCacheOwner(user);
+    if (!owner.owner_id && !owner.owner_email) return;
+    await writeOwnedOfflineCache(getUserScopedKey(owner, 'hydration_cache'), user, data);
+    const goal = Number(data?.goal ?? data?.daily_goal_ml ?? data?.hydration_goal ?? 0);
+    if (Number.isFinite(goal) && goal > 0) {
+      await updateCachedHydrationGoal(goal);
+    }
+  } catch {
+    // Screens can still operate from in-memory state if a cache write fails.
+  }
+}
+
+export async function readProfileCache<T = any>(user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  const payload = await readOwnedOfflineCache<T>(getUserScopedKey(owner, 'profile'), currentUser);
+  return payload?.data ?? null;
+}
+
+export async function writeProfileCache(data: any, user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return;
+  await writeOwnedOfflineCache(getUserScopedKey(owner, 'profile'), currentUser, data);
+  await updateCachedUser(data);
+}
+
+export async function readSettingsCache<T = any>(user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  const payload = await readOwnedOfflineCache<T>(getUserScopedKey(owner, 'settings'), currentUser);
+  return payload?.data ?? null;
+}
+
+export async function writeSettingsCache(data: any, user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return;
+  await writeOwnedOfflineCache(getUserScopedKey(owner, 'settings'), currentUser, data);
+}
+
+export async function readNotificationsCache<T = any>(user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  const payload = await readOwnedOfflineCache<T>(getUserScopedKey(owner, 'notifications'), currentUser);
+  return payload?.data ?? null;
+}
+
+export async function writeNotificationsCache(data: any, user?: any | null) {
+  const session = user ? null : await getCachedSession();
+  const currentUser = user ?? session?.user ?? null;
+  const owner = getCacheOwner(currentUser);
+  if (!owner.owner_id && !owner.owner_email) return;
+  await writeOwnedOfflineCache(getUserScopedKey(owner, 'notifications'), currentUser, data);
 }

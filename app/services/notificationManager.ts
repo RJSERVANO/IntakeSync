@@ -12,6 +12,7 @@
 
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCacheOwner, getCachedSession, getUserScopedKey } from './offlineStorage';
 
 // Notification types
 export type NotificationType = 
@@ -43,6 +44,13 @@ interface ReminderTimer {
   intervalMs: number;
   callback: () => void;
   timerId?: any; // Use any to support both browser and Node.js environments
+}
+
+async function getReminderInfoKey() {
+  const session = await getCachedSession();
+  const owner = getCacheOwner(session?.user ?? null);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  return getUserScopedKey(owner, 'reminder_info');
 }
 
 class NotificationManager {
@@ -396,7 +404,9 @@ class NotificationManager {
    */
   private async checkPendingReminders() {
     try {
-      const stored = await AsyncStorage.getItem('reminder_info');
+      const key = await getReminderInfoKey();
+      if (!key) return;
+      const stored = await AsyncStorage.getItem(key);
       if (!stored) return;
 
       const reminders = JSON.parse(stored);
@@ -431,10 +441,12 @@ class NotificationManager {
    */
   private async storeReminderInfo(id: string, info: any) {
     try {
-      const stored = await AsyncStorage.getItem('reminder_info');
+      const key = await getReminderInfoKey();
+      if (!key) return;
+      const stored = await AsyncStorage.getItem(key);
       const reminders = stored ? JSON.parse(stored) : {};
       reminders[id] = info;
-      await AsyncStorage.setItem('reminder_info', JSON.stringify(reminders));
+      await AsyncStorage.setItem(key, JSON.stringify(reminders));
     } catch (error) {
       console.error('Error storing reminder info:', error);
     }
@@ -445,12 +457,14 @@ class NotificationManager {
    */
   private async removeReminderInfo(id: string) {
     try {
-      const stored = await AsyncStorage.getItem('reminder_info');
+      const key = await getReminderInfoKey();
+      if (!key) return;
+      const stored = await AsyncStorage.getItem(key);
       if (!stored) return;
       
       const reminders = JSON.parse(stored);
       delete reminders[id];
-      await AsyncStorage.setItem('reminder_info', JSON.stringify(reminders));
+      await AsyncStorage.setItem(key, JSON.stringify(reminders));
     } catch (error) {
       console.error('Error removing reminder info:', error);
     }
