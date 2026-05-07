@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams } from 'expo-router';
@@ -7,9 +7,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
 import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
+import { getCachedSession } from '../../../../services/offlineStorage';
 
 export default function PrivacySecurity() {
   const { token } = useLocalSearchParams();
+  const [cachedToken, setCachedToken] = useState<string | undefined>();
+  const authToken = (token as string | undefined) || cachedToken;
   const insets = useSafeAreaInsets();
   const [modalVisible, setModalVisible] = useState(false);
   const [passwordData, setPasswordData] = useState({
@@ -19,6 +22,10 @@ export default function PrivacySecurity() {
   });
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
+
+  useEffect(() => {
+    getCachedSession().then((session) => setCachedToken(session?.token)).catch(() => {});
+  }, []);
 
   const closeModal = () => {
     setModalVisible(false);
@@ -43,19 +50,27 @@ export default function PrivacySecurity() {
 
     try {
       setLoading(true);
+      if (!authToken) {
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });
+        return;
+      }
       await api.post(
         '/me/change-password',
         {
           current_password: passwordData.currentPassword,
           new_password: passwordData.newPassword,
         },
-        token as string
+        authToken
       );
 
       closeModal();
       setNotice({ type: 'success', title: 'Password Updated', message: 'Your password has been changed successfully.' });
     } catch (error: any) {
-      setNotice({ type: 'error', title: 'Update Failed', message: error?.data?.message || 'Failed to change password.' });
+      if (api.isNetworkError(error)) {
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });
+      } else {
+        setNotice({ type: 'error', title: 'Update Failed', message: error?.data?.message || 'We could not change your password. Please try again.' });
+      }
     } finally {
       setLoading(false);
     }

@@ -83,9 +83,10 @@ export default function ForgotPassword() {
       }
     } catch (err: any) {
       console.log('forgot password error', err);
-      const message =
-        err?.data?.message || err?.data || err?.message || 'Failed to send reset code. Please try again.';
-      showNotice('error', 'Reset Failed', message);
+      const message = api.isNetworkError(err)
+        ? 'You need to connect to the internet to change or reset your password.'
+        : err?.data?.message || err?.data || 'We could not send a reset code. Please try again.';
+      showNotice(api.isNetworkError(err) ? 'warning' : 'error', api.isNetworkError(err) ? 'Internet Required' : 'Reset Failed', message);
     } finally {
       setLoading(false);
     }

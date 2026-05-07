@@ -1,11 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { AppState, Linking, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { cancelHydrationNotifications, notificationService } from '../../../../services/notificationService';
+import { cancelAllMedicationNotifications, cancelHydrationNotifications, notificationService } from '../../../../services/notificationService';
+import { notificationSettings } from '../../../../services/notificationSettings';
 import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
-import { get, post } from '../../../api';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
 
@@ -23,24 +23,70 @@ const DEFAULT_PREFS: NotificationPrefs = {
 
 export default function NotificationSettings() {
   const { token } = useLocalSearchParams();
+  void token;
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);
   const [, setLoading] = useState(true);
-  const [notificationRecordCount, setNotificationRecordCount] = useState<number | null>(null);
-  const [actionBusy, setActionBusy] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [clearModalVisible, setClearModalVisible] = useState(false);
-  const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
+  const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string; primaryText?: string; secondaryText?: string; onPrimary?: () => void } | null>(null);
 
   useEffect(() => {
     loadSettings();
   }, []);
+
+  const persist = useCallback(async (next: NotificationPrefs) => {
+    const existing = currentUser ? await readSettingsCache<any>(currentUser) : null;
+    await writeSettingsCache({ ...(existing || {}), notificationPreferences: next }, currentUser);
+  }, [currentUser]);
+
+  const refreshPermissionState = useCallback(async () => {
+    const permission = await notificationService.getPermissionStatus();
+    if (!permission.granted) {
+      if (prefs.allowNotifications) {
+        const next = { ...prefs, allowNotifications: false };
+        setPrefs(next);
+        await persist(next);
+        await notificationSettings.initialize();
+        await notificationSettings.setMasterToggle(false);
+      }
+      setPermissionBlocked(permission.status === 'denied' || permission.canAskAgain === false);
+      return;
+    }
+
+    if (permissionBlocked) {
+      const next = { ...prefs, allowNotifications: true };
+      setPrefs(next);
+      setPermissionBlocked(false);
+      await persist(next);
+      await notificationSettings.initialize();
+      await notificationSettings.setMasterToggle(true);
+    } else {
+      setPermissionBlocked(false);
+    }
+  }, [permissionBlocked, persist, prefs]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshPermissionState().catch(() => {});
+    });
+    return () => subscription.remove();
+  }, [refreshPermissionState]);
 
   const loadSettings = async () => {
     try {
       const session = await getCachedSession();
       setCurrentUser(session?.user ?? null);
       const cached = session?.user ? await readSettingsCache<any>(session.user) : null;
-      setPrefs({ ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) });
+      const next = { ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) };
+      const permission = await notificationService.getPermissionStatus();
+      const normalized = permission.granted ? next : { ...next, allowNotifications: false };
+      setPrefs(normalized);
+      setPermissionBlocked(!permission.granted && (permission.status === 'denied' || permission.canAskAgain === false));
+      if (normalized.allowNotifications !== next.allowNotifications) {
+        await writeSettingsCache({ ...(cached || {}), notificationPreferences: normalized }, session?.user ?? null);
+        await notificationSettings.initialize();
+        await notificationSettings.setMasterToggle(false);
+      }
     } catch (error) {
       console.log('Notification settings load error:', error);
       setNoticeModal({ type: 'warning', title: 'Notice', message: 'Could not load saved notification preferences.' });
@@ -49,26 +95,14 @@ export default function NotificationSettings() {
     }
   };
 
-  const loadNotificationStats = useCallback(async () => {
-    if (!token) return;
-    try {
-      const stats = await get('/notifications/stats', token as string, 3000);
-      const byType = stats?.by_type ?? {};
-      const total = Number(byType.hydration ?? 0) + Number(byType.medication ?? 0) + Number(byType.general ?? 0);
-      setNotificationRecordCount(Number.isFinite(total) ? total : null);
-    } catch (error) {
-      console.log('Notification record stats load error:', error);
-      setNotificationRecordCount(null);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    loadNotificationStats();
-  }, [loadNotificationStats]);
-
-  const persist = async (next: NotificationPrefs) => {
-    const existing = currentUser ? await readSettingsCache<any>(currentUser) : null;
-    await writeSettingsCache({ ...(existing || {}), notificationPreferences: next }, currentUser);
+  const openAppSettings = () => {
+    Linking.openSettings().catch(() => {
+      setNoticeModal({
+        type: 'warning',
+        title: 'Open Settings',
+        message: 'Open Android Settings, choose Apps, then IntakeSync, and enable notifications.',
+      });
+    });
   };
 
   const updateSetting = async (key: SettingKey, value: boolean) => {
@@ -78,9 +112,18 @@ export default function NotificationSettings() {
     if (key === 'allowNotifications' && value) {
       const granted = await notificationService.requestPermissions();
       if (!granted) {
-        setNoticeModal({ type: 'warning', title: 'Notifications Are Off', message: 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try this switch again.' });
+        setPermissionBlocked(true);
+        setNoticeModal({
+          type: 'warning',
+          title: 'Notifications Are Off',
+          message: 'Notifications are disabled for IntakeSync. Please enable them in Android app settings.',
+          primaryText: 'Open App Settings',
+          secondaryText: 'Done',
+          onPrimary: openAppSettings,
+        });
         next = { ...prefs, allowNotifications: false };
       } else {
+        setPermissionBlocked(false);
         setNoticeModal({ type: 'success', title: 'Notifications Enabled', message: 'Hydration and medication reminders can now appear on this device.' });
       }
     }
@@ -92,7 +135,14 @@ export default function NotificationSettings() {
     setPrefs(next);
     try {
       await persist(next);
+      await notificationSettings.initialize();
+      if (key === 'allowNotifications') await notificationSettings.setMasterToggle(next.allowNotifications);
+      if (key === 'sound') await notificationSettings.setSoundEnabled(next.sound);
+      if (key === 'vibration') await notificationSettings.setVibrationEnabled(next.vibration);
+      if (key === 'hydrationReminders') await notificationSettings.updateCategoryWithBackend('hydration', next.hydrationReminders);
+      if (key === 'medicationReminders') await notificationSettings.updateCategoryWithBackend('medications', next.medicationReminders);
       if (key === 'hydrationReminders' && !value) await cancelHydrationNotifications();
+      if (key === 'medicationReminders' && !value) await cancelAllMedicationNotifications();
       if (key === 'allowNotifications' && !next.allowNotifications) await notificationService.cancelAllNotifications();
     } catch (error) {
       console.log('Notification settings save error:', error);
@@ -102,53 +152,6 @@ export default function NotificationSettings() {
   };
 
   const reminderDisabled = !prefs.allowNotifications;
-
-  const markAllAsRead = async () => {
-    if (!token || actionBusy) return;
-    setActionBusy(true);
-    try {
-      await post('/notifications/mark-all-read', {}, token as string);
-      await loadNotificationStats();
-      setNoticeModal({
-        type: 'success',
-        title: 'All caught up',
-        message: 'Unread notification records were marked as read.',
-      });
-    } catch (error) {
-      console.log('Mark all notifications read error:', error);
-      setNoticeModal({
-        type: 'error',
-        title: 'Could not update',
-        message: 'Notification records could not be marked read. Please try again.',
-      });
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const clearNotifications = async () => {
-    if (!token || actionBusy) return;
-    setActionBusy(true);
-    try {
-      await post('/notifications/clear', {}, token as string);
-      setClearModalVisible(false);
-      await loadNotificationStats();
-      setNoticeModal({
-        type: 'success',
-        title: 'Notifications cleared',
-        message: 'Only notification records were cleared. Beverage logs and medication history remain.',
-      });
-    } catch (error) {
-      console.log('Clear notifications error:', error);
-      setNoticeModal({
-        type: 'error',
-        title: 'Could not clear',
-        message: 'Notification records could not be cleared. Please try again.',
-      });
-    } finally {
-      setActionBusy(false);
-    }
-  };
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
@@ -212,71 +215,23 @@ export default function NotificationSettings() {
             Preferences are saved on this device. Actual reminder scheduling depends on the existing reminder system.
           </Text>
         </View>
-
-        <Text style={styles.sectionTitle}>Notification Records</Text>
-        <View style={styles.card}>
-          {notificationRecordCount === 0 ? (
-            <View style={styles.recordEmptyRow}>
-              <Ionicons name="notifications-off-outline" size={20} color="#94A3B8" />
-              <Text style={styles.recordEmptyText}>No notification records to manage.</Text>
-            </View>
-          ) : (
-            <>
-              <TouchableOpacity
-                style={[styles.recordActionRow, actionBusy && styles.disabledRow]}
-                onPress={markAllAsRead}
-                disabled={actionBusy || !token}
-                activeOpacity={0.82}
-              >
-                <View style={styles.recordActionIcon}>
-                  <Ionicons name="checkmark-done" size={20} color="#059669" />
-                </View>
-                <View style={styles.settingContent}>
-                  <Text style={styles.settingTitle}>Mark all read</Text>
-                  <Text style={styles.settingDescription}>Clear unread state on notification records.</Text>
-                </View>
-              </TouchableOpacity>
-              <View style={styles.divider} />
-              <TouchableOpacity
-                style={[styles.recordActionRow, actionBusy && styles.disabledRow]}
-                onPress={() => setClearModalVisible(true)}
-                disabled={actionBusy || !token}
-                activeOpacity={0.82}
-              >
-                <View style={[styles.recordActionIcon, styles.dangerActionIcon]}>
-                  <Ionicons name="trash-outline" size={20} color="#DC2626" />
-                </View>
-                <View style={styles.settingContent}>
-                  <Text style={styles.settingTitle}>Clear notifications</Text>
-                  <Text style={styles.settingDescription}>Hide notification records from the Notifications list.</Text>
-                </View>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-        <Text style={styles.recordHelper}>Only notification records are affected. Beverage logs and medication history remain.</Text>
+        {permissionBlocked ? (
+          <TouchableOpacity style={styles.settingsLink} onPress={openAppSettings} activeOpacity={0.82}>
+            <Ionicons name="open-outline" size={18} color="#2563EB" />
+            <Text style={styles.settingsLinkText}>Open App Settings</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
-
-      <ThemedNoticeModal
-        visible={clearModalVisible}
-        type="destructive"
-        title="Clear Notifications?"
-        message="This removes notification records from this list. Beverage logs and medication history will remain."
-        primaryText="Clear"
-        secondaryText="Cancel"
-        loading={actionBusy}
-        onPrimary={clearNotifications}
-        onSecondary={() => setClearModalVisible(false)}
-        onClose={() => setClearModalVisible(false)}
-      />
 
       <ThemedNoticeModal
         visible={Boolean(noticeModal)}
         type={noticeModal?.type || 'info'}
         title={noticeModal?.title || ''}
         message={noticeModal?.message || ''}
-        primaryText="Done"
-        onPrimary={() => setNoticeModal(null)}
+        primaryText={noticeModal?.primaryText || 'Done'}
+        secondaryText={noticeModal?.secondaryText}
+        onPrimary={noticeModal?.onPrimary || (() => setNoticeModal(null))}
+        onSecondary={() => setNoticeModal(null)}
         onClose={() => setNoticeModal(null)}
       />
     </SafeAreaView>
@@ -421,6 +376,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     fontWeight: '700',
+  },
+  settingsLink: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingVertical: 11,
+  },
+  settingsLinkText: {
+    color: '#2563EB',
+    fontSize: 13,
+    fontWeight: '900',
   },
   recordActionRow: {
     flexDirection: 'row',

@@ -200,6 +200,52 @@ export default function Settings() {
           </TouchableOpacity>
         </SettingGroup>
 
+        <SettingGroup title="Account & Support">
+          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)}>
+            <View style={styles.settingIcon}>
+              <Ionicons name="person-outline" size={21} color="#2563EB" />
+            </View>
+            <View style={styles.settingContent}>
+              <Text style={styles.settingTitle}>Profile Details</Text>
+              <Text style={styles.settingSubtitle}>View cached profile information and edit online.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </TouchableOpacity>
+          <View style={styles.separator} />
+          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/NotificationSettings', params: { token } } as any)}>
+            <View style={styles.settingIcon}>
+              <Ionicons name="notifications-outline" size={21} color="#2563EB" />
+            </View>
+            <View style={styles.settingContent}>
+              <Text style={styles.settingTitle}>Notification Settings</Text>
+              <Text style={styles.settingSubtitle}>Local reminder preferences work offline.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </TouchableOpacity>
+          <View style={styles.separator} />
+          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/PrivacySecurity', params: { token } } as any)}>
+            <View style={styles.settingIcon}>
+              <Ionicons name="shield-checkmark-outline" size={21} color="#2563EB" />
+            </View>
+            <View style={styles.settingContent}>
+              <Text style={styles.settingTitle}>Privacy & Security</Text>
+              <Text style={styles.settingSubtitle}>Password changes require an internet connection.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </TouchableOpacity>
+          <View style={styles.separator} />
+          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/HelpSupport', params: { token } } as any)}>
+            <View style={styles.settingIcon}>
+              <Ionicons name="help-circle-outline" size={21} color="#2563EB" />
+            </View>
+            <View style={styles.settingContent}>
+              <Text style={styles.settingTitle}>Help & Support</Text>
+              <Text style={styles.settingSubtitle}>Local help, privacy, and app guidance.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </TouchableOpacity>
+        </SettingGroup>
+
         <SettingGroup title="About">
           <TouchableOpacity style={styles.settingItem} onPress={showAbout}>
             <View style={styles.settingIcon}>

@@ -13,8 +13,16 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
-import { getCachedSession, readNotificationsCache, writeNotificationsCache } from '../../../../services/offlineStorage';
-import { enqueueSyncAction, processSyncQueue } from '../../../../services/syncQueue';
+import {
+  getCachedSession,
+  readHydrationCache,
+  readMedicationCache,
+  readMedicationHistoryCache,
+  readNotificationsCache,
+  writeNotificationsCache,
+} from '../../../../services/offlineStorage';
+import { enqueueSyncAction, getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
+import { getScheduledNotificationRefs } from '../../../../services/notificationService';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -106,6 +114,7 @@ const isUnread = (item: NotificationItem) => !item.opened_at && !item.read_at;
 const isAlertStatus = (status: NotificationStatus) =>
   status === 'missed' || status === 'skipped' || status === 'failed' || status === 'needs_attention';
 const isScheduledStatus = (status: NotificationStatus) => status === 'scheduled' || status === 'upcoming';
+const isLocalActivity = (item: NotificationItem) => Boolean(item.metadata?.local_activity);
 
 const getTone = (item: Pick<NotificationItem | ReminderItem, 'type' | 'status'>) => {
   if (isAlertStatus(item.status)) {
@@ -118,12 +127,46 @@ const getTone = (item: Pick<NotificationItem | ReminderItem, 'type' | 'status'>)
     return { color: '#059669', bg: '#ECFDF5', border: '#A7F3D0', label: 'Completed', icon: 'checkmark-circle-outline' as const };
   }
   if (item.type === 'hydration') {
-    return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', label: 'Hydration', icon: 'water-outline' as const };
+    return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', label: 'Beverage', icon: 'water-outline' as const };
   }
   if (item.type === 'medication') {
     return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', label: 'Medication', icon: 'medical-outline' as const };
   }
   return { color: '#2563EB', bg: '#EFF6FF', border: '#BFDBFE', label: 'Reminder', icon: 'notifications-outline' as const };
+};
+
+const activityDate = (item: NotificationItem) => item.scheduled_at || item.scheduled_time || item.created_at;
+
+const dedupeNotifications = (items: NotificationItem[]) => {
+  const byKey = new Map<string, NotificationItem>();
+  items.forEach((item) => {
+    const key = String(item.id || `${item.type}:${item.title}:${activityDate(item)}`);
+    const existing = byKey.get(key);
+    if (!existing || getSafeTime(activityDate(item)) > getSafeTime(activityDate(existing))) {
+      byKey.set(key, item);
+    }
+  });
+  return Array.from(byKey.values());
+};
+
+const formatBeverageLabel = (entry: any) => {
+  if (entry?.drink_label) return entry.drink_label;
+  const type = String(entry?.beverage_type || 'beverage').replace(/_/g, ' ');
+  return type.charAt(0).toUpperCase() + type.slice(1);
+};
+
+const getReminderKey = (item: ReminderItem) => `${item.type}:${item.title}:${formatSafeTime(item.time)}`;
+
+const dedupeReminders = (items: ReminderItem[]) => {
+  const seen = new Set<string>();
+  return items
+    .sort((a, b) => getSafeTime(a.time) - getSafeTime(b.time))
+    .filter((item) => {
+      const key = getReminderKey(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 };
 
 export default function Activity() {
@@ -220,6 +263,121 @@ export default function Activity() {
       .filter((item: ReminderItem) => isSameLocalDay(item.time, today) && getSafeTime(item.time) > Date.now());
   }, []);
 
+  const buildLocalActivityRecords = useCallback(async (sessionUser: any): Promise<NotificationItem[]> => {
+    if (!sessionUser) return [];
+    const [hydrationCache, medicationCache, medicationHistory, scheduledRefs, pendingActions] = await Promise.all([
+      readHydrationCache<any>(),
+      readMedicationCache<any[]>(sessionUser),
+      readMedicationHistoryCache<any[]>(sessionUser),
+      getScheduledNotificationRefs(),
+      getPendingSyncActions(),
+    ]);
+
+    const medicationById = new Map<string, any>();
+    (Array.isArray(medicationCache) ? medicationCache : []).forEach((med) => {
+      [med?.id, med?.local_id, med?.server_id].filter(Boolean).forEach((id) => medicationById.set(String(id), med));
+    });
+
+    const beverageRecords: NotificationItem[] = (Array.isArray(hydrationCache?.entries) ? hydrationCache.entries : [])
+      .filter((entry: any) => !entry?.deleted_at)
+      .map((entry: any) => {
+        const when = entry?.timestamp || entry?.created_at || new Date().toISOString();
+        const label = formatBeverageLabel(entry);
+        return {
+          id: `beverage:${entry?.local_id || entry?.id || `${when}:${entry?.amount_ml || 0}:${label}`}`,
+          type: 'hydration',
+          title: `${label} logged`,
+          message: `${Number(entry?.amount_ml || entry?.logged_ml || 0)} ml beverage log`,
+          status: 'completed',
+          created_at: when,
+          scheduled_at: when,
+          read_at: when,
+          opened_at: when,
+          metadata: { local_activity: true, source: 'hydration', local_id: entry?.local_id || entry?.id },
+        };
+      });
+
+    const medicationRecords: NotificationItem[] = (Array.isArray(medicationHistory) ? medicationHistory : [])
+      .map((entry: any) => {
+        const med = medicationById.get(String(entry?.medId || entry?.medication_id || entry?.medicationId || ''));
+        const status = (entry?.status === 'skipped' ? 'skipped' : entry?.status === 'missed' ? 'missed' : entry?.status === 'snoozed' ? 'snoozed' : 'completed') as NotificationStatus;
+        const when = entry?.loggedAt || entry?.logged_at || entry?.created_at || entry?.time || new Date().toISOString();
+        const medName = med?.name || entry?.medication_name || 'Medication';
+        return {
+          id: `medication-history:${entry?.id || `${entry?.medId || entry?.medication_id}:${entry?.time}:${status}`}`,
+          type: 'medication',
+          title: status === 'completed' ? `${medName} taken` : `${medName} ${status}`,
+          message: entry?.time ? `Scheduled for ${formatSafeTime(entry.time)}` : 'Medication activity recorded',
+          status,
+          created_at: when,
+          scheduled_at: entry?.time || when,
+          read_at: when,
+          opened_at: when,
+          metadata: { local_activity: true, source: 'medication_history', medication_id: med?.id || entry?.medId || entry?.medication_id },
+        };
+      });
+
+    const reminderRecords: NotificationItem[] = scheduledRefs.filter((ref) => getSafeTime(ref.scheduledAt) <= Date.now()).map((ref) => {
+      const when = ref.scheduledAt || ref.createdAt || new Date().toISOString();
+      return {
+        id: `scheduled-ref:${ref.scheduleKey || ref.doseKey || ref.notificationId}`,
+        type: ref.type === 'medication' ? 'medication' : 'hydration',
+        title: ref.type === 'medication' ? `${ref.medicationName || 'Medication'} reminder` : 'Beverage reminder',
+        message: `Reminder was scheduled for ${formatSafeTime(when)}`,
+        status: 'delivered',
+        scheduled_at: when,
+        created_at: ref.createdAt || when,
+        read_at: ref.createdAt || when,
+        opened_at: ref.createdAt || when,
+        metadata: { local_activity: true, source: 'scheduled_reminder', schedule_key: ref.scheduleKey || ref.doseKey },
+      };
+    });
+
+    const syncRecords: NotificationItem[] = pendingActions.map((item) => ({
+      id: `sync:${item.id || item.local_id}`,
+      type: 'general',
+      title: 'Pending offline sync',
+      message: `${String(item.action_type).replace(/_/g, ' ').toLowerCase()} will sync when connected.`,
+      status: item.status === 'failed' ? 'failed' : 'needs_attention',
+      created_at: item.updated_at || item.created_at,
+      scheduled_at: item.updated_at || item.created_at,
+      read_at: item.updated_at || item.created_at,
+      opened_at: item.updated_at || item.created_at,
+      metadata: { local_activity: true, source: 'sync_queue', action_type: item.action_type },
+    }));
+
+    return dedupeNotifications([...beverageRecords, ...medicationRecords, ...reminderRecords, ...syncRecords]);
+  }, []);
+
+  const loadLocalReminderItems = useCallback(async (): Promise<ReminderItem[]> => {
+    const refs = await getScheduledNotificationRefs();
+    const now = Date.now();
+    const today = new Date();
+
+    return dedupeReminders(refs
+      .filter((ref) => {
+        const when = ref.scheduledAt || ref.doseTime;
+        return getSafeTime(when) > now && isSameLocalDay(when, today);
+      })
+      .map((ref) => {
+        const amount = Number(ref.suggestedAmount || ref.amount || 0);
+        const offset = Number(ref.reminderOffsetMinutes || 0);
+        const time = ref.scheduledAt || ref.doseTime || '';
+        return {
+          id: `ref-${ref.scheduleKey || ref.doseKey || ref.notificationId}`,
+          type: ref.type === 'medication' ? 'medication' : 'hydration',
+          title: ref.type === 'medication'
+            ? `${ref.medicationName || 'Medication'} reminder`
+            : 'Beverage reminder',
+          message: ref.type === 'medication'
+            ? `${ref.doseTime ? `Dose at ${formatSafeTime(ref.doseTime)}` : 'Medication reminder'}${offset ? ` | ${offset} min before` : ''}`
+            : amount > 0 ? `${amount} ml suggested` : 'Hydration reminder',
+          time,
+          status: 'scheduled',
+        };
+      }));
+  }, []);
+
   const loadNotifications = useCallback(async () => {
     if (!token) return;
     setSyncing(true);
@@ -233,8 +391,10 @@ export default function Activity() {
         get('/notifications/stats', token, 5000).catch(() => null),
         get('/medications/upcoming', token, 5000).catch(() => []),
       ]);
-      const normalized = normalizeNotifications(notificationRes);
-      const fallback = normalizeMedicationFallbacks(medicationRes);
+      const localActivity = await buildLocalActivityRecords(sessionUser);
+      const normalized = dedupeNotifications([...normalizeNotifications(notificationRes), ...localActivity]);
+      const localReminderItems = await loadLocalReminderItems();
+      const fallback = dedupeReminders([...localReminderItems, ...normalizeMedicationFallbacks(medicationRes)]);
       setNotifications(normalized);
       setStats(statsRes || null);
       setMedicationFallbacks(fallback);
@@ -250,10 +410,16 @@ export default function Activity() {
         setOfflineMode(true);
         setError('Offline mode - changes will sync when connected.');
         const cached = await readNotificationsCache<any>(currentUser);
+        const session = await getCachedSession();
+        const localActivity = await buildLocalActivityRecords(currentUser || session?.user || null);
+        const localReminderItems = await loadLocalReminderItems();
         if (cached) {
-          setNotifications(cached.notifications || []);
+          setNotifications(dedupeNotifications([...(cached.notifications || []), ...localActivity]));
           setStats(cached.stats || null);
-          setMedicationFallbacks(cached.medicationFallbacks || []);
+          setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached.medicationFallbacks || [])]));
+        } else {
+          setNotifications(localActivity);
+          setMedicationFallbacks(localReminderItems);
         }
         return;
       }
@@ -261,7 +427,7 @@ export default function Activity() {
     } finally {
       setSyncing(false);
     }
-  }, [currentUser, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
+  }, [buildLocalActivityRecords, currentUser, loadLocalReminderItems, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
   const cacheCurrentNotifications = useCallback(async (nextNotifications: NotificationItem[], nextStats = stats) => {
     await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks }, currentUser);
@@ -276,9 +442,11 @@ export default function Activity() {
         if (sessionUser && mounted) setCurrentUser(sessionUser);
         const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
         if (!mounted) return;
-        setNotifications(cached?.notifications || []);
+        const localActivity = await buildLocalActivityRecords(sessionUser);
+        const localReminderItems = await loadLocalReminderItems();
+        setNotifications(dedupeNotifications([...(cached?.notifications || []), ...localActivity]));
         setStats(cached?.stats || null);
-        setMedicationFallbacks(cached?.medicationFallbacks || []);
+        setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
         await loadNotifications();
         if (mounted) setLoading(false);
       };
@@ -287,7 +455,7 @@ export default function Activity() {
         mounted = false;
         setSyncing(false);
       };
-    }, [currentUser, loadNotifications])
+    }, [buildLocalActivityRecords, currentUser, loadLocalReminderItems, loadNotifications])
   );
 
   const onRefresh = useCallback(async () => {
@@ -373,11 +541,6 @@ export default function Activity() {
     }
   }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
-  const alertNotifications = useMemo(
-    () => notifications.filter(item => isAlertStatus(item.status) || (isUnread(item) && isAlertStatus(item.status))),
-    [notifications]
-  );
-
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
     const today = new Date();
     const notificationReminders = notifications
@@ -394,16 +557,7 @@ export default function Activity() {
         notification: item,
       }));
 
-    const seen = new Set<string>();
-    return [...notificationReminders, ...medicationFallbacks]
-      .sort((a, b) => getSafeTime(a.time) - getSafeTime(b.time))
-      .filter(item => {
-        const key = `${item.type}-${item.title}-${formatSafeTime(item.time)}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, 8);
+    return dedupeReminders([...notificationReminders, ...medicationFallbacks]).slice(0, 8);
   }, [medicationFallbacks, notifications]);
 
   const filteredNotifications = useMemo(() => {
@@ -420,18 +574,15 @@ export default function Activity() {
 
   const counters = useMemo(() => {
     const today = new Date();
-    const unread = Number(stats?.unread ?? notifications.filter(isUnread).length);
-    const scheduledToday = Number(
-      stats?.scheduled_today ??
-      notifications.filter(item => isScheduledStatus(item.status) && isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, today) && getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at) > Date.now()).length
-    );
+    const unread = Number(stats?.unread ?? notifications.filter(item => !isLocalActivity(item) && isUnread(item)).length);
+    const scheduledToday = upcomingReminders.filter(item => isSameLocalDay(item.time, today) && getSafeTime(item.time) > Date.now()).length;
     const alerts = Number(stats?.alerts ?? notifications.filter(item => isAlertStatus(item.status)).length);
     return [
       { key: 'unread', label: 'Unread', value: unread, color: '#2563EB', icon: 'mail-unread-outline' as const },
       { key: 'scheduled', label: 'Scheduled Today', value: scheduledToday, color: '#2563EB', icon: 'time-outline' as const },
       { key: 'alerts', label: 'Alerts', value: alerts, color: '#DC2626', icon: 'alert-circle-outline' as const },
     ];
-  }, [notifications, stats]);
+  }, [notifications, stats, upcomingReminders]);
 
   const renderNotificationCard = (item: NotificationItem) => {
     const tone = getTone(item);
@@ -441,7 +592,7 @@ export default function Activity() {
         key={item.id}
         activeOpacity={0.84}
         style={[styles.notificationCard, isUnread(item) && styles.unreadCard, { borderLeftColor: tone.color }]}
-        onPress={() => setSelectedNotification(item)}
+        onPress={() => !isLocalActivity(item) && setSelectedNotification(item)}
       >
         <View style={[styles.iconBubble, { backgroundColor: tone.bg, borderColor: tone.border }]}>
           <Ionicons name={tone.icon} size={19} color={tone.color} />
@@ -516,10 +667,12 @@ export default function Activity() {
         <View style={styles.counterRow}>
           {counters.map(counter => (
             <View key={counter.key} style={styles.counterCard}>
-              <View style={[styles.counterIcon, { backgroundColor: `${counter.color}14` }]}>
-                <Ionicons name={counter.icon} size={16} color={counter.color} />
+              <View style={styles.counterTopRow}>
+                <View style={[styles.counterIcon, { backgroundColor: `${counter.color}14` }]}>
+                  <Ionicons name={counter.icon} size={15} color={counter.color} />
+                </View>
+                <Text style={[styles.counterValue, { color: counter.color }]}>{counter.value}</Text>
               </View>
-              <Text style={[styles.counterValue, { color: counter.color }]}>{counter.value}</Text>
               <Text style={styles.counterLabel}>{counter.label}</Text>
             </View>
           ))}
@@ -532,28 +685,6 @@ export default function Activity() {
           </View>
         ) : null}
 
-        {alertNotifications.length > 0 ? (
-          <>
-            <Text style={styles.sectionTitle}>Needs Attention</Text>
-            <View style={styles.sectionCard}>
-              {alertNotifications.slice(0, 4).map(renderNotificationCard)}
-            </View>
-          </>
-        ) : null}
-
-        <Text style={styles.sectionTitle}>Upcoming Reminders</Text>
-        <View style={styles.sectionCard}>
-          {upcomingReminders.length > 0 ? (
-            upcomingReminders.map(renderReminder)
-          ) : (
-            <View style={styles.emptyBox}>
-              <Ionicons name="calendar-clear-outline" size={26} color="#94A3B8" />
-              <Text style={styles.emptyTitle}>No reminders scheduled later today.</Text>
-              <Text style={styles.emptyText}>Medication and hydration reminders will appear here when scheduled.</Text>
-            </View>
-          )}
-        </View>
-
         <View style={styles.inboxHeader}>
           <View>
             <Text style={[styles.sectionTitle, styles.inboxTitle]}>Recent Notifications</Text>
@@ -565,7 +696,7 @@ export default function Activity() {
             { key: 'all', label: 'All' },
             { key: 'unread', label: 'Unread' },
             { key: 'medication', label: 'Medication' },
-            { key: 'hydration', label: 'Hydration' },
+            { key: 'hydration', label: 'Beverage' },
           ].map(item => (
             <TouchableOpacity
               key={item.key}
@@ -581,7 +712,7 @@ export default function Activity() {
           <View style={styles.emptyInbox}>
             <Ionicons name="notifications-off-outline" size={32} color="#94A3B8" />
             <Text style={styles.emptyTitle}>No notification records yet</Text>
-            <Text style={styles.emptyText}>Reminder alerts will appear here after they are created by the backend.</Text>
+            <Text style={styles.emptyText}>Beverage logs, medication activity, and reminder records will appear here.</Text>
           </View>
         ) : (
           <>
@@ -600,6 +731,19 @@ export default function Activity() {
           </>
         )}
 
+        <Text style={styles.sectionTitle}>Upcoming Reminders</Text>
+        <View style={styles.sectionCard}>
+          {upcomingReminders.length > 0 ? (
+            upcomingReminders.map(renderReminder)
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="calendar-clear-outline" size={26} color="#94A3B8" />
+              <Text style={styles.emptyTitle}>No upcoming reminders for today.</Text>
+              <Text style={styles.emptyText}>Your beverage and medication reminders will appear here automatically.</Text>
+            </View>
+          )}
+        </View>
+
         <Text style={styles.deliveryText}>Notification delivery depends on device permissions and system settings.</Text>
       </ScrollView>
 
@@ -611,8 +755,9 @@ export default function Activity() {
                 {(() => {
                   const tone = getTone(selectedNotification);
                   const when = selectedNotification.scheduled_at || selectedNotification.scheduled_time || selectedNotification.created_at;
-                  const canSnooze = isScheduledStatus(selectedNotification.status);
-                  const canComplete = selectedNotification.type !== 'general' && selectedNotification.status !== 'completed' && selectedNotification.status !== 'cleared';
+                  const localOnly = isLocalActivity(selectedNotification);
+                  const canSnooze = !localOnly && isScheduledStatus(selectedNotification.status);
+                  const canComplete = !localOnly && selectedNotification.type !== 'general' && selectedNotification.status !== 'completed' && selectedNotification.status !== 'cleared';
                   return (
                     <>
                       <View style={styles.modalHeader}>
@@ -630,12 +775,12 @@ export default function Activity() {
                           <Text style={[styles.statusText, { color: tone.color }]}>{tone.label}</Text>
                         </View>
                         <View style={styles.typePill}>
-                          <Text style={styles.typePillText}>{selectedNotification.type}</Text>
+                          <Text style={styles.typePillText}>{selectedNotification.type === 'hydration' ? 'beverage' : selectedNotification.type}</Text>
                         </View>
                       </View>
                       <Text style={styles.modalMeta}>{formatMeta(when)}</Text>
                       <View style={styles.modalActions}>
-                        {isUnread(selectedNotification) ? (
+                        {isUnread(selectedNotification) && !localOnly ? (
                           <TouchableOpacity style={styles.modalActionButton} onPress={() => markOneRead(selectedNotification)}>
                             <Ionicons name="mail-open-outline" size={17} color="#2563EB" />
                             <Text style={styles.modalActionText}>Mark read</Text>
@@ -653,10 +798,12 @@ export default function Activity() {
                             <Text style={styles.modalActionText}>Snooze</Text>
                           </TouchableOpacity>
                         ) : null}
-                        <TouchableOpacity style={styles.modalActionButton} onPress={() => clearNotification(selectedNotification)}>
-                          <Ionicons name="trash-outline" size={17} color="#DC2626" />
-                          <Text style={styles.modalActionText}>Clear</Text>
-                        </TouchableOpacity>
+                        {!localOnly ? (
+                          <TouchableOpacity style={styles.modalActionButton} onPress={() => clearNotification(selectedNotification)}>
+                            <Ionicons name="trash-outline" size={17} color="#DC2626" />
+                            <Text style={styles.modalActionText}>Clear</Text>
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     </>
                   );
@@ -764,28 +911,34 @@ const styles = StyleSheet.create({
   counterCard: {
     flex: 1,
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    padding: 10,
-    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
+  },
+  counterTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   counterIcon: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   counterValue: {
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 17,
+    lineHeight: 20,
     fontWeight: '900',
   },
   counterLabel: {
     color: '#64748B',
     fontSize: 10,
-    lineHeight: 13,
+    lineHeight: 12,
     fontWeight: '800',
   },
   sectionTitle: {

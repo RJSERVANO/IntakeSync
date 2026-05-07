@@ -5,7 +5,6 @@ import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
-import { mergeLatestPendingAction } from '../../../../services/syncQueue';
 import { writeProfileCache } from '../../../../services/offlineStorage';
 
 interface Props {
@@ -74,6 +73,12 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
 
       setSaving(true);
 
+      if (!token) {
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
+        setSaving(false);
+        return;
+      }
+
       const weightValue =
         editData.weight === undefined || editData.weight === null || editData.weight === ''
           ? null
@@ -108,9 +113,11 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         const resp = await api.put('/me', payload, token as string);
         updated = resp?.user ? { ...(user || {}), ...(resp.user || {}) } : updated;
       } catch (err: any) {
-        if (!api.isNetworkError(err)) throw err;
-        await mergeLatestPendingAction('UPDATE_PROFILE', 'profile', payload);
-        setNotice({ type: 'info', title: 'Saved Offline', message: 'Profile saved offline. Will sync when connected.' });
+        if (api.isNetworkError(err)) {
+          setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
+          return;
+        }
+        throw err;
       }
       await writeProfileCache(updated);
       onSaved(updated);

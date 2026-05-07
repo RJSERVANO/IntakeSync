@@ -22,7 +22,7 @@ export type OwnedCachePayload<T = any> = CacheOwner & {
 
 type OtcCacheEntry = {
   saved_at: string;
-  source: 'backend';
+  source: 'backend' | 'bundled';
   data: any[];
 };
 
@@ -158,6 +158,90 @@ export function normalizeOtcSearchQuery(query: string) {
   return query.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+export const BUNDLED_OTC_MEDICINES = [
+  {
+    id: 'otc_acetaminophen',
+    name: 'Acetaminophen',
+    generic_name: 'Paracetamol',
+    category: 'Pain reliever',
+    common_use: 'Pain relief and fever reducer',
+    dosage_text: 'Follow the label. Common adult dose is every 4 to 6 hours as needed.',
+    interval_hours: 6,
+    max_daily_doses: 4,
+    warnings: 'Do not exceed the label maximum. Avoid combining with other acetaminophen-containing products.',
+  },
+  {
+    id: 'otc_ibuprofen',
+    name: 'Ibuprofen',
+    category: 'NSAID pain reliever',
+    common_use: 'Pain, fever, and inflammation',
+    dosage_text: 'Follow the label. Common adult dose is every 6 to 8 hours as needed.',
+    interval_hours: 8,
+    max_daily_doses: 3,
+    warnings: 'Avoid if advised not to take NSAIDs. Take with food or milk if stomach upset occurs.',
+  },
+  {
+    id: 'otc_loratadine',
+    name: 'Loratadine',
+    category: 'Antihistamine',
+    common_use: 'Allergy symptoms',
+    dosage_text: 'Follow the label. Common adult dose is once daily.',
+    interval_hours: 24,
+    max_daily_doses: 1,
+    warnings: 'Use only as directed. Ask a healthcare professional if symptoms persist.',
+  },
+  {
+    id: 'otc_cetirizine',
+    name: 'Cetirizine',
+    category: 'Antihistamine',
+    common_use: 'Allergy symptoms',
+    dosage_text: 'Follow the label. Common adult dose is once daily.',
+    interval_hours: 24,
+    max_daily_doses: 1,
+    warnings: 'May cause drowsiness. Use only as directed.',
+  },
+  {
+    id: 'otc_diphenhydramine',
+    name: 'Diphenhydramine',
+    category: 'Antihistamine',
+    common_use: 'Allergy symptoms and occasional sleeplessness',
+    dosage_text: 'Follow the label. Common adult dose is every 4 to 6 hours as needed.',
+    interval_hours: 6,
+    max_daily_doses: 4,
+    warnings: 'May cause marked drowsiness. Avoid alcohol and driving until you know how it affects you.',
+  },
+  {
+    id: 'otc_loperamide',
+    name: 'Loperamide',
+    category: 'Antidiarrheal',
+    common_use: 'Diarrhea symptom relief',
+    dosage_text: 'Follow the label after each loose stool. Do not exceed the label maximum.',
+    interval_hours: 6,
+    max_daily_doses: 4,
+    warnings: 'Stop use and seek medical advice if symptoms persist or fever/bloody stool occurs.',
+  },
+  {
+    id: 'otc_omeprazole',
+    name: 'Omeprazole',
+    category: 'Acid reducer',
+    common_use: 'Frequent heartburn',
+    dosage_text: 'Follow the label. Common adult dose is once daily before a meal.',
+    interval_hours: 24,
+    max_daily_doses: 1,
+    warnings: 'Use only as directed. Ask a healthcare professional if symptoms continue.',
+  },
+  {
+    id: 'otc_calcium_carbonate',
+    name: 'Calcium carbonate',
+    category: 'Antacid',
+    common_use: 'Heartburn and acid indigestion',
+    dosage_text: 'Follow the label as symptoms occur.',
+    interval_hours: 4,
+    max_daily_doses: 4,
+    warnings: 'Do not exceed the label maximum.',
+  },
+];
+
 function getOtcSearchableText(item: any) {
   return [
     item?.name,
@@ -248,19 +332,30 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
   const normalizedQuery = normalizeOtcSearchQuery(query);
   if (!normalizedQuery) return { results: [], isStale: false, savedAt: null, hasCache: false };
   const cache = await readOtcSearchCache();
-  if (!cache) return { results: [], isStale: false, savedAt: null, hasCache: false };
+  const terms = normalizedQuery.split(' ').filter(Boolean);
+  const bundledResults = BUNDLED_OTC_MEDICINES.filter((item) => {
+    const text = getOtcSearchableText(item);
+    return terms.every((term) => text.includes(term));
+  });
+  if (!cache) {
+    return {
+      results: bundledResults,
+      isStale: false,
+      savedAt: null,
+      hasCache: bundledResults.length > 0,
+    };
+  }
 
   const exact = cache.queries?.[normalizedQuery];
   if (exact && exact.data.length > 0) {
     return {
-      results: exact.data,
+      results: dedupeOtcResults([...exact.data, ...bundledResults]),
       isStale: isOtcCacheStale(exact.saved_at),
       savedAt: exact.saved_at,
       hasCache: true,
     };
   }
 
-  const terms = normalizedQuery.split(' ').filter(Boolean);
   const byId = new Map<string, any>();
   cache.data.forEach((item: any) => {
     const text = getOtcSearchableText(item);
@@ -268,11 +363,12 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
       byId.set(getOtcCacheId(item), item);
     }
   });
+  bundledResults.forEach((item) => byId.set(getOtcCacheId(item), item));
   return {
     results: Array.from(byId.values()),
     isStale: isOtcCacheStale(cache.saved_at),
     savedAt: cache.saved_at,
-    hasCache: cache.data.length > 0,
+    hasCache: cache.data.length > 0 || bundledResults.length > 0,
   };
 }
 

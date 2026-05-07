@@ -45,7 +45,6 @@ export default function RootLayout() {
       initializeOfflineSync();
       notificationManager.initialize();
       notificationService.ensureAndroidChannels();
-      notificationService.requestPermissions();
       initializeOfflineSync();
     } catch (error) {
       console.log('Notification setup error:', error);

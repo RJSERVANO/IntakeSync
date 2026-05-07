@@ -93,9 +93,10 @@ export default function ResetPassword() {
       );
     } catch (err: any) {
       console.log('reset password error', err);
-      const message =
-        err?.data?.message || err?.data || err?.message || 'Failed to reset password';
-      showNotice('error', 'Reset Failed', message);
+      const message = api.isNetworkError(err)
+        ? 'You need to connect to the internet to change or reset your password.'
+        : err?.data?.message || err?.data || 'We could not reset your password. Please try again.';
+      showNotice(api.isNetworkError(err) ? 'warning' : 'error', api.isNetworkError(err) ? 'Internet Required' : 'Reset Failed', message);
     } finally {
       setLoading(false);
     }

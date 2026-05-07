@@ -102,6 +102,8 @@ export interface ScheduledNotificationRef {
   owner_email?: string | null;
   medicationId?: string;
   medicationName?: string;
+  suggestedAmount?: number;
+  amount?: number;
   doseKey?: string;
   notificationId: string;
   type: 'medication' | 'hydration';
@@ -179,6 +181,37 @@ class NotificationService {
     return undefined;
   }
 
+  async getPermissionStatus(): Promise<{ granted: boolean; status?: string; canAskAgain?: boolean }> {
+    try {
+      const Notifications = getNotifications();
+      if (!Notifications || !Device.isDevice) {
+        return { granted: false, status: 'unavailable', canAskAgain: false };
+      }
+      const response = await Notifications.getPermissionsAsync();
+      return {
+        granted: response.status === 'granted',
+        status: response.status,
+        canAskAgain: response.canAskAgain,
+      };
+    } catch {
+      return { granted: false, status: 'unavailable', canAskAgain: false };
+    }
+  }
+
+  private async canScheduleType(type?: NotificationData['type']): Promise<boolean> {
+    if (!type) return true;
+    await notificationSettings.initialize();
+    const settings = notificationSettings.getSettings();
+    const categoryEnabled =
+      type === 'hydration'
+        ? settings.categories.hydration
+        : type === 'medication'
+          ? settings.categories.medications
+          : true;
+    if (!settings.masterToggle || !categoryEnabled) return false;
+    return (await this.getPermissionStatus()).granted;
+  }
+
   /**
    * Request notification permissions (local notifications only in Expo Go)
    */
@@ -238,6 +271,9 @@ class NotificationService {
       if (!Notifications) {
         return null;
       }
+      if (!(await this.canScheduleType(data?.type))) {
+        return null;
+      }
 
       const channelId = this.getChannelIdForType(data?.type);
       const sound = await this.getSoundForType(data?.type);
@@ -275,6 +311,9 @@ class NotificationService {
     try {
       const Notifications = getNotifications();
       if (!Notifications) {
+        return null;
+      }
+      if (!(await this.canScheduleType(data?.type))) {
         return null;
       }
 
@@ -442,12 +481,14 @@ class NotificationService {
         await saveScheduledNotificationRef({
           ...cacheOwner,
           id: `hydration:${scheduleKey}`,
-          type: 'hydration',
-          doseKey: scheduleKey,
-          scheduleKey,
-          notificationId,
-          scheduledAt: nextReminder.toISOString(),
-          createdAt: new Date().toISOString(),
+              type: 'hydration',
+              doseKey: scheduleKey,
+              scheduleKey,
+              amount: amountMl,
+              suggestedAmount: amountMl,
+              notificationId,
+              scheduledAt: nextReminder.toISOString(),
+              createdAt: new Date().toISOString(),
         });
       }
     } catch (error) {
@@ -760,6 +801,15 @@ export async function cancelNotificationByRef(ref: ScheduledNotificationRef) {
 
 export async function cancelMedicationNotifications(medicationId: string) {
   await notificationService.cancelMedicationNotifications(medicationId);
+}
+
+export async function cancelAllMedicationNotifications(ownerArg?: CacheOwner | null) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const refs = await getScheduledNotificationRefs(owner);
+  const medicationRefs = refs.filter((ref) => ref.type === 'medication');
+  await Promise.all(medicationRefs.map((ref) => notificationService.cancelNotification(ref.notificationId)));
+  await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'medication'), owner);
 }
 
 export async function cancelMedicationDoseNotifications(medicationId: string, doseTimeIso: string, ownerArg?: CacheOwner | null) {

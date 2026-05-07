@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable, Keyboard } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -28,6 +28,7 @@ import InlineSyncNotice from './components/common/InlineSyncNotice';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
+const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 
 interface TimelineItem {
   id: number;
@@ -105,6 +106,7 @@ export default function Home() {
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [medicineSearchMessage, setMedicineSearchMessage] = useState<string | null>(null);
+  const [selectedMedicineResult, setSelectedMedicineResult] = useState<any | null>(null);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -163,8 +165,10 @@ export default function Home() {
 
   // Debounce medicine search
   useEffect(() => {
+    let active = true;
     const searchMedicines = async () => {
-      if (medicineSearch.trim().length < 2) {
+      const query = medicineSearch.trim();
+      if (query.length < 2) {
         setMedicineSuggestions([]);
         setShowSuggestions(false);
         setMedicineSearchMessage(null);
@@ -172,15 +176,18 @@ export default function Home() {
       }
 
       try {
-        const response = await api.get(`/medicines/search?query=${encodeURIComponent(medicineSearch)}`);
+        const response = await api.get(`/medicines/search?query=${encodeURIComponent(query)}`);
+        if (!active) return;
         const results = response.medicines || [];
-        await writeOtcSearchCache(medicineSearch, results);
+        await writeOtcSearchCache(query, results);
+        if (!active) return;
         setMedicineSuggestions(results);
         setMedicineSearchMessage(null);
         setShowSuggestions(true);
       } catch (err: any) {
         console.log('Medicine search error:', err);
-        const cached = await searchCachedOtcMedicinesWithMeta(medicineSearch);
+        const cached = await searchCachedOtcMedicinesWithMeta(query);
+        if (!active) return;
         const canUseCache = cached.results.length > 0 && (api.isNetworkError(err) || !cached.isStale);
         setMedicineSuggestions(canUseCache ? cached.results : []);
         if (canUseCache) {
@@ -189,7 +196,7 @@ export default function Home() {
         } else {
           setMedicineSearchMessage(
             api.isNetworkError(err)
-              ? 'No offline medication search data available. Connect to the internet to search medications.'
+              ? 'No offline medication search data available. You can still add the medicine manually in Medication.'
               : 'Could not search medications. Please try again.'
           );
           setShowSuggestions(true);
@@ -198,7 +205,10 @@ export default function Home() {
     };
 
     const debounceTimer = setTimeout(searchMedicines, 300);
-    return () => clearTimeout(debounceTimer);
+    return () => {
+      active = false;
+      clearTimeout(debounceTimer);
+    };
   }, [medicineSearch]);
 
   // Detect hydration goal completion and over-hydration
@@ -780,6 +790,69 @@ export default function Home() {
     return { color, label: levelLabel(level), percent };
   };
 
+  const clearMedicineSearch = () => {
+    setMedicineSearch('');
+    setMedicineSuggestions([]);
+    setShowSuggestions(false);
+    setMedicineSearchMessage(null);
+  };
+
+  const getMedicineDosage = (medicine: any) => medicine?.dosage_text || medicine?.dosage || '';
+  const getMedicineUse = (medicine: any) => medicine?.common_use || medicine?.short_use || medicine?.description || medicine?.category || '';
+  const getMedicineMeta = (medicine: any) => [medicine?.generic_name || medicine?.brand, medicine?.category || medicine?.common_use].filter(Boolean).join(' - ');
+
+  const buildMedicineRouteData = (medicine: any) => {
+    let frequency = 'daily';
+    const dosageLower = getMedicineDosage(medicine).toLowerCase();
+    if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
+      frequency = 'twice_daily';
+    } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
+      frequency = 'three_times_daily';
+    } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
+      frequency = 'four_times_daily';
+    }
+
+    return {
+      id: medicine?.id,
+      name: medicine?.name,
+      generic_name: medicine?.generic_name,
+      brand: medicine?.brand,
+      description: medicine?.description,
+      common_use: medicine?.common_use,
+      category: medicine?.category,
+      dosage: medicine?.dosage,
+      dosage_text: medicine?.dosage_text,
+      interval_hours: medicine?.interval_hours,
+      max_daily_doses: medicine?.max_daily_doses,
+      timing_instructions: medicine?.timing_instructions,
+      warnings: medicine?.warnings,
+      is_otc: true,
+      frequency,
+    };
+  };
+
+  const openMedicineResult = (medicine: any) => {
+    Keyboard.dismiss();
+    setSelectedMedicineResult(medicine);
+    setShowSuggestions(false);
+  };
+
+  const addSelectedMedicineToMedications = () => {
+    if (!selectedMedicineResult) return;
+    const medicine = selectedMedicineResult;
+    setSelectedMedicineResult(null);
+    clearMedicineSearch();
+    router.push({
+      pathname: '/components/pages/medication/Medication',
+      params: {
+        token,
+        medicineName: medicine.name,
+        medicineDosage: getMedicineDosage(medicine),
+        medicineData: JSON.stringify(buildMedicineRouteData(medicine)),
+      },
+    } as any);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.header, headerElevated && styles.headerElevated, { paddingTop: Math.max(insets.top, 8) }]}>
@@ -814,12 +887,12 @@ export default function Home() {
         </View>
       </View>
       <InlineSyncNotice
-        visible={syncing && !inlineNotice && !menuVisible && !noticeModal}
+        visible={syncing && !inlineNotice && !menuVisible && !noticeModal && !selectedMedicineResult}
         message="Syncing..."
         top={Math.max(insets.top, 8) + 54}
       />
       <InlineNotice
-        visible={Boolean(inlineNotice) && !menuVisible && !noticeModal}
+        visible={Boolean(inlineNotice) && !menuVisible && !noticeModal && !selectedMedicineResult}
         message={inlineNotice || ''}
         top={Math.max(insets.top, 8) + 54}
       />
@@ -861,17 +934,14 @@ export default function Home() {
                 onChangeText={(text) => {
                   setMedicineSearch(text);
                   setMedicineSearchMessage(null);
+                  if (!text.trim()) clearMedicineSearch();
                 }}
                 onFocus={() => medicineSearch.length >= 2 && setShowSuggestions(true)}
               />
               {medicineSearch.length > 0 && (
                 <TouchableOpacity 
                   style={styles.searchClear}
-                  onPress={() => {
-                    setMedicineSearch('');
-                    setShowSuggestions(false);
-                    setMedicineSearchMessage(null);
-                  }}
+                  onPress={clearMedicineSearch}
                 >
                   <Ionicons name="close-circle" size={20} color="#9CA3AF" />
                 </TouchableOpacity>
@@ -884,69 +954,22 @@ export default function Home() {
                 {medicineSearchMessage ? (
                   <Text style={styles.suggestionNotice}>{medicineSearchMessage}</Text>
                 ) : null}
-                <ScrollView style={styles.suggestionsList} nestedScrollEnabled>
+                <ScrollView style={styles.suggestionsList} nestedScrollEnabled keyboardShouldPersistTaps="always">
                   {medicineSuggestions.map((medicine) => (
                     <TouchableOpacity
-                      key={medicine.id}
+                      key={String(medicine.id || medicine.name)}
                       style={styles.suggestionItem}
-                      onPress={() => {
-                        setMedicineSearch('');
-                        setShowSuggestions(false);
-                        setNoticeModal({
-                          type: 'info',
-                          title: medicine.name,
-                          message: `${medicine.generic_name ? `Generic: ${medicine.generic_name}\n` : ''}${medicine.brand ? `Brand: ${medicine.brand}\n` : ''}Category: ${medicine.category}\n${medicine.description ? `\n${medicine.description}` : ''}${medicine.dosage ? `\n\nRecommended Dosage: ${medicine.dosage}` : ''}`,
-                          primaryText: 'Add to Medications',
-                          secondaryText: 'Close',
-                          onPrimary: () => {
-                            setNoticeModal(null);
-                            let frequency = 'daily';
-                            const dosageLower = (medicine.dosage || '').toLowerCase();
-                            if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
-                              frequency = 'twice_daily';
-                            } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
-                              frequency = 'three_times_daily';
-                            } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
-                              frequency = 'four_times_daily';
-                            }
-
-                            router.push({
-                              pathname: '/components/pages/medication/Medication',
-                              params: {
-                                token,
-                                medicineName: medicine.name,
-                                medicineDosage: medicine.dosage || '',
-                                medicineData: JSON.stringify({
-                                  id: medicine.id,
-                                  name: medicine.name,
-                                  generic_name: medicine.generic_name,
-                                  brand: medicine.brand,
-                                  description: medicine.description,
-                                  category: medicine.category,
-                                  dosage: medicine.dosage,
-                                  dosage_text: medicine.dosage_text,
-                                  interval_hours: medicine.interval_hours,
-                                  max_daily_doses: medicine.max_daily_doses,
-                                  timing_instructions: medicine.timing_instructions,
-                                  warnings: medicine.warnings,
-                                  frequency,
-                                }),
-                              },
-                            } as any);
-                          },
-                        });
-                      }}
+                      onPress={() => openMedicineResult(medicine)}
                     >
                       <View style={styles.suggestionIcon}>
-                        <Ionicons name="medical" size={20} color="#1E3A8A" />
+                        <Ionicons name="medkit" size={19} color="#FFFFFF" />
                       </View>
                       <View style={styles.suggestionContent}>
                         <Text style={styles.suggestionName}>{medicine.name}</Text>
-                        <Text style={styles.suggestionDetails}>
-                          {medicine.generic_name || medicine.brand || medicine.category}
-                        </Text>
+                        <Text style={styles.suggestionDetails}>{getMedicineMeta(medicine) || 'OTC medication'}</Text>
+                        {!!getMedicineUse(medicine) && <Text style={styles.suggestionUse} numberOfLines={2}>{getMedicineUse(medicine)}</Text>}
                       </View>
-                      <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                      <Ionicons name="add-circle" size={20} color="#1E3A8A" />
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -1238,6 +1261,69 @@ export default function Home() {
         </TouchableOpacity>
       </Modal>
 
+      <Modal
+        visible={!!selectedMedicineResult}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedMedicineResult(null)}
+      >
+        <View style={styles.medicineModalOverlay}>
+          <View style={styles.medicineModalContent}>
+            <View style={styles.medicineModalHeader}>
+              <View style={styles.medicineModalIcon}>
+                <Ionicons name="medkit" size={24} color="#FFFFFF" />
+              </View>
+              <TouchableOpacity style={styles.medicineModalCloseIcon} onPress={() => setSelectedMedicineResult(null)}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.medicineModalEyebrow}>OTC medication</Text>
+            <Text style={styles.medicineModalTitle}>{selectedMedicineResult?.name || 'Medicine'}</Text>
+            {!!selectedMedicineResult?.generic_name && (
+              <Text style={styles.medicineModalSubtitle}>Generic: {selectedMedicineResult.generic_name}</Text>
+            )}
+
+            <View style={styles.medicineDetailGrid}>
+              {!!selectedMedicineResult?.brand && (
+                <View style={styles.medicineDetailBox}>
+                  <Text style={styles.medicineDetailLabel}>Brand</Text>
+                  <Text style={styles.medicineDetailValue}>{selectedMedicineResult.brand}</Text>
+                </View>
+              )}
+              {!!selectedMedicineResult?.category && (
+                <View style={styles.medicineDetailBox}>
+                  <Text style={styles.medicineDetailLabel}>Category</Text>
+                  <Text style={styles.medicineDetailValue}>{selectedMedicineResult.category}</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.medicineInfoSection}>
+              <Text style={styles.medicineInfoLabel}>Common use</Text>
+              <Text style={styles.medicineInfoText}>{getMedicineUse(selectedMedicineResult) || 'Medication lookup details are limited for this item.'}</Text>
+            </View>
+            <View style={styles.medicineInfoSection}>
+              <Text style={styles.medicineInfoLabel}>Recommended dosage</Text>
+              <Text style={styles.medicineInfoText}>{getMedicineDosage(selectedMedicineResult) || 'Follow the medication label or package directions.'}</Text>
+            </View>
+            <View style={styles.medicineSafetyBox}>
+              <Ionicons name="shield-checkmark-outline" size={17} color="#1E3A8A" />
+              <Text style={styles.medicineSafetyText}>{OTC_SAFETY_COPY}</Text>
+            </View>
+
+            <View style={styles.medicineModalActions}>
+              <TouchableOpacity style={styles.medicinePrimaryButton} onPress={addSelectedMedicineToMedications}>
+                <Ionicons name="add-circle" size={18} color="#FFFFFF" />
+                <Text style={styles.medicinePrimaryButtonText}>Add to Medications</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.medicineSecondaryButton} onPress={() => setSelectedMedicineResult(null)}>
+                <Text style={styles.medicineSecondaryButtonText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ThemedNoticeModal
         visible={!!noticeModal}
         type={noticeModal?.type || 'info'}
@@ -1444,6 +1530,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   searchIcon: {
     marginRight: 12,
@@ -1458,14 +1549,17 @@ const styles = StyleSheet.create({
   },
   suggestionsContainer: {
     backgroundColor: 'white',
-    borderRadius: 12,
+    borderRadius: 14,
     marginTop: 8,
     maxHeight: 300,
-    shadowColor: '#000',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.09,
     shadowRadius: 12,
     elevation: 5,
+    overflow: 'hidden',
   },
   suggestionsList: {
     maxHeight: 300,
@@ -1484,31 +1578,211 @@ const styles = StyleSheet.create({
   suggestionItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: '#E2E8F0',
   },
   suggestionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#EFF6FF',
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: '#1E3A8A',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
   suggestionContent: {
     flex: 1,
+    minWidth: 0,
   },
   suggestionName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
     marginBottom: 2,
   },
   suggestionDetails: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  suggestionUse: {
+    fontSize: 11,
+    color: '#1E3A8A',
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  medicineModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.46)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  medicineModalContent: {
+    width: '100%',
+    maxWidth: 390,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  medicineModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  medicineModalIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: '#1E3A8A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    shadowColor: '#1E3A8A',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  medicineModalCloseIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  medicineModalEyebrow: {
+    fontSize: 11,
+    color: '#1E3A8A',
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  medicineModalTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#0F172A',
+    lineHeight: 30,
+  },
+  medicineModalSubtitle: {
     fontSize: 13,
-    color: '#6B7280',
+    color: '#64748B',
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  medicineDetailGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  medicineDetailBox: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  medicineDetailLabel: {
+    fontSize: 10,
+    color: '#64748B',
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  medicineDetailValue: {
+    fontSize: 13,
+    color: '#0F172A',
+    fontWeight: '900',
+  },
+  medicineInfoSection: {
+    marginTop: 14,
+  },
+  medicineInfoLabel: {
+    fontSize: 12,
+    color: '#1E3A8A',
+    fontWeight: '900',
+    marginBottom: 5,
+  },
+  medicineInfoText: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  medicineSafetyBox: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    padding: 12,
+    marginTop: 16,
+  },
+  medicineSafetyText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#1E3A8A',
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  medicineModalActions: {
+    gap: 10,
+    marginTop: 18,
+  },
+  medicinePrimaryButton: {
+    minHeight: 46,
+    borderRadius: 15,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  medicinePrimaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  medicineSecondaryButton: {
+    minHeight: 44,
+    borderRadius: 15,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  medicineSecondaryButtonText: {
+    color: '#1E3A8A',
+    fontSize: 14,
+    fontWeight: '900',
   },
   statusCard: {
     backgroundColor: 'white',

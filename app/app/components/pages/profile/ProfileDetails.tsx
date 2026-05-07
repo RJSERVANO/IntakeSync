@@ -7,6 +7,7 @@ import ProfileInfoList from './ProfileInfoList';
 import useUser from '../../../../hooks/useUser';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenHeader from '../../common/ScreenHeader';
+import { getCachedSession, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 
 interface UserDetails {
   name: string;
@@ -28,11 +29,30 @@ interface UserDetails {
 export default function ProfileDetails() {
   const { token } = useLocalSearchParams();
   const { user: fetchedUser, setUser: setFetchedUser, loading } = useUser(token as string | undefined);
+  const [cachedProfile, setCachedProfile] = React.useState<UserDetails | null>(null);
 
   // local alias to satisfy existing code that used `user`
-  const user = fetchedUser as unknown as UserDetails | null;
+  const user = (fetchedUser || cachedProfile) as unknown as UserDetails | null;
 
   const [modalVisible, setModalVisible] = React.useState(false);
+
+  React.useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const session = await getCachedSession();
+      const profile = await readProfileCache<UserDetails>(session?.user ?? null);
+      if (mounted && profile) setCachedProfile(profile);
+    })().catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (fetchedUser) {
+      writeProfileCache(fetchedUser, fetchedUser).catch(() => {});
+    }
+  }, [fetchedUser]);
 
   const openEditModal = () => setModalVisible(true);
   const closeEditModal = () => setModalVisible(false);
@@ -40,6 +60,7 @@ export default function ProfileDetails() {
   const handleSaved = (updated: any) => {
     // update shared user state
     setFetchedUser((prev: any) => ({ ...(prev || {}), ...(updated || {}) }));
+    setCachedProfile((prev: any) => ({ ...(prev || {}), ...(updated || {}) }));
   };
 
   const formatClimate = (climate: string | undefined) => {
@@ -57,7 +78,7 @@ export default function ProfileDetails() {
     return goal > 0 ? `${goal} ml` : 'Not set';
   };
 
-  if (loading) {
+  if (loading && !user) {
     return (
       <SafeAreaView style={styles.container} edges={[]}>
         <ScreenHeader title="Profile Details" subtitle="View and update your account and hydration profile." showBackButton />

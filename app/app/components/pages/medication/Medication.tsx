@@ -87,6 +87,7 @@ const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 const MISSED_DOSE_GRACE_MS = 60 * 1000;
+const PAST_TIME_MESSAGE = 'You cannot add a past time for today. Please choose a future time.';
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -178,11 +179,13 @@ function inferScheduleFromText(text = '', frequency?: string) {
 
 function generateSuggestedTimes({
   startTime,
+  scheduleStartDate,
   intervalHours,
   maxDosesToday,
   frequency,
 }: {
   startTime: Date;
+  scheduleStartDate?: string;
   intervalHours?: number | string | null;
   maxDosesToday?: number | string | null;
   frequency?: string;
@@ -190,13 +193,20 @@ function generateSuggestedTimes({
   const inferred = inferScheduleFromText('', frequency);
   const interval = Number(intervalHours || inferred.intervalHours || 24);
   const maxDoses = Math.max(1, Math.min(Number(maxDosesToday || inferred.maxDosesToday || 1), 6));
-  const first = getNextMedicationTimeSlot(startTime);
+  const scheduleDate = parseDateStringLocal(scheduleStartDate || todayDateString());
+  const scheduleDateKey = toDateStringLocal(scheduleDate);
+  const todayKey = todayDateString();
+  const firstSlot = getNextMedicationTimeSlot(startTime);
+  const first = new Date(scheduleDate);
+  first.setHours(firstSlot.getHours(), firstSlot.getMinutes(), 0, 0);
   const seen = new Set<string>();
   const times: string[] = [];
 
   for (let index = 0; index < maxDoses; index += 1) {
     const candidate = new Date(first);
     candidate.setHours(first.getHours() + index * interval);
+    if (toDateStringLocal(candidate) !== scheduleDateKey) continue;
+    if (scheduleDateKey === todayKey && candidate.getTime() <= Date.now()) continue;
     const key = `${candidate.getHours()}:${candidate.getMinutes()}`;
     if (!seen.has(key)) {
       seen.add(key);
@@ -207,7 +217,7 @@ function generateSuggestedTimes({
   return times;
 }
 
-function buildTimesForMedicine(medicine: OtcMedicineSuggestion, startTime = new Date()) {
+function buildTimesForMedicine(medicine: OtcMedicineSuggestion, startTime = new Date(), scheduleStartDate = todayDateString()) {
   const guidanceText = [
     medicine.dosage_text,
     medicine.dosage,
@@ -217,6 +227,7 @@ function buildTimesForMedicine(medicine: OtcMedicineSuggestion, startTime = new 
 
   return generateSuggestedTimes({
     startTime,
+    scheduleStartDate,
     intervalHours: medicine.interval_hours || inferred.intervalHours,
     maxDosesToday: medicine.max_daily_doses || inferred.maxDosesToday,
     frequency: medicine.frequency,
@@ -412,6 +423,13 @@ export default function Medication() {
   // Medicine autocomplete search
   useEffect(() => {
     const searchMedicines = async () => {
+      if (selectedOtcMedicine && name.trim() === selectedOtcMedicine.name) {
+        setMedicineSuggestions([]);
+        setShowMedicineSuggestions(false);
+        setMedicineSearchMessage(null);
+        return;
+      }
+
       if (name.trim().length < 2) {
         setMedicineSuggestions([]);
         setShowMedicineSuggestions(false);
@@ -437,7 +455,7 @@ export default function Medication() {
         } else {
           setMedicineSearchMessage(
             api.isNetworkError(err)
-              ? 'No offline medication search data available. Connect to the internet to search medications.'
+              ? 'No offline medication search data available. You can still manually enter a medication name.'
               : 'Could not search medications. Please try again.'
           );
           setShowMedicineSuggestions(true);
@@ -447,7 +465,7 @@ export default function Medication() {
 
     const debounceTimer = setTimeout(searchMedicines, 300);
     return () => clearTimeout(debounceTimer);
-  }, [name]);
+  }, [name, selectedOtcMedicine]);
 
   useEffect(() => {
     if (!clearedHistoryCacheKey) {
@@ -643,14 +661,14 @@ export default function Medication() {
           const data = JSON.parse(medicineData as string);
           const selectedMedicine = { ...data, name: data.name || medicineName, dosage: data.dosage || medicineDosage } as OtcMedicineSuggestion;
           setSelectedOtcMedicine(selectedMedicine);
-          const recommendedTimes = buildTimesForMedicine(selectedMedicine);
+          const recommendedTimes = buildTimesForMedicine(selectedMedicine, new Date(), startDate || todayDateString());
           if (recommendedTimes.length > 0) setTimes(recommendedTimes);
         } catch (e) {
           console.log('Error parsing medicine data:', e);
         }
       }
     }
-  }, [medicineName, medicineDosage, medicineData, modalVisible]);
+  }, [medicineName, medicineDosage, medicineData, modalVisible, startDate]);
 
   // Auto-mark missed medications and reload stats periodically
   useEffect(() => {
@@ -723,7 +741,7 @@ export default function Medication() {
     setEditing(null);
     setName('');
     setDosage('');
-    setTimes([getNextMedicationTimeSlot().toISOString()]);
+    setTimes([]);
     setMedicineSearchMessage(null);
     setSelectedOtcMedicine(null);
     setReminder(true);
@@ -756,6 +774,9 @@ export default function Medication() {
   async function saveMedication() {
     if (!name.trim()) return showNotice('warning', 'Validation', 'Please enter a name');
     if (!times.length) return showNotice('warning', 'Validation', 'Please add at least one reminder time');
+    if (!editing && times.some((time) => isPastReminderTimeForToday(new Date(time)))) {
+      return showNotice('warning', 'Validation', PAST_TIME_MESSAGE);
+    }
     const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
     const startChanged = !editing || (startDate || todayDateString()) !== originalStart;
     if (startChanged && parseDateStringLocal(startDate || todayDateString()).getTime() < parseDateStringLocal(todayDateString()).getTime()) {
@@ -763,6 +784,9 @@ export default function Medication() {
     }
     if (endDate && parseDateStringLocal(endDate).getTime() < parseDateStringLocal(startDate || todayDateString()).getTime()) {
       return showNotice('warning', 'Validation', 'End date cannot be before the start date.');
+    }
+    if (frequency === 'weekly' && daysOfWeek.length === 0) {
+      return showNotice('warning', 'Validation', 'Please select at least one day of the week.');
     }
 
     const localId = editing?.local_id || editing?.id || `med_${Date.now()}_${uid()}`;
@@ -1194,6 +1218,47 @@ export default function Medication() {
     return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
   }
 
+  function getReminderOccurrenceForStartDate(date: Date, scheduleDate = startDate || todayDateString()) {
+    const occurrence = parseDateStringLocal(scheduleDate);
+    occurrence.setHours(date.getHours(), date.getMinutes(), 0, 0);
+    return occurrence;
+  }
+
+  function isPastReminderTimeForToday(date: Date) {
+    const scheduleDate = startDate || todayDateString();
+    if (scheduleDate !== todayDateString()) return false;
+    return getReminderOccurrenceForStartDate(date, scheduleDate).getTime() <= Date.now();
+  }
+
+  function clearSelectedMedicine(showFeedback = true) {
+    setSelectedOtcMedicine(null);
+    setDosage('');
+    setTimes([]);
+    if (showFeedback) showInlineNotice('Selected medicine cleared.');
+  }
+
+  function clearReminderTimes() {
+    setTimes([]);
+    showInlineNotice('Reminder times cleared.');
+  }
+
+  function selectOtcMedicine(medicine: OtcMedicineSuggestion) {
+    Keyboard.dismiss();
+    const guidanceText = [medicine.dosage_text, medicine.dosage, medicine.timing_instructions].filter(Boolean).join(' ');
+    const inferred = inferScheduleFromText(guidanceText, medicine.frequency);
+    const expectedDoses = Math.max(1, Math.min(Number(medicine.max_daily_doses || inferred.maxDosesToday || 1), 6));
+    const smartTimes = buildTimesForMedicine(medicine, new Date(), startDate || todayDateString());
+    setName(medicine.name);
+    setSelectedOtcMedicine(medicine);
+    setDosage(medicine.dosage_text || medicine.dosage || '');
+    setTimes(smartTimes);
+    setShowMedicineSuggestions(false);
+    setMedicineSearchMessage(null);
+    if ((startDate || todayDateString()) === todayDateString() && smartTimes.length < expectedDoses) {
+      showInlineNotice('Only future reminder times were added for today.');
+    }
+  }
+
   function setTempTimeParts(nextParts: { hour24?: number; minute?: number }) {
     const current = tempTime || new Date();
     const next = new Date(current);
@@ -1206,6 +1271,11 @@ export default function Medication() {
   function addOrUpdateReminderTime(date: Date) {
     if (!date || Number.isNaN(date.getTime())) {
       showNotice('warning', 'Validation', 'Please select a valid reminder time.');
+      return false;
+    }
+
+    if (isPastReminderTimeForToday(date)) {
+      showNotice('warning', 'Validation', PAST_TIME_MESSAGE);
       return false;
     }
 
@@ -2054,31 +2124,39 @@ export default function Medication() {
         {/* Stats Dashboard */}
         <View style={styles.statsContainer}>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('total')} activeOpacity={0.85}>
-            <View style={styles.statIcon}>
-              <Ionicons name="medkit" size={16} color="#2563EB" />
+            <View style={styles.statTopRow}>
+              <View style={styles.statIcon}>
+                <Ionicons name="medkit" size={14} color="#2563EB" />
+              </View>
+              <Text style={styles.statNumber}>{displayStats.total_medications ?? 0}</Text>
             </View>
-            <Text style={styles.statNumber}>{displayStats.total_medications ?? 0}</Text>
             <Text style={styles.statLabel}>Total meds</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('active')} activeOpacity={0.85}>
-            <View style={styles.statIcon}>
-              <Ionicons name="checkmark-circle" size={16} color="#2563EB" />
+            <View style={styles.statTopRow}>
+              <View style={styles.statIcon}>
+                <Ionicons name="checkmark-circle" size={14} color="#2563EB" />
+              </View>
+              <Text style={styles.statNumber}>{displayStats.active_medications ?? 0}</Text>
             </View>
-            <Text style={styles.statNumber}>{displayStats.active_medications ?? 0}</Text>
             <Text style={styles.statLabel}>Active</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('today')} activeOpacity={0.85}>
-            <View style={styles.statIcon}>
-              <Ionicons name="calendar" size={16} color="#2563EB" />
+            <View style={styles.statTopRow}>
+              <View style={styles.statIcon}>
+                <Ionicons name="calendar" size={14} color="#2563EB" />
+              </View>
+              <Text style={styles.statNumber}>{displayStats.completed_today ?? 0}</Text>
             </View>
-            <Text style={styles.statNumber}>{displayStats.completed_today ?? 0}</Text>
             <Text style={styles.statLabel}>Taken today</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.statCard, styles.statCardMissed]} onPress={() => setStatsModalType('missed')} activeOpacity={0.85}>
-            <View style={[styles.statIcon, styles.statIconMissed]}>
-              <Ionicons name="alert-circle" size={16} color="#C2410C" />
+            <View style={styles.statTopRow}>
+              <View style={[styles.statIcon, styles.statIconMissed]}>
+                <Ionicons name="alert-circle" size={14} color="#C2410C" />
+              </View>
+              <Text style={styles.statNumber}>{displayStats.missed_today ?? 0}</Text>
             </View>
-            <Text style={styles.statNumber}>{displayStats.missed_today ?? 0}</Text>
             <Text style={styles.statLabel}>Missed</Text>
           </TouchableOpacity>
         </View>
@@ -2324,7 +2402,7 @@ export default function Medication() {
                   onChangeText={(text) => {
                     setName(text);
                     setMedicineSearchMessage(null);
-                    if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) setSelectedOtcMedicine(null);
+                    if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) clearSelectedMedicine(false);
                   }}
                   style={styles.input}
                   placeholder="e.g., Vitamin C, Biogesic, Neozep"
@@ -2332,25 +2410,17 @@ export default function Medication() {
                 />
 
                 {/* Medicine Suggestions in Modal */}
-                {showMedicineSuggestions && (medicineSuggestions.length > 0 || medicineSearchMessage) && (
+                {showMedicineSuggestions && !selectedOtcMedicine && (medicineSuggestions.length > 0 || medicineSearchMessage) && (
                   <View style={styles.modalSuggestionsContainer}>
                     {medicineSearchMessage ? (
                       <Text style={styles.modalSuggestionNotice}>{medicineSearchMessage}</Text>
                     ) : null}
-                    <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
+                    <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled keyboardShouldPersistTaps="always">
                       {medicineSuggestions.map((medicine: OtcMedicineSuggestion) => (
                         <TouchableOpacity
                           key={String(medicine.id || medicine.name)}
                           style={styles.modalSuggestionItem}
-                          onPress={() => {
-                            setName(medicine.name);
-                            setSelectedOtcMedicine(medicine);
-                            setDosage(medicine.dosage_text || medicine.dosage || dosage);
-                            setShowMedicineSuggestions(false);
-
-                            const smartTimes = buildTimesForMedicine(medicine);
-                            if (smartTimes.length > 0) setTimes(smartTimes);
-                          }}
+                          onPress={() => selectOtcMedicine(medicine)}
                         >
                           <View style={styles.modalSuggestionIcon}>
                             <Ionicons name="medkit" size={19} color="#FFFFFF" />
@@ -2384,6 +2454,14 @@ export default function Medication() {
                       {[selectedOtcMedicine.generic_name || selectedOtcMedicine.brand, selectedOtcMedicine.category].filter(Boolean).join(' - ') || 'OTC medicine selected'}
                     </Text>
                   </View>
+                  <TouchableOpacity
+                    style={styles.selectedMedicineClear}
+                    onPress={() => clearSelectedMedicine()}
+                    accessibilityLabel="Clear selected medicine"
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="close" size={16} color="#64748B" />
+                  </TouchableOpacity>
                 </View>
               )}
 
@@ -2394,12 +2472,12 @@ export default function Medication() {
             <View style={styles.formCard}>
               <Text style={styles.formSectionTitle}>Reminder Times</Text>
               <Text style={styles.label}>Times</Text>
-              <View style={styles.addTimeButtonRow}>
+              <View style={[styles.addTimeButtonRow, times.length > 0 && styles.addTimeButtonRowWithClear]}>
                 <TouchableOpacity
                   style={styles.addTimeButton}
                   onPress={()=>{
                     setPickerIndex(null);
-                    setTempTime(new Date());
+                    setTempTime(getNextMedicationTimeSlot());
                     setTimeModalVisible(true);
                   }}
                   activeOpacity={0.85}
@@ -2407,6 +2485,12 @@ export default function Medication() {
                   <Ionicons name="add-circle-outline" size={18} color="#1E3A8A" />
                   <Text style={styles.addTimeText}>Add time</Text>
                 </TouchableOpacity>
+                {times.length > 0 && (
+                  <TouchableOpacity style={styles.clearTimesButton} onPress={clearReminderTimes} activeOpacity={0.8}>
+                    <Ionicons name="close-circle-outline" size={14} color="#DC2626" />
+                    <Text style={styles.clearTimesText}>Clear times</Text>
+                  </TouchableOpacity>
+                )}
               </View>
 
               {times.length === 0 ? (
@@ -2481,9 +2565,10 @@ export default function Medication() {
               </View>
               </TouchableOpacity>
 
-              <Text style={styles.label}>Frequency</Text>
+              <Text style={styles.label}>Repeat Schedule</Text>
+              <Text style={styles.scheduleHelperText}>Choose how often this medication schedule repeats.</Text>
               <View style={styles.frequencyContainer}>
-                {['daily', 'weekly', 'monthly', 'custom'].map((freq) => (
+                {(['daily', 'weekly', 'monthly'] as const).map((freq) => (
                   <TouchableOpacity
                     key={freq}
                     style={[
@@ -2525,6 +2610,9 @@ export default function Medication() {
                     ))}
                   </View>
                 </View>
+              )}
+              {frequency === 'monthly' && (
+                <Text style={styles.repeatHelperText}>Repeats monthly on the same day as the start date.</Text>
               )}
             </View>
 
@@ -3084,37 +3172,35 @@ const styles = StyleSheet.create({
   statsContainer: {
     flexDirection: 'row',
     paddingHorizontal: 20,
-    marginBottom: 16,
-    justifyContent: 'space-between'
+    marginBottom: 12,
+    gap: 8,
   },
   statCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 6,
-    alignItems: 'center',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
     flex: 1,
-    marginHorizontal: 4,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#000',
     shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowRadius: 6,
     elevation: 2
   },
   statCardMissed: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
+  statTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
   },
   statIconMissed: { backgroundColor: '#FFEDD5' },
-  statNumber: { fontSize: 20, fontWeight: '900', color: '#0F172A' },
-  statLabel: { fontSize: 10, color: '#64748B', marginTop: 2, fontWeight: '800' },
+  statNumber: { fontSize: 17, lineHeight: 20, fontWeight: '900', color: '#0F172A' },
+  statLabel: { fontSize: 10, lineHeight: 12, color: '#64748B', marginTop: 3, fontWeight: '800' },
 
   // Sections
   sectionContainer: { paddingHorizontal: 20, marginBottom: 16 },
@@ -3165,44 +3251,44 @@ const styles = StyleSheet.create({
   // Medication Cards
   medicationCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 13,
-    marginBottom: 12,
+    borderRadius: 16,
+    padding: 10,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     borderLeftWidth: 4,
     shadowColor: '#000',
     shadowOpacity: 0.04,
-    shadowRadius: 8,
+    shadowRadius: 7,
     elevation: 2
   },
   medicationMainRow: { flexDirection: 'row', alignItems: 'flex-start' },
   medicationIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 15,
+    width: 36,
+    height: 36,
+    borderRadius: 13,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 11,
+    marginRight: 9,
     borderWidth: 1
   },
   medicationInitial: { color: 'white', fontWeight: '700', fontSize: 20 },
   medicationContent: { flex: 1 },
-  medicationName: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
-  medicationDosage: { fontSize: 12, color: '#64748B', marginTop: 3, fontWeight: '700' },
-  doseSummaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 7, alignItems: 'center' },
+  medicationName: { fontSize: 15, lineHeight: 19, fontWeight: '900', color: '#0F172A' },
+  medicationDosage: { fontSize: 11, lineHeight: 15, color: '#64748B', marginTop: 1, fontWeight: '700' },
+  doseSummaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4, alignItems: 'center' },
   doseSummaryText: { fontSize: 11, color: '#334155', fontWeight: '800' },
   doseSummaryMissed: { color: '#DC2626' },
   doseSummaryMuted: { fontSize: 11, color: '#64748B', fontWeight: '700' },
-  medicationTimes: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, gap: 6 },
-  medicationNotes: { fontSize: 12, color: '#64748B', marginTop: 5, lineHeight: 16, fontWeight: '600' },
+  medicationTimes: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6, gap: 5 },
+  medicationNotes: { fontSize: 11, color: '#64748B', marginTop: 4, lineHeight: 15, fontWeight: '600' },
 
   // Time Badges
   timeBadge: {
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
     borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
@@ -3210,7 +3296,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },
-  timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 11 },
+  timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 10 },
   timeBadgeUpcoming: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
   timeBadgeTaken: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
   timeBadgeMissed: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
@@ -3224,16 +3310,16 @@ const styles = StyleSheet.create({
   medicationActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 8,
-    marginTop: 12,
-    paddingTop: 10,
+    gap: 7,
+    marginTop: 8,
+    paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#EFF6FF',
   },
   actionButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -3589,28 +3675,57 @@ const styles = StyleSheet.create({
   selectedMedicineCopy: { flex: 1, minWidth: 0 },
   selectedMedicineTitle: { fontSize: 13, fontWeight: '900', color: '#0F172A' },
   selectedMedicineMeta: { fontSize: 11, fontWeight: '700', color: '#64748B', marginTop: 2 },
+  selectedMedicineClear: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
 
   // Time Management
   timesHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  addTimeButtonRow: { alignItems: 'center', marginTop: 2, marginBottom: 12 },
+  addTimeButtonRow: { alignItems: 'center', justifyContent: 'center', marginTop: 2, marginBottom: 12, gap: 8 },
+  addTimeButtonRowWithClear: { flexDirection: 'row', flexWrap: 'wrap' },
   addTimeButton: {
-    minWidth: 178,
-    minHeight: 46,
-    borderRadius: 16,
+    width: 142,
+    height: 40,
+    borderRadius: 14,
     backgroundColor: '#EFF6FF',
     borderWidth: 1,
     borderColor: '#BFDBFE',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     shadowColor: '#1E3A8A',
     shadowOpacity: 0.08,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
-  addTimeText: { color: '#1E3A8A', fontWeight: '900', fontSize: 14 },
+  addTimeText: { color: '#1E3A8A', fontWeight: '900', fontSize: 13 },
+  clearTimesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    width: 142,
+    height: 40,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  clearTimesText: { color: '#DC2626', fontSize: 12, fontWeight: '900' },
   emptyTimeHelper: {
     backgroundColor: '#F8FAFC',
     borderRadius: 12,
@@ -3719,6 +3834,20 @@ const styles = StyleSheet.create({
   dayButtonActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   dayButtonText: { fontSize: 12, fontWeight: '800', color: '#1E3A8A' },
   dayButtonTextActive: { color: 'white' },
+  repeatHelperText: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: -2,
+    marginBottom: 12,
+  },
 
   // Color Picker
   colorContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 },

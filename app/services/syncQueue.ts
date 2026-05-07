@@ -184,20 +184,7 @@ function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQue
   }
 }
 
-function isMedicationAction(actionType: SyncQueueAction) {
-  return [
-    'CREATE_MEDICATION',
-    'UPDATE_MEDICATION',
-    'DELETE_MEDICATION',
-    'MARK_MEDICATION_TAKEN',
-    'MARK_MEDICATION_MISSED',
-    'SNOOZE_MEDICATION',
-    'CLEAR_MEDICATION_HISTORY',
-  ].includes(actionType);
-}
-
 function itemBelongsToUser(item: SyncQueueItem, user?: any | null) {
-  if (!isMedicationAction(item.action_type)) return true;
   if (!item.owner_id && !item.owner_email) return false;
   return cacheOwnerMatches(item, user);
 }
