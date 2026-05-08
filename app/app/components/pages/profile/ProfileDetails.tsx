@@ -1,13 +1,13 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import EditProfileModal from './EditProfileModal';
 import ProfileInfoList from './ProfileInfoList';
 import useUser from '../../../../hooks/useUser';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenHeader from '../../common/ScreenHeader';
-import { getCachedSession, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { getCachedSession, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { formatBackendBirthDateForInput } from '../../../../utils/profileValidation';
 
@@ -44,12 +44,26 @@ export default function ProfileDetails() {
     (async () => {
       const session = await getCachedSession();
       const profile = await readProfileCache<UserDetails>(session?.user ?? null);
-      if (mounted && profile) setCachedProfile(profile);
+      if (mounted && profile) setCachedProfile(await mergeLocalAvatarIntoUser(profile));
     })().catch(() => {});
     return () => {
       mounted = false;
     };
   }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+      (async () => {
+        const session = await getCachedSession();
+        const profile = await readProfileCache<UserDetails>(session?.user ?? null);
+        if (active && profile) setCachedProfile(await mergeLocalAvatarIntoUser(profile));
+      })().catch(() => {});
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   React.useEffect(() => {
     if (fetchedUser) {

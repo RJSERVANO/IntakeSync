@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../app/api';
-import { getCachedSession, updateCachedUser } from '../services/offlineStorage';
+import { getCachedSession, mergeLocalAvatarIntoUser, updateCachedUser } from '../services/offlineStorage';
 
 interface NormalizedUser {
   [key: string]: any;
@@ -31,8 +31,9 @@ export default function useUser(token?: string) {
         dateOfBirth: data.date_of_birth || data.dateOfBirth || undefined,
         emergencyContact: data.emergency_contact || data.emergencyContact || undefined,
       };
-      setUser(merged);
-      await updateCachedUser(merged, token);
+      const withLocalAvatar = await mergeLocalAvatarIntoUser(merged);
+      setUser(withLocalAvatar);
+      await updateCachedUser(withLocalAvatar, token);
     } catch (err) {
       console.warn('useUser: failed to load user', err);
       if (api.isAuthError(err)) {

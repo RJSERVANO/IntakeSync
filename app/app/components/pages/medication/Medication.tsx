@@ -27,6 +27,7 @@ import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+import { hapticError, hapticForNotice, hapticSuccess, hapticWarning } from '../../../../utils/haptics';
 
 type MedicationItem = {
   id: string;
@@ -46,6 +47,10 @@ type MedicationItem = {
   otc_metadata?: any;
   sync_status?: 'pending' | 'synced' | 'failed';
   deleted_at?: string | null;
+  created_at?: string;
+  local_created_at?: string;
+  schedule_created_at?: string;
+  client_created_at?: string;
 };
 
 type OtcMedicineSuggestion = {
@@ -91,7 +96,6 @@ const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 const MISSED_DOSE_GRACE_MS = 60 * 1000;
-const PAST_TIME_MESSAGE = 'You cannot add a past time for today. Please choose a future time.';
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -156,7 +160,7 @@ function getNextMedicationTimeSlot(now = new Date(), intervalMinutes = 10): Date
 
 function inferScheduleFromText(text = '', frequency?: string) {
   const lower = text.toLowerCase();
-  const everyMatch = lower.match(/every\s+(\d+)\s*(?:hour|hr)/);
+  const everyMatch = lower.match(/every\s+(\d+)(?:\s*(?:to|-)\s*\d+)?\s*(?:hour|hr)/);
   const maxDosesMatch = lower.match(/(?:max|maximum)\s+(\d+)/);
   let intervalHours = everyMatch ? Number(everyMatch[1]) : undefined;
   let maxDosesToday = maxDosesMatch ? Number(maxDosesMatch[1]) : undefined;
@@ -173,12 +177,26 @@ function inferScheduleFromText(text = '', frequency?: string) {
     else if (frequency === 'twice_daily' || intervalHours === 12) maxDosesToday = 2;
     else if (frequency === 'three_times_daily' || intervalHours === 8) maxDosesToday = 3;
     else if (frequency === 'four_times_daily' || intervalHours === 6) maxDosesToday = 4;
+    else if (intervalHours && intervalHours <= 4) maxDosesToday = 4;
+    else if (intervalHours && intervalHours <= 6) maxDosesToday = 4;
+    else if (intervalHours && intervalHours <= 8) maxDosesToday = 3;
   }
 
   return {
-    intervalHours: intervalHours || 24,
-    maxDosesToday: Math.max(1, Math.min(maxDosesToday || 1, 6)),
+    intervalHours: intervalHours || undefined,
+    maxDosesToday: Math.max(1, Math.min(maxDosesToday || 3, 4)),
   };
+}
+
+function defaultClockMinutesForDoseCount(count: number, intervalHours?: number) {
+  if (intervalHours && intervalHours > 0 && count > 1) {
+    const start = intervalHours >= 12 ? 8 * 60 : 6 * 60;
+    return Array.from({ length: count }, (_, index) => (start + index * intervalHours * 60) % (24 * 60));
+  }
+  if (count <= 1) return [8 * 60];
+  if (count === 2) return [8 * 60, 20 * 60];
+  if (count === 3) return [8 * 60, 14 * 60, 20 * 60];
+  return [6 * 60, 12 * 60, 18 * 60, 22 * 60];
 }
 
 function generateSuggestedTimes({
@@ -195,22 +213,16 @@ function generateSuggestedTimes({
   frequency?: string;
 }) {
   const inferred = inferScheduleFromText('', frequency);
-  const interval = Number(intervalHours || inferred.intervalHours || 24);
-  const maxDoses = Math.max(1, Math.min(Number(maxDosesToday || inferred.maxDosesToday || 1), 6));
+  const interval = Number(intervalHours || inferred.intervalHours || 0);
+  const maxDoses = Math.max(1, Math.min(Number(maxDosesToday || inferred.maxDosesToday || 3), 4));
   const scheduleDate = parseDateStringLocal(scheduleStartDate || todayDateString());
-  const scheduleDateKey = toDateStringLocal(scheduleDate);
-  const todayKey = todayDateString();
-  const firstSlot = getNextMedicationTimeSlot(startTime);
-  const first = new Date(scheduleDate);
-  first.setHours(firstSlot.getHours(), firstSlot.getMinutes(), 0, 0);
   const seen = new Set<string>();
   const times: string[] = [];
+  const clockMinutes = defaultClockMinutesForDoseCount(maxDoses, interval || undefined);
 
-  for (let index = 0; index < maxDoses; index += 1) {
-    const candidate = new Date(first);
-    candidate.setHours(first.getHours() + index * interval);
-    if (toDateStringLocal(candidate) !== scheduleDateKey) continue;
-    if (scheduleDateKey === todayKey && candidate.getTime() <= Date.now()) continue;
+  for (const totalMinutes of clockMinutes) {
+    const candidate = new Date(scheduleDate);
+    candidate.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
     const key = `${candidate.getHours()}:${candidate.getMinutes()}`;
     if (!seen.has(key)) {
       seen.add(key);
@@ -218,7 +230,7 @@ function generateSuggestedTimes({
     }
   }
 
-  return times;
+  return times.length > 0 ? times : [getNextMedicationTimeSlot(startTime).toISOString()];
 }
 
 function buildTimesForMedicine(medicine: OtcMedicineSuggestion, startTime = new Date(), scheduleStartDate = todayDateString()) {
@@ -302,6 +314,10 @@ function mergeMedicationRecord(existing: MedicationItem | undefined, incoming: M
     days_of_week: incoming.days_of_week?.length ? incoming.days_of_week : existing.days_of_week,
     notes: incoming.notes ?? existing.notes,
     sync_status: incoming.sync_status || existing.sync_status,
+    created_at: incoming.created_at || existing.created_at,
+    local_created_at: incoming.local_created_at || existing.local_created_at,
+    schedule_created_at: incoming.schedule_created_at || existing.schedule_created_at,
+    client_created_at: incoming.client_created_at || existing.client_created_at,
   };
 }
 
@@ -996,9 +1012,6 @@ export default function Medication() {
   async function saveMedication() {
     if (!name.trim()) return showNotice('warning', 'Validation', 'Please enter a name');
     if (!times.length) return showNotice('warning', 'Validation', 'Please add at least one reminder time');
-    if (!editing && times.some((time) => isPastReminderTimeForToday(new Date(time)))) {
-      return showNotice('warning', 'Validation', PAST_TIME_MESSAGE);
-    }
     const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
     const startChanged = !editing || (startDate || todayDateString()) !== originalStart;
     if (startChanged && parseDateStringLocal(startDate || todayDateString()).getTime() < parseDateStringLocal(todayDateString()).getTime()) {
@@ -1012,6 +1025,7 @@ export default function Medication() {
     }
 
     const localId = editing?.local_id || editing?.id || `med_${Date.now()}_${uid()}`;
+    const scheduleCreatedAt = editing?.schedule_created_at || editing?.client_created_at || editing?.local_created_at || editing?.created_at || new Date().toISOString();
     const medData = {
       name,
       dosage,
@@ -1025,6 +1039,10 @@ export default function Medication() {
       color,
       local_id: localId,
       client_uuid: localId,
+      created_at: editing?.created_at || scheduleCreatedAt,
+      local_created_at: editing?.local_created_at || scheduleCreatedAt,
+      schedule_created_at: scheduleCreatedAt,
+      client_created_at: editing?.client_created_at || scheduleCreatedAt,
       otc_medicine_id: selectedOtcMedicine?.id || null,
       otc_metadata: selectedOtcMedicine ? {
         name: selectedOtcMedicine.name,
@@ -1134,7 +1152,10 @@ export default function Medication() {
       }
     }
     setModalVisible(false);
-    if (savedSuccessfully) showInlineNotice(successMessage);
+    if (savedSuccessfully) {
+      hapticSuccess();
+      showInlineNotice(successMessage);
+    }
   }
 
   async function scheduleMedicationReminders(medication: MedicationItem, replaceExisting = false) {
@@ -1162,6 +1183,7 @@ export default function Medication() {
           endDate: medication.end_date || null,
           frequency: medication.frequency,
           daysOfWeek: medication.days_of_week || [],
+          scheduleCreatedAt: medication.schedule_created_at || medication.client_created_at || medication.local_created_at || medication.created_at || null,
         }
       );
     } catch (error) {
@@ -1170,10 +1192,13 @@ export default function Medication() {
   }
 
   function showThemedPopup(popup: ThemedPopup) {
+    if (popup.tone === 'error') hapticError();
+    else if (popup.tone === 'warning') hapticWarning();
     setThemedPopup(popup);
   }
 
   function showNotice(type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') {
+    hapticForNotice(type);
     setNoticeModal({ type, title, message, primaryText });
   }
 
@@ -1279,6 +1304,7 @@ export default function Medication() {
     const medToDelete = meds.find((med) => String(med.id) === String(id));
     if (!medToDelete) return;
 
+    hapticWarning();
     setDeleteTarget(medToDelete);
   }
 
@@ -1337,6 +1363,7 @@ export default function Medication() {
     }
 
     if (deleted) {
+      hapticSuccess();
       showInlineNotice('Medication deleted');
     }
     setActionBusy(actionKey, false);
@@ -1435,18 +1462,6 @@ export default function Medication() {
     return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
   }
 
-  function getReminderOccurrenceForStartDate(date: Date, scheduleDate = startDate || todayDateString()) {
-    const occurrence = parseDateStringLocal(scheduleDate);
-    occurrence.setHours(date.getHours(), date.getMinutes(), 0, 0);
-    return occurrence;
-  }
-
-  function isPastReminderTimeForToday(date: Date) {
-    const scheduleDate = startDate || todayDateString();
-    if (scheduleDate !== todayDateString()) return false;
-    return getReminderOccurrenceForStartDate(date, scheduleDate).getTime() <= Date.now();
-  }
-
   function clearSelectedMedicine(showFeedback = true) {
     setSelectedOtcMedicine(null);
     setDosage('');
@@ -1488,11 +1503,6 @@ export default function Medication() {
   function addOrUpdateReminderTime(date: Date) {
     if (!date || Number.isNaN(date.getTime())) {
       showNotice('warning', 'Validation', 'Please select a valid reminder time.');
-      return false;
-    }
-
-    if (isPastReminderTimeForToday(date)) {
-      showNotice('warning', 'Validation', PAST_TIME_MESSAGE);
       return false;
     }
 
@@ -1656,6 +1666,7 @@ export default function Medication() {
 
         // Also reload stats to update counters
         await reloadStatsAndUpcoming();
+        hapticSuccess();
         showInlineNotice(med.name ? `${med.name} marked as taken` : 'Medication marked as taken');
       } catch (err: any) {
         console.log('Error marking medication as taken:', err);
@@ -1676,6 +1687,7 @@ export default function Medication() {
             },
           });
           setOfflineMode(true);
+          hapticSuccess();
           showInlineNotice('Medication marked as taken offline.');
         } else {
         rollbackOptimisticTaken();
@@ -1709,6 +1721,7 @@ export default function Medication() {
         local_id: historyLocalId,
         payload: { medId, medication_id: medId, server_id: med.server_id || medId, status: 'completed', time: scheduledTime, client_uuid: historyLocalId },
       });
+      hapticSuccess();
       showInlineNotice('Medication marked as taken offline.');
     }
   }
@@ -1752,6 +1765,7 @@ export default function Medication() {
           setHistory((current) => dedupeMedicationHistory(current.map((item) => item.id === entry.id ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.created_at || item.loggedAt }, medId) : item)));
         }
         showInlineNotice(`Reminder snoozed for ${mins} minutes`);
+        hapticSuccess();
       } catch (err: any) {
         console.log('Snooze history sync failed:', err);
         if (api.isNetworkError(err)) {
@@ -1762,6 +1776,7 @@ export default function Medication() {
             payload: { medId, medication_id: medId, server_id: med?.server_id || medId, status: 'snoozed', time: entry.time, client_uuid: entry.id },
           });
           setOfflineMode(true);
+          hapticSuccess();
           showInlineNotice(`Reminder snoozed offline for ${mins} minutes.`);
         } else {
           setHistory((current) => dedupeMedicationHistory(current.filter((item) => item.id !== entry.id)));
@@ -1783,12 +1798,14 @@ export default function Medication() {
         local_id: entry.id,
         payload: { medId, medication_id: medId, server_id: med?.server_id || medId, status: 'snoozed', time: entry.time, client_uuid: entry.id },
       });
+      hapticSuccess();
       showInlineNotice(`Reminder snoozed for ${mins} minutes`);
     }
   }
 
 
   async function clearHistory() {
+    hapticWarning();
     setNoticeModal({
       type: 'destructive',
       title: 'Clear Recent History?',
@@ -1909,8 +1926,16 @@ export default function Medication() {
     return true;
   }
 
+  function getMedicationScheduleCreatedAt(med: MedicationItem) {
+    const raw = med.schedule_created_at || med.client_created_at || med.local_created_at || med.created_at;
+    if (!raw) return null;
+    const timestamp = new Date(raw).getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+  }
+
   function getMedicationDoseOccurrencesForDate(med: MedicationItem, date: Date) {
     if (!isMedicationScheduledOnDate(med, date)) return [];
+    const scheduleCreatedAt = getMedicationScheduleCreatedAt(med);
     return (med.times || [])
       .map((time) => {
         const source = new Date(time);
@@ -1920,6 +1945,7 @@ export default function Medication() {
         return occurrence;
       })
       .filter((item): item is Date => !!item)
+      .filter((item) => !scheduleCreatedAt || item.getTime() >= scheduleCreatedAt)
       .sort((a, b) => a.getTime() - b.getTime());
   }
 
@@ -2627,7 +2653,7 @@ export default function Medication() {
                     if (selectedOtcMedicine && text.trim() !== selectedOtcMedicine.name) clearSelectedMedicine(false);
                   }}
                   style={styles.input}
-                  placeholder="e.g., Vitamin C, Biogesic, Neozep"
+                  placeholder="e.g. Biogesic"
                   onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
                   textAlignVertical="center"
                   maxFontSizeMultiplier={FONT_SCALE.input}
@@ -2690,7 +2716,7 @@ export default function Medication() {
               )}
 
               <Text style={styles.label}>Dosage</Text>
-              <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" textAlignVertical="center" maxFontSizeMultiplier={FONT_SCALE.input} />
+              <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g. 1 tablet every 6 hours" textAlignVertical="center" maxFontSizeMultiplier={FONT_SCALE.input} />
             </View>
 
             <View style={styles.formCard}>
@@ -2847,7 +2873,7 @@ export default function Medication() {
                 value={notes}
                 onChangeText={setNotes}
                 style={[styles.input, styles.notesInput]}
-                placeholder="Add notes about this medication..."
+                placeholder="Add notes such as after meals, before sleep, or special instructions"
                 multiline
                 numberOfLines={3}
                 textAlignVertical="top"

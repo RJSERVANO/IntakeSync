@@ -5,7 +5,7 @@ import * as api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
-import { writeProfileCache } from '../../../../services/offlineStorage';
+import { getCachedSession, mergeLocalAvatarIntoUser, updateCachedUser, writeProfileCache } from '../../../../services/offlineStorage';
 import {
   capitalizeWords,
   formatBackendBirthDateForInput,
@@ -13,6 +13,7 @@ import {
   normalizePhilippineMobile,
   parseBirthDate,
 } from '../../../../utils/profileValidation';
+import { hapticForNotice } from '../../../../utils/haptics';
 
 interface Props {
   visible: boolean;
@@ -36,6 +37,11 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
   const insets = useSafeAreaInsets();
+
+  const showNotice = (nextNotice: { type: ThemedNoticeType; title: string; message: string }) => {
+    hapticForNotice(nextNotice.type);
+    setNotice(nextNotice);
+  };
 
   useEffect(() => {
     setEditData(buildEditableUser(user));
@@ -67,33 +73,33 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
   const saveChanges = async () => {
     try {
       if (!editData.name?.trim()) {
-        setNotice({ type: 'warning', title: 'Validation Error', message: 'Full name is required.' });
+        showNotice({ type: 'warning', title: 'Validation Error', message: 'Full name is required.' });
         return;
       }
       if (!editData.email?.trim()) {
-        setNotice({ type: 'warning', title: 'Validation Error', message: 'Email is required.' });
+        showNotice({ type: 'warning', title: 'Validation Error', message: 'Email is required.' });
         return;
       }
       if (!emailPattern.test(editData.email.trim())) {
-        setNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid email address.' });
+        showNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid email address.' });
         return;
       }
 
       const weightError = validateWeight();
       if (weightError) {
-        setNotice({ type: 'warning', title: 'Validation Error', message: weightError });
+        showNotice({ type: 'warning', title: 'Validation Error', message: weightError });
         return;
       }
 
       const normalizedPhone = editData.phone?.trim() ? normalizePhilippineMobile(editData.phone) : null;
       if (editData.phone?.trim() && !normalizedPhone) {
-        setNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid Philippine mobile number.' });
+        showNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid Philippine mobile number.' });
         return;
       }
 
       const birthDateForBackend = editData.date_of_birth?.trim() ? parseBirthDate(editData.date_of_birth) : null;
       if (editData.date_of_birth?.trim() && !birthDateForBackend) {
-        setNotice({
+        showNotice({
           type: 'warning',
           title: 'Validation Error',
           message: 'Use mm/dd/yyyy with a real date. You must be between 13 and 120 years old.',
@@ -104,7 +110,7 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
       setSaving(true);
 
       if (!token) {
-        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
+        showNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
         setSaving(false);
         return;
       }
@@ -141,21 +147,25 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
       let updated = { ...(user || {}), ...payload };
       try {
         const resp = await api.put('/me', payload, token as string);
-        updated = resp?.user ? { ...(user || {}), ...(resp.user || {}) } : updated;
+        updated = resp?.user ? { ...(user || {}), ...payload, ...(resp.user || {}) } : updated;
       } catch (err: any) {
         if (api.isNetworkError(err)) {
-          setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
+          showNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to update your profile.' });
           return;
         }
         throw err;
       }
-      await writeProfileCache(updated);
-      onSaved(updated);
+      const cached = await getCachedSession();
+      const merged = await mergeLocalAvatarIntoUser({ ...(cached?.user || {}), ...(user || {}), ...updated });
+      setEditData(buildEditableUser(merged));
+      await updateCachedUser(merged, token);
+      await writeProfileCache(merged, merged);
+      onSaved(merged);
       onClose();
-      if (!notice) setNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
+      if (!notice) showNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
     } catch (err: any) {
       console.error('EditProfileModal saveChanges', err);
-      setNotice({ type: 'error', title: 'Update Failed', message: err.data?.message || err.message || 'We could not save your changes. Please try again.' });
+      showNotice({ type: 'error', title: 'Update Failed', message: err.data?.message || err.message || 'We could not save your changes. Please try again.' });
     } finally {
       setSaving(false);
     }

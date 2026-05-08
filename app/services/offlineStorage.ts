@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 
 export const SESSION_CACHE_KEY = 'intakesync.cached_session';
 export const HYDRATION_CACHE_KEY = 'hydration';
@@ -37,6 +38,10 @@ export interface CachedSession {
   hydrationGoal?: number | null;
   lastSuccessfulLoginAt: string;
 }
+
+export type LocalAvatarData =
+  | { type: 'built_in'; avatar_key: string }
+  | { type: 'custom'; avatar_uri: string };
 
 export function getSessionUserIdentifier(user?: any | null): string | null {
   const id = user?.id ?? user?.user_id;
@@ -87,9 +92,10 @@ export async function saveCachedSession(sessionOrToken: SessionInput | string, u
     const current = await getCachedSession();
     const token = session.token?.trim();
     if (!token) return;
+    const userWithLocalAvatar = await mergeLocalAvatarIntoUser(session.user ?? current?.user ?? null);
     const next: CachedSession = {
       token,
-      user: session.user ?? current?.user ?? null,
+      user: userWithLocalAvatar,
       hydrationGoal: session.hydrationGoal ?? current?.hydrationGoal ?? null,
       lastSuccessfulLoginAt: new Date().toISOString(),
     };
@@ -112,9 +118,10 @@ export async function updateCachedUser(user: any, token?: string): Promise<void>
     const current = await getCachedSession();
     const sessionToken = token || current?.token;
     if (!sessionToken) return;
+    const mergedUser = await mergeLocalAvatarIntoUser({ ...(current?.user || {}), ...(user || {}) });
     const next: CachedSession = {
       token: sessionToken,
-      user,
+      user: mergedUser,
       hydrationGoal: current?.hydrationGoal ?? null,
       lastSuccessfulLoginAt: current?.lastSuccessfulLoginAt || new Date().toISOString(),
     };
@@ -495,6 +502,103 @@ export function getUserCacheIdentifier(user?: any | null) {
     return normalizeCachePart(owner.owner_email);
   }
   return null;
+}
+
+function normalizeLocalAvatarData(value: any): LocalAvatarData | null {
+  if (!value || typeof value !== 'object') return null;
+  if (value.type === 'built_in' && typeof value.avatar_key === 'string' && value.avatar_key.trim()) {
+    return { type: 'built_in', avatar_key: value.avatar_key.trim() };
+  }
+  if (value.type === 'preset' && typeof value.id === 'string' && value.id.trim()) {
+    return { type: 'built_in', avatar_key: value.id.trim() };
+  }
+  if (value.type === 'custom') {
+    const uri = typeof value.avatar_uri === 'string' ? value.avatar_uri : value.uri;
+    if (typeof uri === 'string' && uri.trim()) return { type: 'custom', avatar_uri: uri.trim() };
+  }
+  return null;
+}
+
+function avatarDataToUserFields(avatar: LocalAvatarData | null) {
+  if (!avatar) return {};
+  if (avatar.type === 'custom') {
+    return {
+      local_avatar_type: 'custom',
+      avatar_uri: avatar.avatar_uri,
+      selected_avatar: { type: 'custom', uri: avatar.avatar_uri },
+    };
+  }
+  return {
+    local_avatar_type: 'built_in',
+    avatar_key: avatar.avatar_key,
+    selected_avatar: { type: 'preset', id: avatar.avatar_key },
+  };
+}
+
+export function getUserAvatarKey(user?: any | null): string | null {
+  const owner = getCacheOwner(user);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  return getUserScopedKey(owner, 'avatar');
+}
+
+export async function getLocalAvatarForUser(user?: any | null): Promise<LocalAvatarData | null> {
+  try {
+    const key = getUserAvatarKey(user);
+    if (!key) return null;
+    const raw = await AsyncStorage.getItem(key);
+    return raw ? normalizeLocalAvatarData(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveLocalAvatarForUser(user: any, avatarData: any): Promise<LocalAvatarData | null> {
+  const key = getUserAvatarKey(user);
+  if (!key) return null;
+  const normalized = normalizeLocalAvatarData(avatarData);
+  if (!normalized) return null;
+
+  let next = normalized;
+  if (normalized.type === 'custom') {
+    const ownerId = getUserCacheIdentifier(user) || 'local';
+    const documentDirectory = FileSystem.documentDirectory;
+    const avatarDir = documentDirectory ? `${documentDirectory}avatars/` : null;
+    if (avatarDir && !normalized.avatar_uri.startsWith(avatarDir)) {
+      await FileSystem.makeDirectoryAsync(avatarDir, { intermediates: true }).catch(() => undefined);
+      const extMatch = /\.(jpe?g|png|webp|heic)(?:\?|$)/i.exec(normalized.avatar_uri);
+      const ext = extMatch?.[1]?.toLowerCase() || 'jpg';
+      const destination = `${avatarDir}user_${ownerId}.${ext}`;
+      await FileSystem.copyAsync({ from: normalized.avatar_uri, to: destination });
+      next = { type: 'custom', avatar_uri: destination };
+    }
+  }
+
+  await AsyncStorage.setItem(key, JSON.stringify(next));
+  await updateCachedUser({ ...(user || {}), ...avatarDataToUserFields(next) });
+  return next;
+}
+
+export async function removeLocalAvatarForUser(user: any): Promise<void> {
+  const avatar = await getLocalAvatarForUser(user);
+  const key = getUserAvatarKey(user);
+  if (key) await AsyncStorage.removeItem(key);
+  if (avatar?.type === 'custom' && FileSystem.documentDirectory && avatar.avatar_uri.startsWith(FileSystem.documentDirectory)) {
+    await FileSystem.deleteAsync(avatar.avatar_uri, { idempotent: true }).catch(() => undefined);
+  }
+  await updateCachedUser({
+    ...(user || {}),
+    local_avatar_type: null,
+    avatar_key: null,
+    avatar_uri: null,
+    selected_avatar: null,
+  });
+}
+
+export async function mergeLocalAvatarIntoUser<T = any>(user: T): Promise<T> {
+  if (!user) return user;
+  const avatar = await getLocalAvatarForUser(user);
+  if (!avatar) return user;
+  return { ...(user as any), ...avatarDataToUserFields(avatar) };
 }
 
 export function getMedicationCacheKey(userIdOrEmail?: string | number | null) {

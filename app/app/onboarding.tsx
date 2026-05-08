@@ -11,6 +11,7 @@ import { getCachedSession, markOnboardingComplete, readSettingsCache, updateCach
 import InlineNotice from './components/common/InlineNotice';
 import { FONT_SCALE } from '../utils/fontScaling';
 import { useFontScaleVersion } from './accessibility/FontScaleProvider';
+import { hapticForNotice, hapticLight } from '../utils/haptics';
 
 const { height } = Dimensions.get('window');
 
@@ -106,6 +107,7 @@ export default function Onboarding() {
   }, []);
 
   const showNotice = (type: NoticeType, title: string, message: unknown) => {
+    hapticForNotice(type);
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setInlineNotice({
       type,
@@ -196,6 +198,7 @@ export default function Onboarding() {
           }
         }
       }
+      hapticLight();
       setCurrentStep(currentStep + 1);
     } else {
       await completeOnboarding();
@@ -207,6 +210,7 @@ export default function Onboarding() {
       updateData('notification_permissions_accepted', false);
     }
     if (currentStep < steps.length - 1) {
+      hapticLight();
       setCurrentStep(currentStep + 1);
     } else {
       completeOnboarding();
@@ -231,12 +235,14 @@ export default function Onboarding() {
         }
       }
       await saveOnboardingNotificationPreference(granted);
+      hapticLight();
       setCurrentStep(currentStep + 1);
     } catch (err) {
       console.log('Notification permission request failed:', err);
       showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. You can continue and turn them on later in Notification Settings.');
       updateData('notification_permissions_accepted', false);
       await saveOnboardingNotificationPreference(false);
+      hapticLight();
       setCurrentStep(currentStep + 1);
     } finally {
       setLoading(false);
@@ -311,6 +317,7 @@ export default function Onboarding() {
         });
       }
     } finally {
+      hapticLight();
       setCurrentStep(currentStep + 1);
     }
   };

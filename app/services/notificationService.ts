@@ -382,6 +382,7 @@ class NotificationService {
       frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
       daysOfWeek?: number[];
       lookaheadDays?: number;
+      scheduleCreatedAt?: string | null;
     }
   ): Promise<void> {
     if (schedulingMedicationIds.has(medicationId)) return;
@@ -844,12 +845,14 @@ function getMedicationDoseOccurrences(
     frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
     daysOfWeek?: number[];
     lookaheadDays?: number;
+    scheduleCreatedAt?: string | null;
   }
 ) {
   const now = new Date();
   const lookaheadDays = Math.max(1, Math.min(options?.lookaheadDays || 14, 30));
   const start = parseLocalDate(options?.startDate);
   const end = parseLocalDate(options?.endDate);
+  const scheduleCreatedAt = options?.scheduleCreatedAt ? new Date(options.scheduleCreatedAt).getTime() : null;
   if (end) end.setHours(23, 59, 59, 999);
   const occurrences: Date[] = [];
   const seenOccurrences = new Set<string>();
@@ -867,6 +870,7 @@ function getMedicationDoseOccurrences(
       if (Number.isNaN(source.getTime())) return;
       const doseTime = new Date(day);
       doseTime.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), 0);
+      if (scheduleCreatedAt && doseTime.getTime() < scheduleCreatedAt) return;
       const parts = dateParts(doseTime);
       const occurrenceKey = `${parts.date}:${parts.time}`;
       if (doseTime.getTime() > now.getTime() && !seenOccurrences.has(occurrenceKey)) {

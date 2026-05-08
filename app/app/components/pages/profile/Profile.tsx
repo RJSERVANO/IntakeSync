@@ -1,16 +1,17 @@
 import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image, Modal } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
 import AvatarSelector, { SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
-import { clearCachedSession, getCacheOwner, getCachedSession, getUserScopedKey, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { clearCachedSession, getCachedSession, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+import { formatBackendBirthDateForInput } from '../../../../utils/profileValidation';
+import { hapticWarning } from '../../../../utils/haptics';
 
 export default function Profile() {
   useFontScaleVersion();
@@ -27,24 +28,27 @@ export default function Profile() {
   const [signingOut, setSigningOut] = React.useState(false);
   const [selectedAvatar, setSelectedAvatar] = React.useState<SelectedAvatar | null>(null);
   const insets = useSafeAreaInsets();
-  const avatarSource = getAvatarSource(selectedAvatar);
+  const displayUser = visibleUser || user || { name: 'User', email: '', nickname: 'User' };
+  const googleAvatarUri = displayUser?.picture || displayUser?.photo || displayUser?.photo_url || displayUser?.avatar_url;
+  const avatarSource = getAvatarSource(selectedAvatar) || (googleAvatarUri ? { uri: googleAvatarUri } : null);
 
-  React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const session = await getCachedSession();
-      const cacheOwner = getCacheOwner(visibleUser ?? session?.user ?? null);
-      const key = cacheOwner.owner_id || cacheOwner.owner_email ? getUserScopedKey(cacheOwner, 'avatar') : null;
-      return key ? AsyncStorage.getItem(key) : null;
-    })()
-      .then((raw) => {
-        if (mounted && raw) setSelectedAvatar(JSON.parse(raw));
-      })
-      .catch((err) => console.log('Profile avatar load error:', err));
-    return () => {
-      mounted = false;
-    };
-  }, [visibleUser]);
+  const applyVisibleUser = React.useCallback(async (nextUser: any) => {
+    const withAvatar = await mergeLocalAvatarIntoUser(nextUser);
+    setVisibleUser(withAvatar);
+    setSelectedAvatar(withAvatar?.selected_avatar || null);
+    return withAvatar;
+  }, []);
+
+  const handleAvatarChange = React.useCallback((next: SelectedAvatar | null) => {
+    setSelectedAvatar(next);
+    setVisibleUser((current: any) => ({
+      ...(current || {}),
+      selected_avatar: next,
+      local_avatar_type: next?.type === 'custom' ? 'custom' : next?.type === 'preset' ? 'built_in' : null,
+      avatar_uri: next?.type === 'custom' ? next.uri : null,
+      avatar_key: next?.type === 'preset' ? next.id : null,
+    }));
+  }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -59,7 +63,7 @@ export default function Profile() {
       if (!mounted) return;
       if (session?.token) {
         setCachedToken(session.token);
-        setVisibleUser(session.user ?? null);
+        applyVisibleUser(session.user ?? null).catch(() => setVisibleUser(session.user ?? null));
         setOfflineMode(true);
       } else {
         router.replace('/login');
@@ -69,7 +73,7 @@ export default function Profile() {
     return () => {
       mounted = false;
     };
-  }, [routeToken, router]);
+  }, [applyVisibleUser, routeToken, router]);
 
   const profileOptions = [
     {
@@ -113,22 +117,42 @@ export default function Profile() {
       subtitle: 'Log out of your account',
       icon: 'log-out-outline',
       destructive: true,
-      action: () => setSignOutVisible(true),
+      action: () => {
+        hapticWarning();
+        setSignOutVisible(true);
+      },
     },
   ];
+
+  const refreshFromCache = React.useCallback(async (showSync = false) => {
+    const session = await getCachedSession();
+    const sessionUser = await mergeLocalAvatarIntoUser(session?.user ?? null);
+    const cachedProfile = await readProfileCache<any>(sessionUser);
+    const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
+    setCachedToken(session?.token);
+    setVisibleUser(cachedVisible);
+    setSelectedAvatar(cachedVisible?.selected_avatar || null);
+    if (showSync) setSyncing(Boolean(token));
+  }, [token]);
 
   React.useEffect(() => {
     let mounted = true;
     (async () => {
       const session = await getCachedSession();
-      const sessionUser = session?.user ?? null;
+      const sessionUser = await mergeLocalAvatarIntoUser(session?.user ?? null);
       const cachedProfile = await readProfileCache<any>(sessionUser);
       if (!mounted) return;
-      setVisibleUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
+      const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
+      if (!mounted) return;
+      setVisibleUser(cachedVisible);
+      setSelectedAvatar(cachedVisible?.selected_avatar || null);
       setSyncing(Boolean(token));
       if (user) {
-        setVisibleUser(user);
-        await writeProfileCache(user, user);
+        const freshUser = await mergeLocalAvatarIntoUser(user);
+        if (!mounted) return;
+        setVisibleUser(freshUser);
+        setSelectedAvatar(freshUser?.selected_avatar || null);
+        await writeProfileCache(freshUser, freshUser);
       }
       setSyncing(false);
     })().catch(() => {
@@ -139,6 +163,28 @@ export default function Profile() {
       setSyncing(false);
     };
   }, [token, user]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+      refreshFromCache(true)
+        .then(async () => {
+          if (!active || !token || !user) return;
+          const freshUser = await mergeLocalAvatarIntoUser(user);
+          if (!active) return;
+          setVisibleUser(freshUser);
+          setSelectedAvatar(freshUser?.selected_avatar || null);
+          await writeProfileCache(freshUser, freshUser);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (active) setSyncing(false);
+        });
+      return () => {
+        active = false;
+      };
+    }, [refreshFromCache, token, user])
+  );
 
   const getInitials = (name: string = '') => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
@@ -158,7 +204,11 @@ export default function Profile() {
     }
   };
 
-  const displayUser = visibleUser || user || { name: 'User', email: '', nickname: 'User' };
+  const displayBirthDate = displayUser.date_of_birth
+    ? formatBackendBirthDateForInput(String(displayUser.date_of_birth))
+    : displayUser.dateOfBirth
+      ? formatBackendBirthDateForInput(String(displayUser.dateOfBirth))
+      : 'Not set';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -225,7 +275,7 @@ export default function Profile() {
               <Ionicons name="calendar-outline" size={18} color="#2563EB" />
             </View>
             <Text style={styles.infoLabel}>Date of Birth</Text>
-            <Text style={styles.infoValue}>{displayUser.dateOfBirth || 'Not set'}</Text>
+            <Text style={styles.infoValue}>{displayBirthDate}</Text>
           </View>
         </View>
 
@@ -276,7 +326,7 @@ export default function Profile() {
                 <Text style={styles.sheetSubtitle}>Choose an avatar or upload your own image.</Text>
               </View>
             </View>
-            <AvatarSelector owner={displayUser} onChange={setSelectedAvatar} />
+            <AvatarSelector owner={displayUser} onChange={handleAvatarChange} />
             <TouchableOpacity style={styles.sheetDoneButton} onPress={() => setAvatarModalVisible(false)}>
               <Text style={styles.sheetDoneText}>Done</Text>
             </TouchableOpacity>

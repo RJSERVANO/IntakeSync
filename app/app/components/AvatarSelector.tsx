@@ -2,8 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Image, TouchableOpacity, FlatList, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getCacheOwner, getCachedSession, getUserScopedKey } from '../../services/offlineStorage';
+import {
+  getCachedSession,
+  getLocalAvatarForUser,
+  removeLocalAvatarForUser,
+  saveLocalAvatarForUser,
+} from '../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from './common/ThemedNoticeModal';
 
 export const PRESET_AVATARS = [
@@ -21,6 +25,17 @@ export type SelectedAvatar =
   | { type: 'preset'; id: string }
   | { type: 'custom'; uri: string };
 
+function toSelectedAvatar(value: any): SelectedAvatar | null {
+  if (!value) return null;
+  if (value.type === 'preset' && value.id) return value;
+  if (value.type === 'built_in' && value.avatar_key) return { type: 'preset', id: value.avatar_key };
+  if (value.type === 'custom') {
+    const uri = value.uri || value.avatar_uri;
+    if (uri) return { type: 'custom', uri };
+  }
+  return null;
+}
+
 export function getAvatarSource(selected: SelectedAvatar | null) {
   if (selected?.type === 'custom' && selected.uri) {
     return { uri: selected.uri };
@@ -35,16 +50,9 @@ export function getAvatarSource(selected: SelectedAvatar | null) {
 }
 
 type AvatarSelectorProps = {
-  onChange?: (selected: SelectedAvatar) => void;
+  onChange?: (selected: SelectedAvatar | null) => void;
   owner?: any | null;
 };
-
-async function getAvatarStorageKey(owner?: any | null) {
-  const session = owner ? null : await getCachedSession();
-  const cacheOwner = getCacheOwner(owner ?? session?.user ?? null);
-  if (!cacheOwner.owner_id && !cacheOwner.owner_email) return null;
-  return getUserScopedKey(cacheOwner, 'avatar');
-}
 
 export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps) {
   const [selected, setSelected] = useState<SelectedAvatar | null>(null);
@@ -58,14 +66,14 @@ export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps)
   useEffect(() => {
     (async () => {
       try {
-        const key = await getAvatarStorageKey(owner);
-        const raw = key ? await AsyncStorage.getItem(key) : null;
-        if (raw) {
-          const parsed = JSON.parse(raw) as SelectedAvatar;
+        const session = owner ? null : await getCachedSession();
+        const loadedOwner = owner ?? session?.user ?? null;
+        const parsed = toSelectedAvatar(await getLocalAvatarForUser(loadedOwner));
+        if (parsed) {
           setSelected(parsed);
           onChange?.(parsed);
         } else {
-          setSelected({ type: 'preset', id: PRESET_AVATARS[0].id });
+          setSelected(null);
         }
       } catch (err) {
         console.warn('AvatarSelector: failed to load saved avatar', err);
@@ -76,11 +84,12 @@ export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps)
   }, [onChange, owner]);
 
   const persistSelection = async (next: SelectedAvatar) => {
-    setSelected(next);
-    onChange?.(next);
     try {
-      const key = await getAvatarStorageKey(owner);
-      if (key) await AsyncStorage.setItem(key, JSON.stringify(next));
+      const session = owner ? null : await getCachedSession();
+      const saved = await saveLocalAvatarForUser(owner ?? session?.user ?? null, next);
+      const selectedNext = toSelectedAvatar(saved) || next;
+      setSelected(selectedNext);
+      onChange?.(selectedNext);
     } catch (err) {
       console.warn('AvatarSelector: failed to save avatar', err);
     }
@@ -114,7 +123,7 @@ export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps)
       const uri = result.assets?.[0]?.uri;
       if (!uri) return;
 
-      persistSelection({ type: 'custom', uri });
+      await persistSelection({ type: 'custom', uri });
     } catch (err) {
       console.warn('AvatarSelector: upload error', err);
       setNoticeModal({
@@ -122,6 +131,17 @@ export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps)
         title: 'Upload Failed',
         message: 'Could not select an image. Please try again.',
       });
+    }
+  };
+
+  const handleRemoveAvatar = async () => {
+    try {
+      const session = owner ? null : await getCachedSession();
+      await removeLocalAvatarForUser(owner ?? session?.user ?? null);
+      setSelected(null);
+      onChange?.(null);
+    } catch (err) {
+      console.warn('AvatarSelector: failed to remove avatar', err);
     }
   };
 
@@ -159,6 +179,10 @@ export default function AvatarSelector({ onChange, owner }: AvatarSelectorProps)
           </TouchableOpacity>
         )}
       />
+      <TouchableOpacity onPress={handleRemoveAvatar} style={styles.removeButton} activeOpacity={0.8}>
+        <Ionicons name="close-circle-outline" size={16} color="#DC2626" />
+        <Text style={styles.removeButtonText}>Remove avatar</Text>
+      </TouchableOpacity>
       <ThemedNoticeModal
         visible={Boolean(noticeModal)}
         type={noticeModal?.type || 'info'}
@@ -211,5 +235,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF6FF',
     borderWidth: 2,
     borderColor: '#BFDBFE',
+  },
+  removeButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  removeButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#DC2626',
   },
 });

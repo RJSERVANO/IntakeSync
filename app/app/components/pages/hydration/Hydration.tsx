@@ -21,6 +21,7 @@ import {
 import { usePulseAnimation } from '../../../../hooks/useHydrationAnimations';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+import { hapticForNotice, hapticSuccess, hapticWarning } from '../../../../utils/haptics';
 
 interface UserDetails {
   weight?: number;
@@ -273,7 +274,7 @@ export default function Hydration() {
 
   const closeNotice = () => setNoticeModal(null);
   const showNotice = (type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') => {
-    void type;
+    hapticForNotice(type);
     void primaryText;
     showInlineNotice(`${title}: ${message}`);
   };
@@ -435,6 +436,7 @@ export default function Hydration() {
     goalReachedShownRef.current = true;
     setGoalReachedToday(true);
     await AsyncStorage.setItem(shownKey, '1');
+    hapticSuccess();
     showInlineNotice('Hydration goal reached');
   }
 
@@ -831,6 +833,7 @@ export default function Hydration() {
       try { 
         await api.post('/hydration/goal', { goal_ml: newGoal }, token as string);
         setOfflineMode(false);
+        hapticSuccess();
         setGoalUpdateResult({ goal: newGoal, synced: true });
       } catch (e) { 
         console.log('Goal update error:', e);
@@ -845,6 +848,7 @@ export default function Hydration() {
       }
     } else {
       showInlineNotice('Goal saved locally.');
+      hapticSuccess();
       setGoalUpdateResult({ goal: newGoal, synced: false });
     }
   }
@@ -937,11 +941,13 @@ export default function Hydration() {
     if (syncWarning) {
       showNotice('warning', 'Sync Pending', syncWarning);
     } else {
+      hapticSuccess();
       closeNotice();
     }
   }
 
   async function deleteEntryByEntry(targetEntry: any) {
+    hapticWarning();
     setNoticeModal({
       type: 'destructive',
       title: 'Delete Entry',
