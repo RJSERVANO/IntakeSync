@@ -1,107 +1,44 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch, Image } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Image } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
-import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
-import { processSyncQueue } from '../../../../services/syncQueue';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import ScreenHeader from '../../common/ScreenHeader';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
-
-type SettingPrefs = {
-  useMetricUnits: boolean;
-  timeFormat24h: boolean;
-  smartHydrationGoals: boolean;
-  flexibleSchedule: boolean;
-};
-
-const DEFAULT_PREFS: SettingPrefs = {
-  useMetricUnits: true,
-  timeFormat24h: false,
-  smartHydrationGoals: true,
-  flexibleSchedule: true,
-};
+import { getCachedSession } from '../../../../services/offlineStorage';
+import { getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
 
 export default function Settings() {
   useFontScaleVersion();
-  const router = useRouter();
-  const { token: routeToken } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const [prefs, setPrefs] = useState<SettingPrefs>(DEFAULT_PREFS);
-  const [cachedToken, setCachedToken] = useState<string | undefined>();
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [token, setToken] = useState<string | undefined>();
+  const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(false);
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
-  const token = (routeToken as string | undefined) || cachedToken;
+
+  const refreshPendingCount = useCallback(async () => {
+    const pending = await getPendingSyncActions();
+    setPendingCount(pending.length);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       const session = await getCachedSession();
-      const sessionUser = session?.user ?? null;
-      const cached = sessionUser ? await readSettingsCache<SettingPrefs>(sessionUser) : null;
+      const pending = await getPendingSyncActions();
       if (!mounted) return;
-      setCurrentUser(sessionUser);
-      setPrefs({ ...DEFAULT_PREFS, ...(cached || {}) });
-      setSyncing(Boolean(token));
-      try {
-        if (token) await processSyncQueue(token as string);
-      } finally {
-        if (mounted) setSyncing(false);
-      }
-    })().catch((err) => {
-      console.log('Settings preference load error:', err);
-      if (mounted) setSyncing(false);
+      setToken(session?.token);
+      setPendingCount(pending.length);
+    })().catch((error) => {
+      console.log('Settings sync status load error:', error);
     });
     return () => {
       mounted = false;
-      setSyncing(false);
     };
-  }, [token]);
-
-  useEffect(() => {
-    let mounted = true;
-    if (routeToken) {
-      setOfflineMode(false);
-      return () => {
-        mounted = false;
-      };
-    }
-
-    getCachedSession().then((session) => {
-      if (!mounted) return;
-      if (session?.token) {
-        setCachedToken(session.token);
-        setCurrentUser(session.user ?? null);
-        setOfflineMode(true);
-        processSyncQueue(session.token).catch(() => {});
-      } else {
-        router.replace('/login');
-      }
-    });
-
-    return () => {
-      mounted = false;
-    };
-  }, [routeToken, router]);
-
-  const updatePref = async (key: keyof SettingPrefs, value: boolean) => {
-    const previous = prefs;
-    const next = { ...prefs, [key]: value };
-    setPrefs(next);
-    try {
-      await writeSettingsCache(next, currentUser);
-    } catch (error) {
-      console.log('Settings preference save error:', error);
-      setPrefs(previous);
-      setNotice({ type: 'error', title: 'Could Not Save', message: 'This setting was not saved. Please try again.' });
-    }
-  };
+  }, []);
 
   const showAbout = () => {
     setNotice({
@@ -111,19 +48,59 @@ export default function Settings() {
     });
   };
 
+  const handleSyncNow = async () => {
+    setSyncing(true);
+    try {
+      const session = await getCachedSession();
+      const activeToken = session?.token || token;
+      setToken(activeToken);
+      if (!activeToken) {
+        await refreshPendingCount();
+        setNotice({
+          type: 'warning',
+          title: 'Login Required',
+          message: 'Please log in again to sync pending changes.',
+        });
+        return;
+      }
+      const result = await processSyncQueue(activeToken);
+      await refreshPendingCount();
+      if (result.failed > 0) {
+        setNotice({
+          type: 'warning',
+          title: 'Sync Pending',
+          message: 'Sync will continue when connection is available.',
+        });
+        return;
+      }
+      setNotice({
+        type: 'success',
+        title: 'Sync Complete',
+        message: result.synced > 0 ? `Synced ${result.synced} pending change${result.synced === 1 ? '' : 's'}.` : 'Sync complete.',
+      });
+    } catch (error) {
+      console.log('Manual sync error:', error);
+      await refreshPendingCount().catch(() => undefined);
+      setNotice({
+        type: 'warning',
+        title: 'Sync Pending',
+        message: 'Sync will continue when connection is available.',
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const pendingSubtitle = pendingCount === 0
+    ? 'No pending offline changes.'
+    : `${pendingCount} change${pendingCount === 1 ? '' : 's'} waiting to sync.`;
+
   return (
     <SafeAreaView style={styles.container}>
       <InlineSyncNotice visible={syncing && !notice} message="Syncing..." top={Math.max(insets.top, 8) + 54} />
-      <ScreenHeader title="Settings" subtitle="Customize app behavior, units, and display preferences." showBackButton />
+      <ScreenHeader title="Settings" subtitle="Customize app preferences." showBackButton />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {offlineMode ? (
-          <View style={styles.offlineBanner}>
-            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
-          </View>
-        ) : null}
-
         <View style={styles.identityCard}>
           <View style={styles.logoFrame}>
             <Image source={require('../../../../assets/images/mainlogo.png')} style={styles.appLogo} resizeMode="contain" />
@@ -134,119 +111,35 @@ export default function Settings() {
           </View>
         </View>
 
-        <SettingGroup title="App Behavior">
-          <InfoRow
+        <SettingGroup title="Sync & Offline">
+          <ActionRow
             icon="sync-outline"
-            title="Account Sync"
-            subtitle="Profile and tracked data use the app's existing save behavior when available."
+            title="Sync Now"
+            subtitle="Process pending offline changes when connected."
+            onPress={handleSyncNow}
+            disabled={syncing}
           />
           <View style={styles.separator} />
-          <DisabledRow
-            icon="cloud-offline-outline"
-            title="Offline Mode"
-            subtitle={token ? 'Available with cached session data.' : 'Internet is required for first-time login.'}
-          />
-        </SettingGroup>
-
-        <SettingGroup title="Units & Format">
-          <SwitchRow
-            icon="speedometer-outline"
-            title="Metric Units"
-            subtitle="Save local preference for mL and kg display."
-            value={prefs.useMetricUnits}
-            onValueChange={(value) => updatePref('useMetricUnits', value)}
-          />
-          <View style={styles.separator} />
-          <SwitchRow
+          <InfoRow
             icon="time-outline"
-            title="24-Hour Time Format"
-            subtitle="Save local time display preference."
-            value={prefs.timeFormat24h}
-            onValueChange={(value) => updatePref('timeFormat24h', value)}
+            title="Pending Changes"
+            subtitle={pendingSubtitle}
+            trailing={pendingCount > 0 ? String(pendingCount) : undefined}
+          />
+          <View style={styles.separator} />
+          <InfoRow
+            icon="cloud-done-outline"
+            title="Offline Cache"
+            subtitle="Profile, hydration, medication, and reminder data can load from this device when available."
           />
         </SettingGroup>
 
-        <SettingGroup title="Hydration">
-          <SwitchRow
-            icon="water-outline"
-            title="Smart Hydration Goals"
-            subtitle="Use the existing profile-based hydration goal estimate."
-            value={prefs.smartHydrationGoals}
-            onValueChange={(value) => updatePref('smartHydrationGoals', value)}
+        <SettingGroup title="Accessibility">
+          <InfoRow
+            icon="text-outline"
+            title="Device Text Scaling"
+            subtitle="IntakeSync follows supported device text size settings."
           />
-          <View style={styles.separator} />
-          <DisabledRow
-            icon="sunny-outline"
-            title="Weather-Based Reminders"
-            subtitle="Not available yet."
-          />
-        </SettingGroup>
-
-        <SettingGroup title="Medication">
-          <SwitchRow
-            icon="medical-outline"
-            title="Flexible Schedule"
-            subtitle="Save local preference for schedule display behavior."
-            value={prefs.flexibleSchedule}
-            onValueChange={(value) => updatePref('flexibleSchedule', value)}
-          />
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)}>
-            <View style={styles.settingIcon}>
-              <Ionicons name="calendar-outline" size={21} color="#2563EB" />
-            </View>
-            <View style={styles.settingContent}>
-              <Text style={styles.settingTitle}>Medication Schedule</Text>
-              <Text style={styles.settingSubtitle}>Review related profile preferences.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
-          </TouchableOpacity>
-        </SettingGroup>
-
-        <SettingGroup title="Account & Support">
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)}>
-            <View style={styles.settingIcon}>
-              <Ionicons name="person-outline" size={21} color="#2563EB" />
-            </View>
-            <View style={styles.settingContent}>
-              <Text style={styles.settingTitle}>Profile Details</Text>
-              <Text style={styles.settingSubtitle}>View cached profile information and edit online.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
-          </TouchableOpacity>
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/NotificationSettings', params: { token } } as any)}>
-            <View style={styles.settingIcon}>
-              <Ionicons name="notifications-outline" size={21} color="#2563EB" />
-            </View>
-            <View style={styles.settingContent}>
-              <Text style={styles.settingTitle}>Notification Settings</Text>
-              <Text style={styles.settingSubtitle}>Local reminder preferences work offline.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
-          </TouchableOpacity>
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/PrivacySecurity', params: { token } } as any)}>
-            <View style={styles.settingIcon}>
-              <Ionicons name="shield-checkmark-outline" size={21} color="#2563EB" />
-            </View>
-            <View style={styles.settingContent}>
-              <Text style={styles.settingTitle}>Privacy & Security</Text>
-              <Text style={styles.settingSubtitle}>Password changes require an internet connection.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
-          </TouchableOpacity>
-          <View style={styles.separator} />
-          <TouchableOpacity style={styles.settingItem} onPress={() => router.push({ pathname: '/components/pages/profile/HelpSupport', params: { token } } as any)}>
-            <View style={styles.settingIcon}>
-              <Ionicons name="help-circle-outline" size={21} color="#2563EB" />
-            </View>
-            <View style={styles.settingContent}>
-              <Text style={styles.settingTitle}>Help & Support</Text>
-              <Text style={styles.settingSubtitle}>Local help, privacy, and app guidance.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
-          </TouchableOpacity>
         </SettingGroup>
 
         <SettingGroup title="About">
@@ -261,10 +154,16 @@ export default function Settings() {
             <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
           </TouchableOpacity>
           <View style={styles.separator} />
-          <DisabledRow
-            icon="refresh-outline"
-            title="Check for Updates"
-            subtitle="Handled by your installed app package."
+          <InfoRow
+            icon="phone-portrait-outline"
+            title="Platform"
+            subtitle="Android"
+          />
+          <View style={styles.separator} />
+          <InfoRow
+            icon="construct-outline"
+            title="Build Type"
+            subtitle="Capstone prototype"
           />
         </SettingGroup>
       </ScrollView>
@@ -279,7 +178,7 @@ export default function Settings() {
         onClose={() => setNotice(null)}
       />
 
-      <BottomNavigation currentRoute="settings" />
+      <BottomNavigation currentRoute="profile" />
     </SafeAreaView>
   );
 }
@@ -293,18 +192,43 @@ function SettingGroup({ title, children }: { title: string; children: React.Reac
   );
 }
 
-function SwitchRow({
+function ActionRow({
   icon,
   title,
   subtitle,
-  value,
-  onValueChange,
+  onPress,
+  disabled,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   subtitle: string;
-  value: boolean;
-  onValueChange: (value: boolean) => void;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity style={[styles.settingItem, disabled && styles.disabledItem]} onPress={onPress} disabled={disabled} activeOpacity={0.75}>
+      <View style={styles.settingIcon}>
+        <Ionicons name={icon} size={21} color="#2563EB" />
+      </View>
+      <View style={styles.settingContent}>
+        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+    </TouchableOpacity>
+  );
+}
+
+function InfoRow({
+  icon,
+  title,
+  subtitle,
+  trailing,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  trailing?: string;
 }) {
   return (
     <View style={styles.settingItem}>
@@ -315,41 +239,7 @@ function SwitchRow({
         <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
         <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
       </View>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
-        thumbColor={value ? '#2563EB' : '#FFFFFF'}
-      />
-    </View>
-  );
-}
-
-function InfoRow({ icon, title, subtitle }: { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle: string }) {
-  return (
-    <View style={styles.settingItem}>
-      <View style={styles.settingIcon}>
-        <Ionicons name={icon} size={21} color="#2563EB" />
-      </View>
-      <View style={styles.settingContent}>
-        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
-        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
-      </View>
-    </View>
-  );
-}
-
-function DisabledRow({ icon, title, subtitle }: { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle: string }) {
-  return (
-    <View style={[styles.settingItem, styles.disabledItem]}>
-      <View style={[styles.settingIcon, styles.disabledIcon]}>
-        <Ionicons name={icon} size={21} color="#94A3B8" />
-      </View>
-      <View style={styles.settingContent}>
-        <Text style={styles.disabledTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
-        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
-      </View>
-      <Text style={styles.badge} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1}>Unavailable</Text>
+      {trailing ? <Text style={styles.badge} maxFontSizeMultiplier={FONT_SCALE.chip}>{trailing}</Text> : null}
     </View>
   );
 }
@@ -366,24 +256,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 128,
-  },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    borderRadius: 14,
-    padding: 10,
-    marginBottom: 12,
-  },
-  offlineBannerText: {
-    flex: 1,
-    color: '#1E3A8A',
-    fontSize: 12,
-    fontWeight: '800',
   },
   identityCard: {
     backgroundColor: '#FFFFFF',
@@ -458,7 +330,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   disabledItem: {
-    opacity: 0.86,
+    opacity: 0.66,
   },
   settingIcon: {
     width: 42,
@@ -467,9 +339,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFF6FF',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  disabledIcon: {
-    backgroundColor: '#F1F5F9',
   },
   settingContent: {
     flex: 1,
@@ -482,16 +351,11 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     marginBottom: 3,
   },
-  disabledTitle: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: '#94A3B8',
-    marginBottom: 3,
-  },
   settingSubtitle: {
     fontSize: 13,
     color: '#64748B',
     fontWeight: '600',
+    lineHeight: 18,
   },
   separator: {
     height: 1,
@@ -499,13 +363,13 @@ const styles = StyleSheet.create({
     marginLeft: 70,
   },
   badge: {
-    color: '#64748B',
-    backgroundColor: '#F1F5F9',
+    color: '#2563EB',
+    backgroundColor: '#EFF6FF',
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 5,
     fontSize: 11,
-    fontWeight: '800',
-    flexShrink: 0,
+    fontWeight: '900',
+    overflow: 'hidden',
   },
 });

@@ -125,13 +125,6 @@ export default function PrivacySecurity() {
           title="Privacy practices"
           text="Review Help & Support for privacy and terms information."
         />
-
-        <Text style={styles.sectionTitle}>App Permissions</Text>
-        <View style={styles.card}>
-          <InfoRow icon="notifications-outline" title="Notifications" text="Used for reminder alerts when enabled." />
-          <View style={styles.divider} />
-          <InfoRow icon="image-outline" title="Media Library" text="Used only when you upload a custom profile image." />
-        </View>
       </ScrollView>
 
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={closeModal}>
@@ -188,20 +181,6 @@ function InfoCard({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap;
       <View style={styles.infoContent}>
         <Text style={styles.infoTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
         <Text style={styles.infoText} maxFontSizeMultiplier={FONT_SCALE.description}>{text}</Text>
-      </View>
-    </View>
-  );
-}
-
-function InfoRow({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap; title: string; text: string }) {
-  return (
-    <View style={styles.settingItem}>
-      <View style={styles.settingIcon}>
-        <Ionicons name={icon} size={20} color="#2563EB" />
-      </View>
-      <View style={styles.settingContent}>
-        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
-        <Text style={styles.settingDescription} maxFontSizeMultiplier={FONT_SCALE.description}>{text}</Text>
       </View>
     </View>
   );

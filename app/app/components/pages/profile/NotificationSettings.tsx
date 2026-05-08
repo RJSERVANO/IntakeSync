@@ -17,7 +17,7 @@ import ScreenHeader from '../../common/ScreenHeader';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
-type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
+type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound';
 
 type NotificationPrefs = Record<SettingKey, boolean>;
 
@@ -26,7 +26,6 @@ const DEFAULT_PREFS: NotificationPrefs = {
   medicationReminders: true,
   hydrationReminders: true,
   sound: true,
-  vibration: true,
 };
 
 export default function NotificationSettings() {
@@ -106,6 +105,7 @@ export default function NotificationSettings() {
   };
 
   const openAppSettings = () => {
+    setNoticeModal(null);
     Linking.openSettings().catch(() => {
       setNoticeModal({
         type: 'warning',
@@ -166,7 +166,6 @@ export default function NotificationSettings() {
       await notificationSettings.initialize();
       if (key === 'allowNotifications') await notificationSettings.setMasterToggle(next.allowNotifications);
       if (key === 'sound') await notificationSettings.setSoundEnabled(next.sound);
-      if (key === 'vibration') await notificationSettings.setVibrationEnabled(next.vibration);
       if (key === 'hydrationReminders') await notificationSettings.updateCategoryWithBackend('hydration', next.hydrationReminders);
       if (key === 'medicationReminders') await notificationSettings.updateCategoryWithBackend('medications', next.medicationReminders);
       if (key === 'hydrationReminders' && !value) await cancelHydrationNotifications();
@@ -224,21 +223,19 @@ export default function NotificationSettings() {
           <SettingRow
             icon="volume-high-outline"
             title="Sound"
-            description="Use the default notification sound when supported."
+            description="Use reminder sounds when supported."
             value={prefs.allowNotifications && prefs.sound}
             disabled={reminderDisabled}
             onValueChange={(value) => updateSetting('sound', value)}
           />
-          <View style={styles.divider} />
-          <SettingRow
-            icon="phone-portrait-outline"
-            title="Vibration"
-            description="Use vibration when supported by the device."
-            value={prefs.allowNotifications && prefs.vibration}
-            disabled={reminderDisabled}
-            onValueChange={(value) => updateSetting('vibration', value)}
-          />
         </View>
+
+        <TouchableOpacity style={styles.settingsLink} onPress={openAppSettings} activeOpacity={0.82}>
+          <Ionicons name="open-outline" size={18} color="#2563EB" />
+          <Text style={styles.settingsLinkText} maxFontSizeMultiplier={FONT_SCALE.button}>
+            Open App Notification Settings
+          </Text>
+        </TouchableOpacity>
 
         <View style={styles.infoBanner}>
           <Ionicons name="information-circle-outline" size={20} color="#2563EB" />
@@ -247,10 +244,9 @@ export default function NotificationSettings() {
           </Text>
         </View>
         {permissionBlocked ? (
-          <TouchableOpacity style={styles.settingsLink} onPress={openAppSettings} activeOpacity={0.82}>
-            <Ionicons name="open-outline" size={18} color="#2563EB" />
-            <Text style={styles.settingsLinkText} maxFontSizeMultiplier={FONT_SCALE.button}>Open App Settings</Text>
-          </TouchableOpacity>
+          <Text style={styles.blockedText} maxFontSizeMultiplier={FONT_SCALE.description}>
+            Notifications are currently off at the device level. Open app settings to enable them.
+          </Text>
         ) : null}
       </ScrollView>
 
@@ -409,7 +405,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   settingsLink: {
-    marginTop: 12,
+    marginTop: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -425,6 +421,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
     textAlign: 'center',
+  },
+  blockedText: {
+    color: '#B45309',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+    marginTop: 10,
   },
   recordActionRow: {
     flexDirection: 'row',

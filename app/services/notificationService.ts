@@ -22,7 +22,6 @@ export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
 const HYDRATION_SOUND = 'hydration_reminder.wav';
 const MEDICATION_SOUND = 'medication_reminder.wav';
-const PERMISSION_ASKED_KEY = '@intakesync:notification_permission_asked';
 const MEDICATION_REMINDER_OFFSETS = [15, 5, 0];
 const MIN_SCHEDULE_BUFFER_MS = 10 * 1000;
 export const HYDRATION_REMINDER_INTERVAL_MINUTES = 60;
@@ -259,13 +258,11 @@ class NotificationService {
         console.log('Expo Go detected - requesting local notification permissions only');
       }
 
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      const { status: existingStatus, canAskAgain } = await Notifications.getPermissionsAsync();
       let finalStatus = existingStatus;
 
       if (existingStatus !== 'granted') {
-        const asked = await AsyncStorage.getItem(PERMISSION_ASKED_KEY);
-        if (asked === '1') return false;
-        await AsyncStorage.setItem(PERMISSION_ASKED_KEY, '1');
+        if (canAskAgain === false) return false;
         const { status } = await Notifications.requestPermissionsAsync();
         finalStatus = status;
       }
