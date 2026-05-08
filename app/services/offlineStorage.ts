@@ -261,9 +261,31 @@ function getOtcCacheId(item: any) {
   return String(item?.id ?? item?.name ?? JSON.stringify(item));
 }
 
+function isUserMedicationRecord(item: any) {
+  return (
+    Array.isArray(item?.times) ||
+    item?.reminder !== undefined ||
+    item?.start_date !== undefined ||
+    item?.end_date !== undefined ||
+    item?.sync_status !== undefined ||
+    item?.local_id !== undefined ||
+    item?.server_id !== undefined ||
+    item?.client_uuid !== undefined ||
+    item?.otc_metadata !== undefined
+  );
+}
+
+function isOtcReferenceRecord(item: any) {
+  return !!item?.name && !isUserMedicationRecord(item);
+}
+
+export function filterOtcReferenceMedicines(items: any[]) {
+  return (Array.isArray(items) ? items : []).filter(isOtcReferenceRecord);
+}
+
 function dedupeOtcResults(items: any[]) {
   const byId = new Map<string, any>();
-  items.filter(Boolean).forEach((item) => byId.set(getOtcCacheId(item), item));
+  filterOtcReferenceMedicines(items).forEach((item) => byId.set(getOtcCacheId(item), item));
   return Array.from(byId.values());
 }
 
@@ -278,11 +300,21 @@ export async function readOtcSearchCache(): Promise<OtcSearchCachePayload | null
   if (!payload || typeof payload !== 'object') return null;
 
   if (Array.isArray(payload.data)) {
+    const queries: Record<string, OtcCacheEntry> = {};
+    if (payload.queries && typeof payload.queries === 'object') {
+      Object.entries(payload.queries).forEach(([query, entry]: [string, any]) => {
+        queries[query] = {
+          saved_at: entry?.saved_at || payload.saved_at || new Date(0).toISOString(),
+          source: entry?.source === 'bundled' ? 'bundled' : 'backend',
+          data: dedupeOtcResults(Array.isArray(entry?.data) ? entry.data : []),
+        };
+      });
+    }
     return {
       saved_at: payload.saved_at || new Date(0).toISOString(),
       source: 'backend',
-      data: payload.data,
-      queries: payload.queries && typeof payload.queries === 'object' ? payload.queries : {},
+      data: dedupeOtcResults(payload.data),
+      queries,
     };
   }
 
@@ -292,7 +324,7 @@ export async function readOtcSearchCache(): Promise<OtcSearchCachePayload | null
       queries[query] = {
         saved_at: payload.saved_at || new Date(0).toISOString(),
         source: 'backend',
-        data: Array.isArray(results) ? results : [],
+        data: dedupeOtcResults(Array.isArray(results) ? results : []),
       };
     });
     return {
@@ -311,7 +343,7 @@ export async function writeOtcSearchCache(query: string, results: any[]): Promis
   if (!normalizedQuery) return;
   const current = await readOtcSearchCache();
   const now = new Date().toISOString();
-  const safeResults = Array.isArray(results) ? results : [];
+  const safeResults = dedupeOtcResults(Array.isArray(results) ? results : []);
   const queries = {
     ...(current?.queries || {}),
     [normalizedQuery]: {
@@ -347,9 +379,10 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
   }
 
   const exact = cache.queries?.[normalizedQuery];
-  if (exact && exact.data.length > 0) {
+  const exactResults = dedupeOtcResults(exact?.data || []);
+  if (exact && exactResults.length > 0) {
     return {
-      results: dedupeOtcResults([...exact.data, ...bundledResults]),
+      results: dedupeOtcResults([...exactResults, ...bundledResults]),
       isStale: isOtcCacheStale(exact.saved_at),
       savedAt: exact.saved_at,
       hasCache: true,

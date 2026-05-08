@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import {
   clearCachedSession,
+  filterOtcReferenceMedicines,
   getCacheOwner,
   getCachedSession,
   getUserScopedKey,
@@ -16,10 +17,11 @@ import {
   readOwnedOfflineCache,
   searchCachedOtcMedicinesWithMeta,
   updateCachedUser,
+  writeHydrationCache,
   writeOwnedOfflineCache,
   writeOtcSearchCache,
 } from '../services/offlineStorage';
-import { getSyncQueueSummary, processSyncQueue } from '../services/syncQueue';
+import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
@@ -29,6 +31,60 @@ import InlineSyncNotice from './components/common/InlineSyncNotice';
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
+
+function createBeverageLocalId() {
+  return `bev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function hydrationEntryKey(entry: any) {
+  return String(entry?.id ?? entry?.local_id ?? `${entry?.timestamp ?? ''}:${entry?.amount_ml ?? ''}:${entry?.source ?? ''}:${entry?.drink_label ?? ''}`);
+}
+
+function getLocalDateKey(date: Date | string) {
+  const value = typeof date === 'string' ? new Date(date) : date;
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function mergeHydrationEntries(primary: any[], secondary: any[]) {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+  [...primary, ...secondary].forEach((entry) => {
+    const key = hydrationEntryKey(entry);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(entry);
+  });
+  return merged.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+}
+
+function totalHydrationForLocalDay(entries: any[], date = new Date()) {
+  const dateKey = getLocalDateKey(date);
+  return entries.reduce((sum, entry) => (
+    sum + (entry?.timestamp && getLocalDateKey(entry.timestamp) === dateKey ? Number(entry.amount_ml || 0) : 0)
+  ), 0);
+}
+
+async function markCachedHydrationEntrySynced(localId: string, response: any) {
+  const hydrationCache = await readHydrationCache<any>();
+  const entries = Array.isArray(hydrationCache?.entries) ? hydrationCache.entries : [];
+  const nextEntries = entries.map((entry: any) => entry?.local_id === localId ? {
+    ...entry,
+    id: response?.id ?? response?.entry?.id ?? entry.id,
+    sync_status: 'synced',
+  } : entry);
+  const goal = resolveHydrationGoal(hydrationCache);
+  await writeHydrationCache({
+    ...(hydrationCache || {}),
+    goal,
+    daily_goal_ml: goal,
+    today_total: totalHydrationForLocalDay(nextEntries),
+    percentage: goal > 0 ? Math.round((totalHydrationForLocalDay(nextEntries) / goal) * 100) : 0,
+    entries: nextEntries,
+  });
+}
 
 interface TimelineItem {
   id: number;
@@ -156,7 +212,13 @@ export default function Home() {
       loadSelectedAvatar();
       const syncToken = (token as string | undefined);
       (async () => {
-        if (syncToken) await processSyncQueue(syncToken).catch(() => {});
+        if (syncToken) {
+          await processSyncQueue(syncToken, async (item, response) => {
+            if (item.action_type === 'LOG_BEVERAGE') {
+              await markCachedHydrationEntrySynced(item.local_id, response);
+            }
+          }).catch(() => {});
+        }
         const summary = await getSyncQueueSummary();
         setPendingSyncCount(summary.pending);
       })();
@@ -178,7 +240,7 @@ export default function Home() {
       try {
         const response = await api.get(`/medicines/search?query=${encodeURIComponent(query)}`);
         if (!active) return;
-        const results = response.medicines || [];
+        const results = filterOtcReferenceMedicines(response.medicines || []);
         await writeOtcSearchCache(query, results);
         if (!active) return;
         setMedicineSuggestions(results);
@@ -196,7 +258,7 @@ export default function Home() {
         } else {
           setMedicineSearchMessage(
             api.isNetworkError(err)
-              ? 'No offline medication search data available. You can still add the medicine manually in Medication.'
+              ? 'No offline medication search data available. You can still manually enter a medication name.'
               : 'Could not search medications. Please try again.'
           );
           setShowSuggestions(true);
@@ -853,6 +915,103 @@ export default function Home() {
     } as any);
   };
 
+  const persistHomeHydrationSnapshot = async (entries: any[], goal: number) => {
+    const todayTotal = totalHydrationForLocalDay(entries);
+    const hydrationPercentage = goal > 0 ? Math.round((todayTotal / goal) * 100) : 0;
+    setHydrationEntries(entries);
+    setQuickStatus((prev) => ({
+      ...prev,
+      hydrationTotal: todayTotal,
+      hydrationGoal: goal,
+      hydrationPercentage,
+    }));
+    await writeHydrationCache({
+      goal,
+      daily_goal_ml: goal,
+      today_total: todayTotal,
+      percentage: hydrationPercentage,
+      entries,
+    });
+  };
+
+  const quickLogWater = async () => {
+    const amountMl = 250;
+    const localId = createBeverageLocalId();
+    const entry = {
+      local_id: localId,
+      client_uuid: localId,
+      amount_ml: amountMl,
+      timestamp: new Date().toISOString(),
+      source: 'home_quick',
+      beverage_type: 'water',
+      sugar_level: 'none',
+      caffeine_level: 'none',
+      notes: null,
+      drink_label: 'Water',
+      sync_status: 'pending',
+    };
+    const cachedHydration = await readHydrationCache<any>();
+    const goal = resolveHydrationGoal(cachedHydration || quickStatus, quickStatus.hydrationGoal || 2000);
+    const cachedEntries = Array.isArray(cachedHydration?.entries) ? cachedHydration.entries : [];
+    const currentEntries = Array.isArray(hydrationEntries) ? hydrationEntries : [];
+    const newEntries = mergeHydrationEntries([...currentEntries, entry], cachedEntries);
+    await persistHomeHydrationSnapshot(newEntries, goal);
+
+    const queuePayload: BeverageLogPayload = {
+      local_id: localId,
+      amount_ml: amountMl,
+      source: entry.source,
+      beverage_type: entry.beverage_type,
+      sugar_level: entry.sugar_level,
+      caffeine_level: entry.caffeine_level,
+      notes: entry.notes,
+      drink_label: entry.drink_label,
+      timestamp: entry.timestamp,
+    };
+    await enqueueBeverageLog(queuePayload);
+
+    if (!token) {
+      setOfflineMode(true);
+      showInlineNotice('Saved offline. Changes will sync when connected.');
+      return;
+    }
+
+    try {
+      setSyncing(true);
+      const response = await api.post('/hydration', {
+        local_id: localId,
+        client_uuid: localId,
+        amount_ml: amountMl,
+        source: entry.source,
+        beverage_type: entry.beverage_type,
+        sugar_level: entry.sugar_level,
+        caffeine_level: entry.caffeine_level,
+        notes: entry.notes,
+        drink_label: entry.drink_label,
+        timestamp: entry.timestamp,
+      }, token as string);
+      await markBeverageLogSynced(localId);
+      const syncedEntries = newEntries.map((item) => item.local_id === localId ? {
+        ...item,
+        id: response?.id ?? response?.entry?.id ?? item.id,
+        sync_status: 'synced',
+      } : item);
+      await persistHomeHydrationSnapshot(syncedEntries, goal);
+      setOfflineMode(false);
+      showInlineNotice('250 ml water logged');
+    } catch (err: any) {
+      console.log('Home quick beverage log sync error:', {
+        status: err?.status,
+        message: err?.data?.message || err?.message,
+        data: err?.data,
+      });
+      if (api.isNetworkError(err)) setOfflineMode(true);
+      showInlineNotice(api.isNetworkError(err) ? 'Saved offline. Changes will sync when connected.' : 'Saved locally. Sync pending.');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={[styles.header, headerElevated && styles.headerElevated, { paddingTop: Math.max(insets.top, 8) }]}>
@@ -1032,47 +1191,13 @@ export default function Home() {
               <Pressable
                 style={({ pressed }) => [styles.quickActionChip, pressed && styles.chipPressed]}
                 onPress={async (e) => {
-                e.stopPropagation();
-                try {
-                  // Match the Beverage screen quick-log payload so backend validation receives the expected metadata.
-                  await api.post('/hydration', {
-                    amount_ml: 250,
-                    source: 'quick',
-                    beverage_type: 'water',
-                    sugar_level: 'none',
-                    caffeine_level: 'none',
-                    notes: null,
-                  }, token as string);
-                  
-                  // Refresh hydration data immediately
-                  const hydrationRes = await api.get('/hydration', token as string);
-                  if (hydrationRes) {
-                    const goal = resolveHydrationGoal(hydrationRes, quickStatus.hydrationGoal || 2000);
-                    const todayTotal = resolveHydrationTotal(hydrationRes);
-                    const hydrationPercentage = resolveHydrationPercentage(hydrationRes, goal);
-                    setHydrationEntries(Array.isArray(hydrationRes.entries) ? hydrationRes.entries : null);
-                    
-                    setQuickStatus(prev => ({
-                      ...prev,
-                      hydrationPercentage,
-                      hydrationTotal: todayTotal,
-                      hydrationGoal: goal
-                    }));
-                    
-                    showInlineNotice('250 ml water logged');
+                  e.stopPropagation();
+                  try {
+                    await quickLogWater();
+                  } catch (err: any) {
+                    console.log('Home quick beverage local save error:', err);
+                    showInlineNotice('Could not save beverage intake locally.');
                   }
-                } catch (err: any) {
-                  console.log('Home quick beverage log error:', {
-                    status: err?.status,
-                    message: err?.data?.message || err?.message,
-                    data: err?.data,
-                  });
-                  showInlineNotice(
-                    api.isNetworkError(err)
-                      ? 'Home quick logging could not reach the server.'
-                      : 'Failed to log beverage intake.'
-                  );
-                }
                 }}
               >
                 <Text style={styles.quickActionText}>+250 ml</Text>

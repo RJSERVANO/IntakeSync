@@ -198,7 +198,19 @@ async function updateMedicationServerId(localId: string, serverId: string, user?
     if (!cacheOwnerMatches(payload, user)) return;
     const meds = payload?.data || [];
     if (Array.isArray(meds)) {
-      const next = meds.map((med) => med.id?.toString() === localId ? { ...med, id: serverId, server_id: serverId, local_id: localId, sync_status: 'synced' } : med);
+      const serverIdString = String(serverId);
+      const localIdString = String(localId);
+      const nextByIdentity = new Map<string, any>();
+      meds.forEach((med) => {
+        const isSyncedCreate = med.id?.toString() === localIdString || med.local_id?.toString() === localIdString || med.client_uuid?.toString() === localIdString;
+        const nextMed = isSyncedCreate
+          ? { ...med, id: serverIdString, server_id: serverIdString, local_id: localIdString, sync_status: 'synced' }
+          : med;
+        const identity = String(nextMed.server_id || nextMed.id || nextMed.local_id || nextMed.client_uuid);
+        const existing = nextByIdentity.get(identity);
+        nextByIdentity.set(identity, existing ? { ...existing, ...nextMed, local_id: nextMed.local_id || existing.local_id } : nextMed);
+      });
+      const next = Array.from(nextByIdentity.values());
       await writeOfflineCache(cacheKey, { ...payload, data: next, saved_at: new Date().toISOString() });
     }
   } catch {

@@ -3,7 +3,13 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AppState, Linking, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { cancelAllMedicationNotifications, cancelHydrationNotifications, notificationService } from '../../../../services/notificationService';
+import {
+  bootstrapNotificationSchedules,
+  cancelAllMedicationNotifications,
+  cancelHydrationNotifications,
+  notificationService,
+  validateScheduledNotificationRefs,
+} from '../../../../services/notificationService';
 import { notificationSettings } from '../../../../services/notificationSettings';
 import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
@@ -82,6 +88,7 @@ export default function NotificationSettings() {
       const normalized = permission.granted ? next : { ...next, allowNotifications: false };
       setPrefs(normalized);
       setPermissionBlocked(!permission.granted && (permission.status === 'denied' || permission.canAskAgain === false));
+      if (permission.granted) await validateScheduledNotificationRefs();
       if (normalized.allowNotifications !== next.allowNotifications) {
         await writeSettingsCache({ ...(cached || {}), notificationPreferences: normalized }, session?.user ?? null);
         await notificationSettings.initialize();
@@ -128,6 +135,24 @@ export default function NotificationSettings() {
       }
     }
 
+    if ((key === 'hydrationReminders' || key === 'medicationReminders') && value) {
+      const granted = await notificationService.requestPermissions();
+      if (!granted) {
+        setPermissionBlocked(true);
+        setNoticeModal({
+          type: 'warning',
+          title: 'Notifications Are Off',
+          message: 'Notifications are disabled for IntakeSync. Please enable them in Android app settings.',
+          primaryText: 'Open App Settings',
+          secondaryText: 'Done',
+          onPrimary: openAppSettings,
+        });
+        next = { ...prefs, [key]: false };
+      } else {
+        setPermissionBlocked(false);
+      }
+    }
+
     if (key === 'allowNotifications' && !next.allowNotifications) {
       next = { ...next, allowNotifications: false };
     }
@@ -144,6 +169,9 @@ export default function NotificationSettings() {
       if (key === 'hydrationReminders' && !value) await cancelHydrationNotifications();
       if (key === 'medicationReminders' && !value) await cancelAllMedicationNotifications();
       if (key === 'allowNotifications' && !next.allowNotifications) await notificationService.cancelAllNotifications();
+      if (next.allowNotifications && (key === 'allowNotifications' || key === 'hydrationReminders' || key === 'medicationReminders')) {
+        await bootstrapNotificationSchedules();
+      }
     } catch (error) {
       console.log('Notification settings save error:', error);
       setPrefs(previous);
@@ -172,7 +200,7 @@ export default function NotificationSettings() {
           <SettingRow
             icon="medical-outline"
             title="Medication Reminders"
-            description="Use reminders created from medication schedules."
+            description="Schedule Android medication notifications from saved dose times."
             value={prefs.allowNotifications && prefs.medicationReminders}
             disabled={reminderDisabled}
             onValueChange={(value) => updateSetting('medicationReminders', value)}
@@ -181,7 +209,7 @@ export default function NotificationSettings() {
           <SettingRow
             icon="water-outline"
             title="Hydration Reminders"
-            description="Use reminders created by the existing hydration system."
+            description="Schedule Android hydration notifications while you are below your daily goal."
             value={prefs.allowNotifications && prefs.hydrationReminders}
             disabled={reminderDisabled}
             onValueChange={(value) => updateSetting('hydrationReminders', value)}
@@ -212,7 +240,7 @@ export default function NotificationSettings() {
         <View style={styles.infoBanner}>
           <Ionicons name="information-circle-outline" size={20} color="#2563EB" />
           <Text style={styles.infoText}>
-            Preferences are saved on this device. Actual reminder scheduling depends on the existing reminder system.
+            Preferences are saved on this device. Android notifications also depend on app, channel, lock screen, battery, and Do Not Disturb settings.
           </Text>
         </View>
         {permissionBlocked ? (

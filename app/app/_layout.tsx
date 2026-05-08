@@ -4,8 +4,7 @@ import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
-import { notificationManager } from '../services/notificationManager';
-import { notificationService } from '../services/notificationService';
+import { bootstrapNotificationSchedules, notificationService } from '../services/notificationService';
 import { initializeOfflineSync } from '../services/offlineSyncManager';
 import { LogBox } from 'react-native';
 
@@ -43,21 +42,10 @@ export default function RootLayout() {
   useEffect(() => {
     try {
       initializeOfflineSync();
-      notificationManager.initialize();
-      notificationService.ensureAndroidChannels();
-      initializeOfflineSync();
+      void bootstrapNotificationSchedules();
     } catch (error) {
       console.log('Notification setup error:', error);
     }
-
-    // Cleanup on unmount
-    return () => {
-      try {
-        notificationManager.cleanup();
-      } catch (error) {
-        console.log('Notification cleanup error:', error);
-      }
-    };
   }, []);
 
   useEffect(() => {

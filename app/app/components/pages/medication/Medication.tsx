@@ -6,8 +6,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { notificationManager } from '../../../../services/notificationManager';
 import {
+  filterOtcReferenceMedicines,
   getCachedSession,
   getMedicationClearedHistoryCacheKey,
   getUserCacheIdentifier,
@@ -18,7 +18,7 @@ import {
   writeMedicationHistoryCache,
   writeOtcSearchCache,
 } from '../../../../services/offlineStorage';
-import { enqueueSyncAction, mergeLatestPendingAction, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
+import { enqueueSyncAction, getPendingSyncActions, mergeLatestPendingAction, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
 import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService } from '../../../../services/notificationService';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -245,6 +245,96 @@ function normalizeMedication(med: any, fallbackColor?: string): MedicationItem {
   };
 }
 
+function getMedicationIdentityValues(med: Partial<MedicationItem> | any) {
+  return [
+    med?.server_id,
+    med?.local_id,
+    med?.client_uuid,
+    med?.id,
+  ]
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((value) => String(value));
+}
+
+function mergeMedicationRecord(existing: MedicationItem | undefined, incoming: MedicationItem): MedicationItem {
+  if (!existing) return incoming;
+  return {
+    ...existing,
+    ...incoming,
+    local_id: incoming.local_id || existing.local_id,
+    server_id: incoming.server_id || existing.server_id,
+    color: incoming.color || existing.color,
+    otc_metadata: incoming.otc_metadata || existing.otc_metadata,
+    reminder: incoming.reminder ?? existing.reminder,
+    times: incoming.times?.length ? incoming.times : existing.times,
+    start_date: incoming.start_date || existing.start_date,
+    end_date: incoming.end_date ?? existing.end_date,
+    frequency: incoming.frequency || existing.frequency,
+    days_of_week: incoming.days_of_week?.length ? incoming.days_of_week : existing.days_of_week,
+    notes: incoming.notes ?? existing.notes,
+    sync_status: incoming.sync_status || existing.sync_status,
+  };
+}
+
+function mergeMedicationLists(...lists: MedicationItem[][]) {
+  const merged: MedicationItem[] = [];
+  const identityIndex = new Map<string, number>();
+
+  lists.flat().forEach((rawMed) => {
+    if (!rawMed || rawMed.deleted_at) return;
+    const med = { ...rawMed, id: String(rawMed.id) };
+    const identities = getMedicationIdentityValues(med);
+    const existingIndex = identities.map((identity) => identityIndex.get(identity)).find((index) => index !== undefined);
+
+    if (existingIndex === undefined) {
+      const nextIndex = merged.length;
+      merged.push(med);
+      identities.forEach((identity) => identityIndex.set(identity, nextIndex));
+      return;
+    }
+
+    const next = mergeMedicationRecord(merged[existingIndex], med);
+    merged[existingIndex] = next;
+    getMedicationIdentityValues(next).forEach((identity) => identityIndex.set(identity, existingIndex));
+  });
+
+  return merged;
+}
+
+function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingActions: any[]) {
+  const pendingCreates: MedicationItem[] = [];
+  let nextMeds = [...baseMeds];
+
+  pendingActions.forEach((item) => {
+    const payload = item?.payload || {};
+    if (item.action_type === 'CREATE_MEDICATION') {
+      pendingCreates.push({
+        ...payload,
+        id: String(payload.id || item.local_id),
+        local_id: payload.local_id || item.local_id,
+        sync_status: item.status === 'failed' ? 'failed' : 'pending',
+      });
+    }
+
+    if (item.action_type === 'UPDATE_MEDICATION') {
+      const updated = {
+        ...payload,
+        id: String(payload.id || payload.server_id || item.local_id),
+        local_id: payload.local_id || item.local_id,
+        sync_status: item.status === 'failed' ? 'failed' : 'pending',
+      };
+      nextMeds = mergeMedicationLists(nextMeds, [updated]);
+    }
+
+    if (item.action_type === 'DELETE_MEDICATION') {
+      const identities = new Set(getMedicationIdentityValues({ ...payload, local_id: item.local_id }));
+      nextMeds = nextMeds.filter((med) => getMedicationIdentityValues(med).every((identity) => !identities.has(identity)));
+    }
+  });
+
+  return mergeMedicationLists(nextMeds, pendingCreates);
+}
+
 function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
   return {
     id: entry.id?.toString() || uid(),
@@ -339,13 +429,27 @@ export default function Medication() {
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
-  const shownReminderPopups = useRef<Set<string>>(new Set());
+  const [medicationCacheLoaded, setMedicationCacheLoaded] = useState(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missedDoseSyncKeys = useRef<Set<string>>(new Set());
+  const hydratingMedicationCacheRef = useRef(false);
+  const medicationOwnerRef = useRef<string | null>(null);
   const medicationCacheOwner = getUserCacheIdentifier(currentUser);
   const clearedHistoryCacheKey = medicationCacheOwner
     ? getMedicationClearedHistoryCacheKey(medicationCacheOwner)
     : null;
+
+  useEffect(() => {
+    if (!medicationCacheOwner) return;
+    if (medicationOwnerRef.current && medicationOwnerRef.current !== medicationCacheOwner) {
+      setMeds([]);
+      setHistory([]);
+      setMedicationCacheLoaded(false);
+      setLastClearedTime(0);
+      setClearedHistoryKeys([]);
+    }
+    medicationOwnerRef.current = medicationCacheOwner;
+  }, [medicationCacheOwner]);
 
   // form state
   const [name, setName] = useState('');
@@ -369,6 +473,7 @@ export default function Medication() {
   const [tempTime, setTempTime] = useState<Date | null>(null);
   const [timeModalVisible, setTimeModalVisible] = useState(false);
   const MODAL_ANIM = useRef(new Animated.Value(0)).current;
+  const handledRoutePrefillKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 30000);
@@ -415,8 +520,14 @@ export default function Medication() {
   useFocusEffect(
     React.useCallback(() => {
       if (token) {
-        processSyncQueue(token as string).catch(() => {});
+        processSyncQueue(token as string, async (item) => {
+          if (item.action_type === 'CREATE_MEDICATION' || item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'DELETE_MEDICATION') {
+            await reloadAllData();
+          }
+        }).catch(() => {});
       }
+    // Sync reconciliation is token-gated; reloadAllData reads current state when the queued work finishes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token])
   );
 
@@ -439,7 +550,7 @@ export default function Medication() {
 
       try {
         const response = await api.get(`/medicines/search?query=${encodeURIComponent(name)}`);
-        const results = response.medicines || [];
+        const results = filterOtcReferenceMedicines(response.medicines || []);
         await writeOtcSearchCache(name, results);
         setMedicineSuggestions(results);
         setMedicineSearchMessage(null);
@@ -487,43 +598,68 @@ export default function Medication() {
     })();
   }, [clearedHistoryCacheKey]);
 
+  async function writeMedicationCacheIfSafe(user: any, nextMeds: MedicationItem[], allowEmpty = false) {
+    if (!user || hydratingMedicationCacheRef.current) return;
+    if (!medicationCacheLoaded && nextMeds.length === 0 && !allowEmpty) return;
+    if (nextMeds.length === 0 && !allowEmpty) return;
+    await writeMedicationCache(user, nextMeds);
+  }
+
+  function mergeServerWithLocalMedications(serverMeds: any[], localMeds: MedicationItem[], pendingActions: any[] = []) {
+    const localColorById = new Map<string, string | undefined>();
+    localMeds.forEach((med) => {
+      getMedicationIdentityValues(med).forEach((identity) => localColorById.set(identity, med.color));
+    });
+    const normalizedServerMeds = (serverMeds || []).map((med) => normalizeMedication(
+      med,
+      localColorById.get(String(med.id)) || localColorById.get(String(med.server_id)) || localColorById.get(String(med.local_id))
+    ));
+    return applyPendingMedicationActions(mergeMedicationLists(localMeds, normalizedServerMeds), pendingActions);
+  }
+
   useEffect(() => {
     let mounted = true;
     (async () => {
+      hydratingMedicationCacheRef.current = true;
       try {
-        if (!token) {
-          const session = await getCachedSession();
-          const sessionUser = currentUser || session?.user || null;
-          if (sessionUser && mounted) setCurrentUser(sessionUser);
-          const localMeds = sessionUser ? await readMedicationCache<MedicationItem[]>(sessionUser) : null;
-          const localHistory = sessionUser ? await readMedicationHistoryCache<HistoryEntry[]>(sessionUser) : null;
-          if (!mounted) return;
-          setMeds(localMeds || []);
-          setHistory(dedupeMedicationHistory(localHistory || []));
-          setLoading(false);
-          return;
-        }
-
         const session = await getCachedSession();
         const sessionUser = currentUser || session?.user || null;
+        if (!sessionUser && !token) {
+          router.replace('/login');
+          return;
+        }
         if (sessionUser && !currentUser && mounted) setCurrentUser(sessionUser);
         const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
         const localHistory: HistoryEntry[] = sessionUser ? (await readMedicationHistoryCache<HistoryEntry[]>(sessionUser)) || [] : [];
-        const localColorById = new Map(localMeds.map((med) => [med.id.toString(), med.color]));
+        const pendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
+        const cachedMeds = applyPendingMedicationActions(localMeds, pendingActions);
         if (!mounted) return;
-        setMeds(localMeds);
+        setMeds(cachedMeds);
         setHistory(dedupeMedicationHistory(localHistory));
+        setMedicationCacheLoaded(true);
         setLoading(false);
+
+        hydratingMedicationCacheRef.current = false;
+
+        if (!token) {
+          setOfflineMode(true);
+          if (cachedMeds.length > 0 && sessionUser && cachedMeds.length !== localMeds.length) {
+            await writeMedicationCacheIfSafe(sessionUser, cachedMeds);
+          }
+          showInlineNotice('Offline mode - showing cached medications.');
+          return;
+        }
+
         setSyncing(true);
 
         if (token) {
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
-          // Ensure all IDs are strings for consistency
-          const normalizedMeds = (serverMeds || []).map(m => normalizeMedication(m, localColorById.get(m.id.toString())));
+          const latestPendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
+          const normalizedMeds = mergeServerWithLocalMedications(serverMeds || [], cachedMeds, latestPendingActions);
           if (!mounted) return;
           setMeds(normalizedMeds);
-          if (sessionUser) await writeMedicationCache(sessionUser, normalizedMeds);
+          if (sessionUser) await writeMedicationCacheIfSafe(sessionUser, normalizedMeds, (serverMeds || []).length === 0 && latestPendingActions.length === 0);
 
           // Load everything in parallel for better performance
           const [historyResults, statsData, upcomingData] = await Promise.allSettled([
@@ -594,6 +730,7 @@ export default function Medication() {
           setOfflineMode(false);
         }
       } catch (err) {
+        hydratingMedicationCacheRef.current = false;
         if (api.isAuthError(err)) {
           router.replace('/login');
           return;
@@ -613,24 +750,12 @@ export default function Medication() {
     })();
     return () => {
       mounted = false;
+      hydratingMedicationCacheRef.current = false;
       setSyncing(false);
     };
+  // Cache hydration must be keyed to owner/token changes; cache writes are guarded by refs to avoid startup wipes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clearedHistoryCacheKey, currentUser, router, token]);
-
-  // Persist medications to local storage
-  useEffect(() => {
-    const saveMeds = async () => {
-      try {
-        await writeMedicationCache(currentUser, meds);
-      } catch (error) {
-        console.log('Error saving medications:', error);
-      }
-    };
-
-    if (currentUser) {
-      saveMeds();
-    }
-  }, [currentUser, meds]);
 
   // Persist history to local storage
   useEffect(() => {
@@ -649,26 +774,36 @@ export default function Medication() {
 
   // Handle medicine pre-fill from home search
   useEffect(() => {
-    if (medicineName && !modalVisible) {
-      // Open add modal with pre-filled data
-      openAdd();
-      setName(medicineName as string);
-      if (medicineDosage) {
-        setDosage(medicineDosage as string);
-      }
-      if (medicineData) {
-        try {
-          const data = JSON.parse(medicineData as string);
-          const selectedMedicine = { ...data, name: data.name || medicineName, dosage: data.dosage || medicineDosage } as OtcMedicineSuggestion;
-          setSelectedOtcMedicine(selectedMedicine);
-          const recommendedTimes = buildTimesForMedicine(selectedMedicine, new Date(), startDate || todayDateString());
-          if (recommendedTimes.length > 0) setTimes(recommendedTimes);
-        } catch (e) {
-          console.log('Error parsing medicine data:', e);
-        }
+    if (!medicineName) {
+      handledRoutePrefillKeyRef.current = null;
+      return;
+    }
+    const prefillKey = JSON.stringify([medicineName, medicineDosage || '', medicineData || '']);
+    if (handledRoutePrefillKeyRef.current === prefillKey) return;
+    handledRoutePrefillKeyRef.current = prefillKey;
+
+    openAdd();
+    setName(medicineName as string);
+    if (medicineDosage) {
+      setDosage(medicineDosage as string);
+    }
+    if (medicineData) {
+      try {
+        const data = JSON.parse(medicineData as string);
+        const selectedMedicine = { ...data, name: data.name || medicineName, dosage: data.dosage || medicineDosage } as OtcMedicineSuggestion;
+        setSelectedOtcMedicine(selectedMedicine);
+        const recommendedTimes = buildTimesForMedicine(selectedMedicine, new Date(), startDate || todayDateString());
+        if (recommendedTimes.length > 0) setTimes(recommendedTimes);
+      } catch (e) {
+        console.log('Error parsing medicine data:', e);
       }
     }
-  }, [medicineName, medicineDosage, medicineData, modalVisible, startDate]);
+
+    router.replace({
+      pathname: '/components/pages/medication/Medication',
+      params: routeToken ? { token: routeToken } : {},
+    } as any);
+  }, [medicineName, medicineDosage, medicineData, routeToken, router, startDate]);
 
   // Auto-mark missed medications and reload stats periodically
   useEffect(() => {
@@ -723,7 +858,6 @@ export default function Medication() {
     if (!currentUser || meds.length === 0) return;
     let cancelled = false;
     (async () => {
-      notificationManager.cancelAllReminders('medication');
       for (const med of meds.filter(isMedicationActive)) {
         if (cancelled) return;
         await scheduleMedicationReminders(med);
@@ -769,6 +903,26 @@ export default function Medication() {
     setNotes(current.notes || '');
     setColor(current.color || '#1E3A8A');
     setModalVisible(true);
+  }
+
+  function closeMedicationModal() {
+    setModalVisible(false);
+    if (!editing) {
+      setName('');
+      setDosage('');
+      setTimes([]);
+      setMedicineSearchMessage(null);
+      setMedicineSuggestions([]);
+      setShowMedicineSuggestions(false);
+      setSelectedOtcMedicine(null);
+      setReminder(true);
+      setStartDate(todayDateString());
+      setEndDate('');
+      setFrequency('daily');
+      setDaysOfWeek([]);
+      setNotes('');
+      setColor('#1E3A8A');
+    }
   }
 
   async function saveMedication() {
@@ -822,7 +976,8 @@ export default function Medication() {
     if (editing) {
       // Update existing medication
       const updatedMed: MedicationItem = { ...editing, ...medData, sync_status: editing.sync_status === 'pending' ? 'pending' : editing.sync_status };
-      setMeds((s) => s.map((x) => (x.id === updatedMed.id ? updatedMed : x)));
+      const optimisticUpdatedMeds = meds.map((x) => (x.id === updatedMed.id ? updatedMed : x));
+      setMeds(optimisticUpdatedMeds);
 
       if (token) {
         try {
@@ -836,12 +991,14 @@ export default function Medication() {
           console.log('Failed to update on server:', err);
           if (api.isNetworkError(err)) {
             const nextMed = { ...updatedMed, sync_status: 'pending' as const };
-            setMeds((s) => s.map((x) => (x.id === nextMed.id ? nextMed : x)));
+            const nextMeds = meds.map((x) => (x.id === nextMed.id ? nextMed : x));
+            setMeds(nextMeds);
             if (!editing.server_id || editing.sync_status === 'pending') {
               await mergeLatestPendingAction('CREATE_MEDICATION', localId, nextMed);
             } else {
               await mergeLatestPendingAction('UPDATE_MEDICATION', localId, { ...nextMed, server_id: editing.server_id || editing.id });
             }
+            await writeMedicationCacheIfSafe(currentUser, nextMeds);
             await scheduleMedicationReminders(nextMed, true);
             setOfflineMode(true);
             showInlineNotice('Saved offline. Will sync when connected.');
@@ -852,6 +1009,7 @@ export default function Medication() {
         }
       } else {
         await mergeLatestPendingAction(editing.server_id ? 'UPDATE_MEDICATION' : 'CREATE_MEDICATION', localId, updatedMed);
+        await writeMedicationCacheIfSafe(currentUser, optimisticUpdatedMeds);
         await scheduleMedicationReminders({ ...updatedMed, sync_status: 'pending' }, true);
         showInlineNotice('Saved offline. Will sync when connected.');
         savedSuccessfully = true;
@@ -870,7 +1028,9 @@ export default function Medication() {
             sync_status: 'synced',
             color: serverMed.color || medData.color,
           };
-          setMeds((s) => [newMed, ...s]);
+          const nextMeds = mergeMedicationLists([newMed], meds);
+          setMeds(nextMeds);
+          await writeMedicationCacheIfSafe(currentUser, nextMeds);
           // Schedule medication reminders
           await scheduleMedicationReminders(newMed);
           // Reload all data from server
@@ -880,8 +1040,10 @@ export default function Medication() {
           console.log('Failed to save to server:', err);
           if (api.isNetworkError(err)) {
             const newMed: MedicationItem = { ...medData, id: localId, local_id: localId, sync_status: 'pending' };
-            setMeds((s) => [newMed, ...s]);
+            const nextMeds = mergeMedicationLists([newMed], meds);
+            setMeds(nextMeds);
             await enqueueSyncAction({ action_type: 'CREATE_MEDICATION', method: 'POST', endpoint: '/medications', local_id: localId, payload: newMed });
+            await writeMedicationCacheIfSafe(currentUser, nextMeds);
             await scheduleMedicationReminders(newMed);
             setOfflineMode(true);
             showInlineNotice('Saved offline. Will sync when connected.');
@@ -894,8 +1056,10 @@ export default function Medication() {
       } else {
         // Offline mode - use local ID
         const newMed: MedicationItem = { ...medData, id: localId, local_id: localId, sync_status: 'pending' };
-        setMeds((s) => [newMed, ...s]);
+        const nextMeds = mergeMedicationLists([newMed], meds);
+        setMeds(nextMeds);
         await enqueueSyncAction({ action_type: 'CREATE_MEDICATION', method: 'POST', endpoint: '/medications', local_id: localId, payload: newMed });
+        await writeMedicationCacheIfSafe(currentUser, nextMeds);
         await scheduleMedicationReminders(newMed);
         showInlineNotice('Saved offline. Will sync when connected.');
         savedSuccessfully = true;
@@ -908,20 +1072,17 @@ export default function Medication() {
   async function scheduleMedicationReminders(medication: MedicationItem, replaceExisting = false) {
     const notificationMedicationId = getNotificationMedicationId(medication);
     if (replaceExisting) {
-      notificationManager.cancelAllReminders('medication');
       await cancelMedicationNotifications(notificationMedicationId);
     }
     if (!medication.reminder) {
       // If reminder is disabled, cancel existing reminders
       if (medication.id) {
-        notificationManager.cancelAllReminders('medication');
         await cancelMedicationNotifications(notificationMedicationId);
       }
       return;
     }
 
     try {
-      // Schedule in-app reminders for each time
       await notificationService.scheduleMedicationNotifications(
         notificationMedicationId,
         medication.name,
@@ -935,20 +1096,6 @@ export default function Medication() {
           daysOfWeek: medication.days_of_week || [],
         }
       );
-      medication.times.forEach((timeStr) => {
-        const targetTime = new Date(timeStr);
-        const now = new Date();
-
-        // If time is in the past today, schedule for tomorrow
-        if (targetTime < now) {
-          targetTime.setDate(targetTime.getDate() + 1);
-        }
-
-        // Schedule reminder
-        notificationManager.scheduleMedicationReminder(targetTime, () => {
-          showMedicationReminderPopup(medication, targetTime);
-        });
-      });
     } catch (error) {
       console.error('Error scheduling medication reminders:', error);
     }
@@ -973,20 +1120,6 @@ export default function Medication() {
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     };
   }, []);
-
-  function showMedicationReminderPopup(medication: MedicationItem, reminderTime: Date) {
-    const timeLabel = reminderTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const reminderKey = `${medication.id}:${reminderTime.toISOString()}`;
-    if (shownReminderPopups.current.has(reminderKey)) return;
-
-    shownReminderPopups.current.add(reminderKey);
-    showThemedPopup({
-      title: 'Medication Reminder',
-      message: `${medication.name}${medication.dosage ? ` - ${medication.dosage}` : ''}\nScheduled for ${timeLabel}.`,
-      tone: 'info',
-      icon: 'medkit-outline',
-    });
-  }
 
   async function reloadStatsAndUpcoming() {
     if (!token) return;
@@ -1034,13 +1167,12 @@ export default function Medication() {
 
       // Update medications
       if (medsData.status === 'fulfilled') {
-        // Ensure all IDs are strings for consistency
-        const normalizedMeds = (medsData.value || []).map((m: any) => {
-          const id = m.id.toString();
-          const existingColor = meds.find((med) => med.id.toString() === id)?.color;
-          return normalizeMedication(m, colorFallbacks[id] || existingColor);
-        });
+        const localMeds = currentUser ? (await readMedicationCache<MedicationItem[]>(currentUser)) || [] : meds;
+        const pendingActions = currentUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
+        const normalizedMeds = mergeServerWithLocalMedications(medsData.value || [], mergeMedicationLists(localMeds, meds), pendingActions)
+          .map((med) => ({ ...med, color: colorFallbacks[med.id] || colorFallbacks[String(med.server_id)] || med.color }));
         setMeds(normalizedMeds);
+        if (currentUser) await writeMedicationCacheIfSafe(currentUser, normalizedMeds, (medsData.value || []).length === 0 && pendingActions.length === 0);
       }
 
       // Update history
@@ -1088,7 +1220,6 @@ export default function Medication() {
     if (busyActions[actionKey]) return;
 
     setActionBusy(actionKey, true);
-    notificationManager.cancelAllReminders('medication');
     await cancelMedicationNotifications(String(deleteTarget.local_id || deleteTarget.id));
 
     const previous = meds;
@@ -1520,9 +1651,6 @@ export default function Medication() {
     const med = meds.find(m => m.id === medId);
     if (med) {
       const snoozeTime = new Date(Date.now() + mins * 60 * 1000);
-      notificationManager.scheduleMedicationReminder(snoozeTime, () => {
-        showMedicationReminderPopup(med, snoozeTime);
-      });
       await notificationService.scheduleNotification(
         'Medication snoozed',
         `${med.name}${med.dosage ? ` - ${med.dosage}` : ''}`,
@@ -2380,10 +2508,10 @@ export default function Medication() {
         <Ionicons name="add" size={24} color="white" />
       </TouchableOpacity>
 
-      <Modal visible={modalVisible} animationType="slide" onRequestClose={()=>setModalVisible(false)}>
+      <Modal visible={modalVisible} animationType="slide" onRequestClose={closeMedicationModal}>
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={()=>setModalVisible(false)} style={styles.modalClose}>
+            <TouchableOpacity onPress={closeMedicationModal} style={styles.modalClose}>
               <Ionicons name="close" size={20} color="#374151" />
             </TouchableOpacity>
             <Text style={styles.modalTitle}>{editing ? 'Edit Medication' : 'Add Medication'}</Text>

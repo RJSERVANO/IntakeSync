@@ -205,17 +205,31 @@ function InfoRow({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap; 
 }
 
 function PasswordField({ label, value, onChangeText }: { label: string; value: string; onChangeText: (value: string) => void }) {
+  const [visible, setVisible] = useState(false);
+
   return (
     <View style={styles.formGroup}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter password"
-        placeholderTextColor="#94A3B8"
-        secureTextEntry
-        value={value}
-        onChangeText={onChangeText}
-      />
+      <View style={styles.passwordInputRow}>
+        <TextInput
+          style={styles.passwordInput}
+          placeholder="Enter password"
+          placeholderTextColor="#94A3B8"
+          secureTextEntry={!visible}
+          value={value}
+          onChangeText={onChangeText}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TouchableOpacity
+          style={styles.passwordToggle}
+          onPress={() => setVisible((current) => !current)}
+          accessibilityLabel={visible ? `Hide ${label}` : `Show ${label}`}
+          activeOpacity={0.75}
+        >
+          <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={20} color="#64748B" />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -429,6 +443,28 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     color: '#0F172A',
+  },
+  passwordInputRow: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  passwordInput: {
+    flex: 1,
+    paddingLeft: 14,
+    paddingRight: 8,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  passwordToggle: {
+    width: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   passwordChecklist: {
     borderRadius: 14,

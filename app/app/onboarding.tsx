@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler, Alert, Linking } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';
+import { notificationSettings } from '../services/notificationSettings';
 import { enqueueSyncAction, mergeLatestPendingAction } from '../services/syncQueue';
-import { getCachedSession, updateCachedUser } from '../services/offlineStorage';
+import { getCachedSession, readSettingsCache, updateCachedUser, writeSettingsCache } from '../services/offlineStorage';
 import InlineNotice from './components/common/InlineNotice';
 
 const { height } = Dimensions.get('window');
@@ -211,29 +212,84 @@ export default function Onboarding() {
 
   const requestNotificationPermission = async () => {
     try {
+      setLoading(true);
       const granted = await notificationService.requestPermissions();
       const nextData = { ...data, notification_permissions_accepted: granted };
       setData(nextData);
-      await api.put('/onboarding/update', {
-        ...buildOnboardingPayload(),
-        notification_permissions_accepted: granted,
-      }, token);
       if (granted) {
+        await saveEnabledNotificationPreferences();
         showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
       } else {
-        showNotice('warning', 'Notifications Not Enabled', 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try again later from Notification Settings.');
+        const permission = await notificationService.getPermissionStatus();
+        if (permission.canAskAgain === false) {
+          showBlockedNotificationGuidance();
+        } else {
+          showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. You can continue and turn them on later in Notification Settings.');
+        }
       }
+      await saveOnboardingNotificationPreference(granted);
       setCurrentStep(currentStep + 1);
     } catch (err) {
       console.log('Notification permission request failed:', err);
-      await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', {
-        ...buildOnboardingPayload(),
-        notification_permissions_accepted: false,
-      });
-      showNotice('warning', 'Notifications Not Enabled', 'IntakeSync could not get notification permission. Please choose Allow when Android asks, then try again later from Notification Settings.');
+      showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. You can continue and turn them on later in Notification Settings.');
       updateData('notification_permissions_accepted', false);
+      await saveOnboardingNotificationPreference(false);
       setCurrentStep(currentStep + 1);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const saveOnboardingNotificationPreference = async (accepted: boolean) => {
+    try {
+      await api.put('/onboarding/update', {
+        ...buildOnboardingPayload(),
+        notification_permissions_accepted: accepted,
+      }, token);
+    } catch (err) {
+      console.log('Error saving notification onboarding preference:', err);
+      if (api.isNetworkError(err)) {
+        await mergeLatestPendingAction('SUBMIT_ONBOARDING', 'onboarding', {
+          ...buildOnboardingPayload(),
+          notification_permissions_accepted: accepted,
+        });
+      }
+    }
+  };
+
+  const saveEnabledNotificationPreferences = async () => {
+    const session = await getCachedSession();
+    const user = session?.user ?? null;
+    const existing = user ? await readSettingsCache<any>(user) : null;
+    const notificationPreferences = {
+      allowNotifications: true,
+      medicationReminders: true,
+      hydrationReminders: true,
+      sound: true,
+      vibration: true,
+    };
+
+    await writeSettingsCache({ ...(existing || {}), notificationPreferences }, user);
+    await notificationSettings.initialize();
+    await notificationSettings.setMasterToggle(true);
+    await notificationSettings.updateCategoryWithBackend('medications', true);
+    await notificationSettings.updateCategoryWithBackend('hydration', true);
+  };
+
+  const showBlockedNotificationGuidance = () => {
+    Alert.alert(
+      'Notifications Disabled',
+      'Notifications are disabled for IntakeSync. You can enable them later in Android app settings.',
+      [
+        { text: 'Continue', style: 'cancel' },
+        {
+          text: 'Open App Settings',
+          onPress: () => Linking.openSettings().catch(() => {
+            showNotice('warning', 'Open Settings', 'Open Android Settings, choose Apps, then IntakeSync, and enable notifications.');
+          }),
+        },
+      ]
+    );
   };
 
   const skipNotifications = async () => {
@@ -529,7 +585,7 @@ export default function Onboarding() {
               <Ionicons name="notifications-outline" size={58} color="#2563EB" />
             </View>
             <Text style={styles.title}>Enable Reminders</Text>
-            <Text style={styles.description}>IntakeSync uses notifications to remind you about hydration and medication schedules.</Text>
+            <Text style={styles.description}>IntakeSync uses notifications to remind you about beverage intake and medication schedules.</Text>
             <View style={styles.notificationSupportBox}>
               <Ionicons name="settings-outline" size={18} color="#2563EB" />
               <Text style={styles.notificationSupportText}>You can update this later in Notification Settings.</Text>
@@ -543,11 +599,12 @@ export default function Onboarding() {
             <TouchableOpacity 
               onPress={requestNotificationPermission}
               style={styles.primaryButton}
+              disabled={loading}
             >
-              <Text style={styles.primaryButtonText}>Enable reminders</Text>
+              <Text style={styles.primaryButtonText}>{loading ? 'Requesting...' : 'Enable Reminders'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={skipNotifications} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>Not now</Text>
+            <TouchableOpacity onPress={skipNotifications} style={styles.secondaryButton} disabled={loading}>
+              <Text style={styles.secondaryButtonText}>Skip for now</Text>
             </TouchableOpacity>
           </View>
         );

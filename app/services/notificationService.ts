@@ -16,17 +16,19 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey } from './offlineStorage';
+import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readMedicationCache } from './offlineStorage';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
 const HYDRATION_SOUND = 'hydration_reminder.wav';
 const MEDICATION_SOUND = 'medication_reminder.wav';
 const PERMISSION_ASKED_KEY = '@intakesync:notification_permission_asked';
-const HYDRATION_HOURS = [8, 10, 12, 14, 16, 18, 20, 22];
-const MEDICATION_REMINDER_OFFSETS = [30, 15, 5];
+const MEDICATION_REMINDER_OFFSETS = [15, 5, 0];
+const MIN_SCHEDULE_BUFFER_MS = 10 * 1000;
+export const HYDRATION_REMINDER_INTERVAL_MINUTES = 60;
+const HYDRATION_LOOKAHEAD_HOURS = 14;
 let schedulingHydration = false;
-let schedulingMedicationReminders = false;
+const schedulingMedicationIds = new Set<string>();
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
@@ -61,6 +63,7 @@ function getNotifications(): typeof ExpoNotifications | null {
   if (notificationsModule) return notificationsModule;
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     notificationsModule = require('expo-notifications');
     notificationsModule?.setNotificationHandler({
       handleNotification: async () => ({
@@ -120,6 +123,21 @@ type HydrationScheduleOptions = {
   owner?: CacheOwner | null;
 };
 
+type CachedMedicationForNotifications = {
+  id?: string | number;
+  local_id?: string | number | null;
+  server_id?: string | number | null;
+  name?: string;
+  dosage?: string;
+  times?: string[];
+  reminder?: boolean;
+  start_date?: string | null;
+  end_date?: string | null;
+  frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
+  days_of_week?: number[];
+  deleted_at?: string | null;
+};
+
 class NotificationService {
   public scheduledNotifications: Map<string, string> = new Map();
 
@@ -136,6 +154,7 @@ class NotificationService {
         sound: HYDRATION_SOUND,
         vibrationPattern: [0, 250, 250, 250],
         enableVibrate: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
 
       await Notifications.setNotificationChannelAsync(MEDICATION_CHANNEL_ID, {
@@ -144,6 +163,7 @@ class NotificationService {
         sound: MEDICATION_SOUND,
         vibrationPattern: [0, 250, 250, 250],
         enableVibrate: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
     } catch (channelError) {
       console.log('Error setting notification channels (non-critical):', channelError);
@@ -361,11 +381,12 @@ class NotificationService {
       lookaheadDays?: number;
     }
   ): Promise<void> {
-    if (schedulingMedicationReminders) return;
-    schedulingMedicationReminders = true;
+    if (schedulingMedicationIds.has(medicationId)) return;
+    schedulingMedicationIds.add(medicationId);
     try {
       const owner = await resolveNotificationOwner(options?.owner);
       if (!owner) return;
+      await validateScheduledNotificationRefs(owner);
 
       await notificationSettings.initialize();
       const settings = notificationSettings.getSettings();
@@ -383,17 +404,23 @@ class NotificationService {
           .filter((ref) => ref.type === 'medication' && ref.medicationId === medicationId)
           .map((ref) => refSlot(ref))
       );
+      const now = Date.now();
 
       for (const doseTime of getMedicationDoseOccurrences(times, options)) {
         for (const offsetMinutes of MEDICATION_REMINDER_OFFSETS) {
           const triggerDate = new Date(doseTime.getTime() - offsetMinutes * 60 * 1000);
-          if (triggerDate.getTime() <= Date.now()) continue;
+          if (triggerDate.getTime() <= now + MIN_SCHEDULE_BUFFER_MS) continue;
           const scheduleKey = getMedicationScheduleKey(owner, medicationId, doseTime, offsetMinutes);
           if (existingKeys.has(scheduleKey)) continue;
 
           const doseTimeIso = doseTime.toISOString();
-          const title = dosage ? `Take ${dosage} ${medicationName}` : `Take ${medicationName}`;
-          const body = `Medication dose at ${doseTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+          const doseTimeLabel = doseTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+          const title = offsetMinutes > 0
+            ? `${medicationName} in ${offsetMinutes} minutes`
+            : `Time to take ${medicationName}`;
+          const body = offsetMinutes > 0
+            ? `Dose scheduled at ${doseTimeLabel}.`
+            : `${dosage ? `${dosage} scheduled for now.` : 'Dose scheduled for now.'}`;
           const notificationId = await this.scheduleNotification(
             title,
             body,
@@ -433,7 +460,7 @@ class NotificationService {
     } catch (error) {
       console.error('Error scheduling medication notifications:', error);
     } finally {
-      schedulingMedicationReminders = false;
+      schedulingMedicationIds.delete(medicationId);
     }
   }
 
@@ -441,11 +468,12 @@ class NotificationService {
    * Schedule hydration reminder
    */
   async scheduleHydrationReminder(
-    intervalMinutes: number = 120,
+    intervalMinutes: number = HYDRATION_REMINDER_INTERVAL_MINUTES,
     amountMl: number = 200,
     backendNotificationId?: string,
     owner?: CacheOwner,
-    scheduledAt?: Date
+    scheduledAt?: Date,
+    progressPercent?: number
   ): Promise<void> {
     try {
       const nextReminder = scheduledAt || new Date(Date.now() + intervalMinutes * 60 * 1000);
@@ -459,18 +487,23 @@ class NotificationService {
       }
       const hasPermission = await this.requestPermissions();
       if (!hasPermission) return;
-      const scheduleKey = getHydrationScheduleKey(nextReminder);
+      if (nextReminder.getTime() <= Date.now() + MIN_SCHEDULE_BUFFER_MS) return;
+      const scheduleKey = getHydrationScheduleKey(cacheOwner, nextReminder);
       if (await isHydrationReminderAlreadyScheduled(cacheOwner, scheduleKey)) return;
+      const body = Number.isFinite(progressPercent)
+        ? `You are at ${Math.max(0, Math.min(100, Math.round(progressPercent || 0)))}%. Drink water to stay on track with your daily goal.`
+        : 'Drink water to stay on track with your daily goal.';
 
       const notificationId = await this.scheduleNotification(
-        'Time to hydrate 💧',
-        `${amountMl}ml suggested to stay hydrated`,
+        'Time to hydrate',
+        body,
         nextReminder,
         {
           type: 'hydration',
           amount: amountMl,
           suggestedAmount: amountMl,
           doseKey: scheduleKey,
+          scheduleKey,
           scheduledAt: nextReminder.toISOString(),
           id: backendNotificationId,
         }
@@ -480,15 +513,15 @@ class NotificationService {
         if (backendNotificationId) this.scheduledNotifications.set(backendNotificationId, notificationId);
         await saveScheduledNotificationRef({
           ...cacheOwner,
-          id: `hydration:${scheduleKey}`,
-              type: 'hydration',
-              doseKey: scheduleKey,
-              scheduleKey,
-              amount: amountMl,
-              suggestedAmount: amountMl,
-              notificationId,
-              scheduledAt: nextReminder.toISOString(),
-              createdAt: new Date().toISOString(),
+          id: scheduleKey,
+          type: 'hydration',
+          doseKey: scheduleKey,
+          scheduleKey,
+          amount: amountMl,
+          suggestedAmount: amountMl,
+          notificationId,
+          scheduledAt: nextReminder.toISOString(),
+          createdAt: new Date().toISOString(),
         });
       }
     } catch (error) {
@@ -677,13 +710,17 @@ function refSlot(ref: ScheduledNotificationRef) {
   return ref.scheduleKey || ref.doseKey || ref.scheduledAt;
 }
 
-export function getHydrationScheduleKey(dateTime: Date) {
+export function getHydrationScheduleKey(ownerOrDateTime: CacheOwner | Date, maybeDateTime?: Date) {
+  const owner = maybeDateTime ? ownerOrDateTime as CacheOwner : null;
+  const dateTime = maybeDateTime || ownerOrDateTime as Date;
   const year = dateTime.getFullYear();
   const month = `${dateTime.getMonth() + 1}`.padStart(2, '0');
   const day = `${dateTime.getDate()}`.padStart(2, '0');
   const hour = `${dateTime.getHours()}`.padStart(2, '0');
   const minute = `${dateTime.getMinutes()}`.padStart(2, '0');
-  return `hydration:${year}-${month}-${day}:${hour}:${minute}`;
+  return owner
+    ? `hydration:${getOwnerSchedulePart(owner)}:${year}-${month}-${day}:${hour}:${minute}`
+    : `hydration:${year}-${month}-${day}:${hour}:${minute}`;
 }
 
 function dateParts(dateTime: Date) {
@@ -748,13 +785,17 @@ function getMedicationDoseOccurrences(
   return occurrences.sort((a, b) => a.getTime() - b.getTime());
 }
 
-function getUpcomingHydrationSlots() {
+function getUpcomingHydrationSlots(intervalMinutes = HYDRATION_REMINDER_INTERVAL_MINUTES) {
   const now = new Date();
   const slots: Date[] = [];
-  for (const hour of HYDRATION_HOURS) {
-    const slot = new Date(now);
-    slot.setHours(hour, 0, 0, 0);
-    if (slot > now) slots.push(slot);
+  const first = new Date(now.getTime() + intervalMinutes * 60 * 1000);
+  first.setSeconds(0, 0);
+  const end = new Date(now);
+  end.setHours(23, 59, 59, 999);
+  for (let slot = first; slot <= end && slots.length < HYDRATION_LOOKAHEAD_HOURS; slot = new Date(slot.getTime() + intervalMinutes * 60 * 1000)) {
+    if (slot.getTime() > now.getTime() + MIN_SCHEDULE_BUFFER_MS) {
+      slots.push(new Date(slot));
+    }
   }
   return slots;
 }
@@ -808,7 +849,10 @@ export async function cancelAllMedicationNotifications(ownerArg?: CacheOwner | n
   if (!owner) return;
   const refs = await getScheduledNotificationRefs(owner);
   const medicationRefs = refs.filter((ref) => ref.type === 'medication');
-  await Promise.all(medicationRefs.map((ref) => notificationService.cancelNotification(ref.notificationId)));
+  const Notifications = getNotifications();
+  if (Notifications) {
+    await Promise.all(medicationRefs.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
+  }
   await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'medication'), owner);
 }
 
@@ -836,14 +880,20 @@ export async function cancelHydrationNotifications(ownerArg?: CacheOwner | null)
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
   const refs = await getScheduledNotificationRefs(owner);
-  await Promise.all(refs.filter((ref) => ref.type === 'hydration').map((ref) => notificationService.cancelNotification(ref.notificationId)));
+  const hydrationRefs = refs.filter((ref) => ref.type === 'hydration');
+  const Notifications = getNotifications();
+  if (Notifications) {
+    await Promise.all(hydrationRefs.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
+  }
   await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'hydration'), owner);
 }
 
-export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
+export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | null) {
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
-  const scheduled = await notificationService.getAllScheduledNotifications();
+  const Notifications = getNotifications();
+  if (!Notifications) return;
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const scheduledIds = new Set(scheduled.map((item) => item.identifier));
   const refs = await getScheduledNotificationRefs(owner);
   const seen = new Map<string, ScheduledNotificationRef>();
@@ -855,12 +905,16 @@ export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
     if (existing) toCancel.push(ref);
     else seen.set(key, ref);
   });
-  await Promise.all(toCancel.map((ref) => notificationService.cancelNotification(ref.notificationId)));
+  await Promise.all(toCancel.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
   await writeScheduledNotificationRefs(Array.from(seen.values()), owner);
 }
 
+export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
+  await validateScheduledNotificationRefs(ownerArg);
+}
+
 export async function clearStaleHydrationNotificationRefs(ownerArg?: CacheOwner | null) {
-  await clearStaleNotificationRefs(ownerArg);
+  await validateScheduledNotificationRefs(ownerArg);
 }
 
 export async function isHydrationReminderAlreadyScheduled(ownerArg: CacheOwner | null | undefined, scheduleKey: string) {
@@ -872,7 +926,7 @@ export async function isHydrationReminderAlreadyScheduled(ownerArg: CacheOwner |
 
 function hydrationRefDate(ref: ScheduledNotificationRef) {
   const slot = refSlot(ref);
-  const match = typeof slot === 'string' ? slot.match(/^hydration:(\d{4}-\d{2}-\d{2}):/) : null;
+  const match = typeof slot === 'string' ? slot.match(/^hydration:(?:[^:]+:)?(\d{4}-\d{2}-\d{2}):/) : null;
   if (match?.[1]) return match[1];
   if (ref.scheduledAt) return dateParts(new Date(ref.scheduledAt)).date;
   return null;
@@ -886,15 +940,17 @@ async function removePreviousDayHydrationRefs(owner: CacheOwner) {
 }
 
 export async function rescheduleMedicationNotifications(medications: { id: string; name: string; dosage?: string; times?: string[]; reminder?: boolean }[]) {
-  await clearStaleNotificationRefs();
-  await Promise.all(medications.map((med) => (
-    med.reminder === false
-      ? notificationService.cancelMedicationNotifications(String(med.id))
-      : notificationService.scheduleMedicationNotifications(String(med.id), med.name, med.dosage || '', med.times || [])
-  )));
+  await validateScheduledNotificationRefs();
+  for (const med of medications) {
+    if (med.reminder === false) {
+      await notificationService.cancelMedicationNotifications(String(med.id));
+    } else {
+      await notificationService.scheduleMedicationNotifications(String(med.id), med.name, med.dosage || '', med.times || []);
+    }
+  }
 }
 
-export async function rescheduleHydrationNotifications(goalOrOptions: number | HydrationScheduleOptions = 2000, intervalMinutes = 120, ownerArg?: CacheOwner | null) {
+export async function rescheduleHydrationNotifications(goalOrOptions: number | HydrationScheduleOptions = 2000, intervalMinutes = HYDRATION_REMINDER_INTERVAL_MINUTES, ownerArg?: CacheOwner | null) {
   if (schedulingHydration) return;
   schedulingHydration = true;
   try {
@@ -905,6 +961,7 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
     const currentTotal = Math.max(0, Number(options.currentTotal || 0));
     const owner = await resolveNotificationOwner(options.owner ?? ownerArg);
     if (!owner) return;
+    await validateScheduledNotificationRefs(owner);
     await removePreviousDayHydrationRefs(owner);
     await notificationSettings.initialize();
     const settings = notificationSettings.getSettings();
@@ -914,15 +971,94 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
     }
     const hasPermission = await notificationService.requestPermissions();
     if (!hasPermission) return;
-    const slots = getUpcomingHydrationSlots();
+    const slots = getUpcomingHydrationSlots(intervalMinutes);
     if (slots.length === 0) return;
     const remaining = Math.max(goal - currentTotal, 0);
     const amount = Math.max(150, Math.round(remaining / slots.length));
+    const progressPercent = goal > 0 ? (currentTotal / goal) * 100 : undefined;
     for (const slot of slots) {
-      await notificationService.scheduleHydrationReminder(intervalMinutes, amount, undefined, owner, slot);
+      await notificationService.scheduleHydrationReminder(intervalMinutes, amount, undefined, owner, slot, progressPercent);
     }
   } finally {
     schedulingHydration = false;
   }
+}
+
+export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | null) {
+  try {
+    await notificationService.ensureAndroidChannels();
+    await notificationSettings.initialize();
+    const permission = await notificationService.getPermissionStatus();
+    if (!permission.granted) return;
+
+    const session = await getCachedSession();
+    const owner = await resolveNotificationOwner(ownerArg || getCacheOwner(session?.user ?? null));
+    if (!owner) return;
+    await validateScheduledNotificationRefs(owner);
+
+    const hydrationCache = await readHydrationCache<any>();
+    if (hydrationCache) {
+      const goal = getHydrationGoalFromCache(hydrationCache);
+      await rescheduleHydrationNotifications({
+        currentTotal: getTodayHydrationTotalFromCache(hydrationCache),
+        goal,
+        owner,
+      });
+    }
+
+    const medications = session?.user ? await readMedicationCache<CachedMedicationForNotifications[]>(session.user) : null;
+    for (const med of medications || []) {
+      const medicationId = String(med.local_id || med.id || med.server_id || '');
+      if (!medicationId || !med.name || med.deleted_at) continue;
+      if (med.reminder === false) {
+        await notificationService.cancelMedicationNotifications(medicationId, owner);
+        continue;
+      }
+      await notificationService.scheduleMedicationNotifications(
+        medicationId,
+        med.name,
+        med.dosage || '',
+        med.times || [],
+        undefined,
+        {
+          owner,
+          startDate: med.start_date || null,
+          endDate: med.end_date || null,
+          frequency: med.frequency,
+          daysOfWeek: med.days_of_week || [],
+        }
+      );
+    }
+  } catch (error) {
+    console.log('Notification bootstrap error:', error);
+  }
+}
+
+function getLocalDateKey(date: Date | string) {
+  const value = typeof date === 'string' ? new Date(date) : date;
+  if (Number.isNaN(value.getTime())) return '';
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, '0');
+  const day = `${value.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getHydrationGoalFromCache(cache: any) {
+  const goal = Number(cache?.goal ?? cache?.daily_goal_ml ?? cache?.hydration_goal ?? cache?.target_ml ?? 2000);
+  return Number.isFinite(goal) && goal > 0 ? goal : 2000;
+}
+
+function getTodayHydrationTotalFromCache(cache: any) {
+  const entries = Array.isArray(cache?.entries) ? cache.entries : [];
+  const today = getLocalDateKey(new Date());
+  if (entries.length > 0) {
+    return entries.reduce((sum: number, entry: any) => {
+      const timestamp = entry?.timestamp || entry?.date || entry?.created_at;
+      if (!timestamp || getLocalDateKey(timestamp) !== today) return sum;
+      return sum + Number(entry?.amount_ml || entry?.logged_ml || 0);
+    }, 0);
+  }
+  const cachedTotal = Number(cache?.today_total ?? cache?.total_today ?? cache?.current_total ?? 0);
+  return Number.isFinite(cachedTotal) ? cachedTotal : 0;
 }
 
