@@ -7,8 +7,7 @@ import * as api from '../app/api';
 
 WebBrowser.maybeCompleteAuthSession();
 
-const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || googleClientId;
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
 const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
 const useProxy = process.env.EXPO_PUBLIC_GOOGLE_USE_PROXY === 'true';
 const isExpoGo =
@@ -74,9 +73,12 @@ const selectedClientIdType = useProxy ? 'web' : 'android';
 export const googleRedirectUri = useProxy ? makeExpoGoRedirectUri() : nativeRedirectUri;
 
 if (__DEV__) {
-  console.log('Google Redirect URI:', googleRedirectUri);
-  console.log('[GoogleAuth] proxy mode:', useProxy ? 'enabled' : 'disabled');
+  console.log('[GoogleAuth] platform:', Constants.platform);
+  console.log('[GoogleAuth] redirect URI:', googleRedirectUri);
+  console.log('[GoogleAuth] useProxy:', useProxy);
   console.log('[GoogleAuth] selected client ID type:', selectedClientIdType);
+  console.log('[GoogleAuth] web client ID configured:', Boolean(googleWebClientId));
+  console.log('[GoogleAuth] android client ID configured:', Boolean(googleAndroidClientId));
   console.log('[GoogleAuth] response type:', useProxy ? 'id_token' : 'code with token exchange');
   console.log('[GoogleAuth] backend endpoint: /oauth/google');
   if (isExpoGo && !useProxy) {

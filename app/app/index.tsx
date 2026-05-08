@@ -59,7 +59,8 @@ export default function Index() {
     } catch {
       // Fall through to login if local startup state cannot be read.
     }
-    setStartupState('guestLogin');
+    setStartupState('redirecting');
+    router.replace({ pathname: '/login' } as any);
   }, [router]);
 
   if (startupState === 'checking' || startupState === 'redirecting') {

@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readMedicationCache } from './offlineStorage';
+import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readMedicationCache, writeMedicationCache } from './offlineStorage';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
@@ -117,6 +117,8 @@ export interface ScheduledNotificationRef {
   createdAt?: string;
 }
 
+type NotificationRequestLike = ExpoNotifications.NotificationRequest;
+
 type HydrationScheduleOptions = {
   currentTotal?: number;
   goal?: number;
@@ -127,6 +129,7 @@ type CachedMedicationForNotifications = {
   id?: string | number;
   local_id?: string | number | null;
   server_id?: string | number | null;
+  client_uuid?: string | number | null;
   name?: string;
   dosage?: string;
   times?: string[];
@@ -399,9 +402,11 @@ class NotificationService {
       if (!hasPermission) return;
 
       const refs = await getScheduledNotificationRefs(owner);
+      const scheduled = getNotifications() ? await getNotifications()!.getAllScheduledNotificationsAsync() : [];
+      const scheduledIds = new Set(scheduled.map((item) => item.identifier));
       const existingKeys = new Set(
         refs
-          .filter((ref) => ref.type === 'medication' && ref.medicationId === medicationId)
+          .filter((ref) => ref.type === 'medication' && scheduledIds.has(ref.notificationId))
           .map((ref) => refSlot(ref))
       );
       const now = Date.now();
@@ -412,6 +417,11 @@ class NotificationService {
           if (triggerDate.getTime() <= now + MIN_SCHEDULE_BUFFER_MS) continue;
           const scheduleKey = getMedicationScheduleKey(owner, medicationId, doseTime, offsetMinutes);
           if (existingKeys.has(scheduleKey)) continue;
+          const cleaned = await ensureUniqueScheduledSlot(owner, 'medication', scheduleKey);
+          if (cleaned) {
+            existingKeys.add(scheduleKey);
+            continue;
+          }
 
           const doseTimeIso = doseTime.toISOString();
           const doseTimeLabel = doseTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -457,6 +467,7 @@ class NotificationService {
           }
         }
       }
+      await validateScheduledNotificationRefs(owner);
     } catch (error) {
       console.error('Error scheduling medication notifications:', error);
     } finally {
@@ -489,13 +500,13 @@ class NotificationService {
       if (!hasPermission) return;
       if (nextReminder.getTime() <= Date.now() + MIN_SCHEDULE_BUFFER_MS) return;
       const scheduleKey = getHydrationScheduleKey(cacheOwner, nextReminder);
-      if (await isHydrationReminderAlreadyScheduled(cacheOwner, scheduleKey)) return;
+      if (await ensureUniqueScheduledSlot(cacheOwner, 'hydration', scheduleKey)) return;
       const body = Number.isFinite(progressPercent)
         ? `You are at ${Math.max(0, Math.min(100, Math.round(progressPercent || 0)))}%. Drink water to stay on track with your daily goal.`
         : 'Drink water to stay on track with your daily goal.';
 
       const notificationId = await this.scheduleNotification(
-        'Time to hydrate',
+        'Time to hydrate 💧',
         body,
         nextReminder,
         {
@@ -523,6 +534,7 @@ class NotificationService {
           scheduledAt: nextReminder.toISOString(),
           createdAt: new Date().toISOString(),
         });
+        await validateScheduledNotificationRefs(cacheOwner);
       }
     } catch (error) {
       console.error('Error scheduling hydration reminder:', error);
@@ -710,6 +722,75 @@ function refSlot(ref: ScheduledNotificationRef) {
   return ref.scheduleKey || ref.doseKey || ref.scheduledAt;
 }
 
+function getOwnerSchedulePart(owner: CacheOwner) {
+  return String(owner.owner_id ?? owner.id ?? owner.owner_email ?? owner.email ?? 'unknown');
+}
+
+function normalizeMedicationIdentity(value: string | number | null | undefined) {
+  return String(value ?? '').trim();
+}
+
+function stableMedicationNotificationId(medication: Partial<CachedMedicationForNotifications> & { client_uuid?: string | number | null }) {
+  return normalizeMedicationIdentity(medication.local_id ?? medication.client_uuid ?? medication.id ?? medication.server_id);
+}
+
+function getScheduledRequestData(request: NotificationRequestLike): NotificationData {
+  return (request.content?.data || {}) as NotificationData;
+}
+
+function getScheduledRequestKey(request: NotificationRequestLike) {
+  const data = getScheduledRequestData(request);
+  return typeof data.scheduleKey === 'string' && data.scheduleKey.trim()
+    ? data.scheduleKey
+    : typeof data.doseKey === 'string' && data.doseKey.trim()
+      ? data.doseKey
+      : '';
+}
+
+function getLegacyScheduledRequestKey(request: NotificationRequestLike) {
+  const data = getScheduledRequestData(request);
+  if (data.type !== 'medication' && data.type !== 'hydration') return '';
+  const contentKey = `${data.type}:${request.content?.title || ''}:${request.content?.body || ''}`;
+  const triggerKey = JSON.stringify(request.trigger || {});
+  return `legacy:${contentKey}:${triggerKey}`;
+}
+
+function getSemanticScheduledRequestKey(request: NotificationRequestLike) {
+  const data = getScheduledRequestData(request);
+  if (data.type === 'medication') {
+    const dose = data.doseTime || data.scheduledAt || '';
+    const offset = data.reminderOffsetMinutes ?? '';
+    return `semantic:medication:${request.content?.title || ''}:${request.content?.body || ''}:${dose}:${offset}`;
+  }
+  if (data.type === 'hydration') {
+    return `semantic:hydration:${request.content?.title || ''}:${data.scheduledAt || ''}:${JSON.stringify(request.trigger || {})}`;
+  }
+  return '';
+}
+
+function buildRefFromScheduledRequest(request: NotificationRequestLike, owner: CacheOwner): ScheduledNotificationRef | null {
+  const data = getScheduledRequestData(request);
+  if (data.type !== 'medication' && data.type !== 'hydration') return null;
+  const scheduleKey = getScheduledRequestKey(request);
+  if (!scheduleKey) return null;
+  const scheduledAt = typeof data.scheduledAt === 'string' ? data.scheduledAt : new Date().toISOString();
+  return {
+    ...owner,
+    id: scheduleKey,
+    type: data.type,
+    medicationId: data.medicationId ? String(data.medicationId) : undefined,
+    doseKey: scheduleKey,
+    scheduleKey,
+    doseTime: data.doseTime,
+    reminderOffsetMinutes: data.reminderOffsetMinutes,
+    amount: data.amount,
+    suggestedAmount: data.suggestedAmount,
+    notificationId: request.identifier,
+    scheduledAt,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 export function getHydrationScheduleKey(ownerOrDateTime: CacheOwner | Date, maybeDateTime?: Date) {
   const owner = maybeDateTime ? ownerOrDateTime as CacheOwner : null;
   const dateTime = maybeDateTime || ownerOrDateTime as Date;
@@ -730,10 +811,6 @@ function dateParts(dateTime: Date) {
   const hour = `${dateTime.getHours()}`.padStart(2, '0');
   const minute = `${dateTime.getMinutes()}`.padStart(2, '0');
   return { date: `${year}-${month}-${day}`, time: `${hour}:${minute}` };
-}
-
-function getOwnerSchedulePart(owner: CacheOwner) {
-  return String(owner.owner_id ?? owner.id ?? owner.owner_email ?? owner.email ?? 'unknown');
 }
 
 export function getMedicationScheduleKey(owner: CacheOwner, medicationId: string, doseTime: Date, offsetMinutes: number) {
@@ -764,6 +841,7 @@ function getMedicationDoseOccurrences(
   const end = parseLocalDate(options?.endDate);
   if (end) end.setHours(23, 59, 59, 999);
   const occurrences: Date[] = [];
+  const seenOccurrences = new Set<string>();
 
   for (let dayOffset = 0; dayOffset <= lookaheadDays; dayOffset += 1) {
     const day = new Date(now);
@@ -778,7 +856,12 @@ function getMedicationDoseOccurrences(
       if (Number.isNaN(source.getTime())) return;
       const doseTime = new Date(day);
       doseTime.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), 0);
-      if (doseTime.getTime() > now.getTime()) occurrences.push(doseTime);
+      const parts = dateParts(doseTime);
+      const occurrenceKey = `${parts.date}:${parts.time}`;
+      if (doseTime.getTime() > now.getTime() && !seenOccurrences.has(occurrenceKey)) {
+        seenOccurrences.add(occurrenceKey);
+        occurrences.push(doseTime);
+      }
     });
   }
 
@@ -824,7 +907,16 @@ export async function saveScheduledNotificationRef(ref: ScheduledNotificationRef
   const owner = await resolveNotificationOwner(ref);
   if (!owner) return;
   const refs = await getScheduledNotificationRefs(owner);
-  const next = refs.filter((item) => !(item.type === ref.type && refSlot(item) === refSlot(ref) && item.medicationId === ref.medicationId));
+  const replaced = refs.filter((item) => item.type === ref.type && refSlot(item) === refSlot(ref));
+  const next = refs.filter((item) => !(item.type === ref.type && refSlot(item) === refSlot(ref)));
+  const Notifications = getNotifications();
+  if (Notifications) {
+    await Promise.all(
+      replaced
+        .filter((item) => item.notificationId !== ref.notificationId)
+        .map((item) => Notifications.cancelScheduledNotificationAsync(item.notificationId).catch(() => undefined))
+    );
+  }
   next.push(ref);
   await writeScheduledNotificationRefs(next, owner);
 }
@@ -840,8 +932,8 @@ export async function cancelNotificationByRef(ref: ScheduledNotificationRef) {
   await notificationService.cancelNotification(ref.notificationId);
 }
 
-export async function cancelMedicationNotifications(medicationId: string) {
-  await notificationService.cancelMedicationNotifications(medicationId);
+export async function cancelMedicationNotifications(medicationId: string, ownerArg?: CacheOwner | null) {
+  await notificationService.cancelMedicationNotifications(medicationId, ownerArg);
 }
 
 export async function cancelAllMedicationNotifications(ownerArg?: CacheOwner | null) {
@@ -894,19 +986,110 @@ export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | 
   const Notifications = getNotifications();
   if (!Notifications) return;
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  const scheduledIds = new Set(scheduled.map((item) => item.identifier));
   const refs = await getScheduledNotificationRefs(owner);
-  const seen = new Map<string, ScheduledNotificationRef>();
-  const toCancel: ScheduledNotificationRef[] = [];
+  const scheduledById = new Map(scheduled.map((item) => [item.identifier, item]));
+  const refByNotificationId = new Map(refs.map((ref) => [ref.notificationId, ref]));
+  const groups = new Map<string, { request?: NotificationRequestLike; ref?: ScheduledNotificationRef }[]>();
+
+  const addGroup = (key: string, item: { request?: NotificationRequestLike; ref?: ScheduledNotificationRef }) => {
+    if (!key) return;
+    const current = groups.get(key) || [];
+    current.push(item);
+    groups.set(key, current);
+  };
+
   refs.forEach((ref) => {
-    if (!scheduledIds.has(ref.notificationId)) return;
-    const key = `${ref.type}:${ref.medicationId || ''}:${refSlot(ref)}`;
-    const existing = seen.get(key);
-    if (existing) toCancel.push(ref);
-    else seen.set(key, ref);
+    if (!scheduledById.has(ref.notificationId)) return;
+    addGroup(`${ref.type}:${refSlot(ref)}`, { ref, request: scheduledById.get(ref.notificationId) });
   });
-  await Promise.all(toCancel.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
-  await writeScheduledNotificationRefs(Array.from(seen.values()), owner);
+
+  scheduled.forEach((request) => {
+    const data = getScheduledRequestData(request);
+    if (data.type !== 'medication' && data.type !== 'hydration') return;
+    const existingRef = refByNotificationId.get(request.identifier);
+    if (existingRef) return;
+    const scheduleKey = getScheduledRequestKey(request);
+    if (scheduleKey) {
+      addGroup(`${data.type}:${scheduleKey}`, { request, ref: buildRefFromScheduledRequest(request, owner) || undefined });
+      return;
+    }
+    const legacyKey = getLegacyScheduledRequestKey(request);
+    if (legacyKey) addGroup(legacyKey, { request });
+  });
+
+  const cleanedRefs: ScheduledNotificationRef[] = [];
+  const idsToCancel = new Set<string>();
+
+  groups.forEach((items) => {
+    const keep = items.find((item) => item.ref && item.request) || items.find((item) => item.request) || items[0];
+    const keepId = keep.request?.identifier || keep.ref?.notificationId;
+    items.forEach((item) => {
+      const id = item.request?.identifier || item.ref?.notificationId;
+      if (id && keepId && id !== keepId) idsToCancel.add(id);
+    });
+    const keepRef = keep.ref || (keep.request ? buildRefFromScheduledRequest(keep.request, owner) : null);
+    if (keepRef && keepId) cleanedRefs.push({ ...keepRef, notificationId: keepId });
+  });
+
+  const semanticGroups = new Map<string, NotificationRequestLike[]>();
+  scheduled.forEach((request) => {
+    const key = getSemanticScheduledRequestKey(request);
+    if (!key) return;
+    const items = semanticGroups.get(key) || [];
+    items.push(request);
+    semanticGroups.set(key, items);
+  });
+  semanticGroups.forEach((items) => {
+    const activeItems = items.filter((item) => !idsToCancel.has(item.identifier));
+    if (activeItems.length <= 1) return;
+    const keep = activeItems.find((item) => cleanedRefs.some((ref) => ref.notificationId === item.identifier)) || activeItems[0];
+    activeItems.forEach((item) => {
+      if (item.identifier !== keep.identifier) idsToCancel.add(item.identifier);
+    });
+  });
+
+  await Promise.all(Array.from(idsToCancel).map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  await writeScheduledNotificationRefs(cleanedRefs.filter((ref) => !idsToCancel.has(ref.notificationId)), owner);
+}
+
+async function ensureUniqueScheduledSlot(owner: CacheOwner, type: ScheduledNotificationRef['type'], scheduleKey: string) {
+  const Notifications = getNotifications();
+  if (!Notifications) return false;
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  const refs = await getScheduledNotificationRefs(owner);
+  const matchingRefs = refs.filter((ref) => ref.type === type && refSlot(ref) === scheduleKey);
+  const matchingScheduled = scheduled.filter((request) => {
+    const data = getScheduledRequestData(request);
+    return data.type === type && getScheduledRequestKey(request) === scheduleKey;
+  });
+  const validIds = new Set(scheduled.map((item) => item.identifier));
+  const validRef = matchingRefs.find((ref) => validIds.has(ref.notificationId));
+  const keepRequest = validRef
+    ? matchingScheduled.find((request) => request.identifier === validRef.notificationId)
+    : matchingScheduled[0];
+  const keepId = keepRequest?.identifier || validRef?.notificationId;
+
+  const duplicateIds = new Set<string>();
+  matchingRefs.forEach((ref) => {
+    if (ref.notificationId !== keepId) duplicateIds.add(ref.notificationId);
+  });
+  matchingScheduled.forEach((request) => {
+    if (request.identifier !== keepId) duplicateIds.add(request.identifier);
+  });
+  await Promise.all(Array.from(duplicateIds).map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+
+  if (keepId) {
+    const keepRef = validRef || (keepRequest ? buildRefFromScheduledRequest(keepRequest, owner) : null);
+    const nextRefs = refs.filter((ref) => !(ref.type === type && refSlot(ref) === scheduleKey));
+    if (keepRef) nextRefs.push({ ...keepRef, notificationId: keepId, scheduleKey, doseKey: scheduleKey });
+    await writeScheduledNotificationRefs(nextRefs, owner);
+    return true;
+  }
+
+  if (matchingRefs.length > 0) {
+    await writeScheduledNotificationRefs(refs.filter((ref) => !(ref.type === type && refSlot(ref) === scheduleKey)), owner);
+  }
+  return false;
 }
 
 export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
@@ -915,6 +1098,33 @@ export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
 
 export async function clearStaleHydrationNotificationRefs(ownerArg?: CacheOwner | null) {
   await validateScheduledNotificationRefs(ownerArg);
+}
+
+export async function debugListScheduledNotifications(ownerArg?: CacheOwner | null) {
+  if (!__DEV__) return [];
+  const owner = await resolveNotificationOwner(ownerArg);
+  const Notifications = getNotifications();
+  if (!owner || !Notifications) return [];
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  return scheduled
+    .map((request) => {
+      const data = getScheduledRequestData(request);
+      if (data.type !== 'medication' && data.type !== 'hydration') return null;
+      return {
+        notificationId: request.identifier,
+        type: data.type,
+        scheduleKey: data.scheduleKey || data.doseKey || null,
+        medicationId: data.medicationId || null,
+        hydrationSlot: data.type === 'hydration' ? data.scheduledAt || null : null,
+        medicationName: data.type === 'medication' ? request.content?.title || null : null,
+        offsetMinutes: data.reminderOffsetMinutes ?? null,
+        trigger: request.trigger,
+        title: request.content?.title,
+        body: request.content?.body,
+        data,
+      };
+    })
+    .filter(Boolean);
 }
 
 export async function isHydrationReminderAlreadyScheduled(ownerArg: CacheOwner | null | undefined, scheduleKey: string) {
@@ -939,15 +1149,20 @@ async function removePreviousDayHydrationRefs(owner: CacheOwner) {
   if (next.length !== refs.length) await writeScheduledNotificationRefs(next, owner);
 }
 
-export async function rescheduleMedicationNotifications(medications: { id: string; name: string; dosage?: string; times?: string[]; reminder?: boolean }[]) {
-  await validateScheduledNotificationRefs();
+export async function rescheduleMedicationNotifications(medications: (Partial<CachedMedicationForNotifications> & { id: string; name: string; dosage?: string; times?: string[]; reminder?: boolean; client_uuid?: string | number | null })[]) {
+  const owner = await resolveNotificationOwner();
+  if (!owner) return;
+  await validateScheduledNotificationRefs(owner);
   for (const med of medications) {
+    const medicationId = stableMedicationNotificationId(med);
+    if (!medicationId) continue;
     if (med.reminder === false) {
-      await notificationService.cancelMedicationNotifications(String(med.id));
+      await notificationService.cancelMedicationNotifications(medicationId, owner);
     } else {
-      await notificationService.scheduleMedicationNotifications(String(med.id), med.name, med.dosage || '', med.times || []);
+      await notificationService.scheduleMedicationNotifications(medicationId, med.name, med.dosage || '', med.times || [], undefined, { owner });
     }
   }
+  await validateScheduledNotificationRefs(owner);
 }
 
 export async function rescheduleHydrationNotifications(goalOrOptions: number | HydrationScheduleOptions = 2000, intervalMinutes = HYDRATION_REMINDER_INTERVAL_MINUTES, ownerArg?: CacheOwner | null) {
@@ -979,6 +1194,7 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
     for (const slot of slots) {
       await notificationService.scheduleHydrationReminder(intervalMinutes, amount, undefined, owner, slot, progressPercent);
     }
+    await validateScheduledNotificationRefs(owner);
   } finally {
     schedulingHydration = false;
   }
@@ -1007,8 +1223,17 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
     }
 
     const medications = session?.user ? await readMedicationCache<CachedMedicationForNotifications[]>(session.user) : null;
-    for (const med of medications || []) {
-      const medicationId = String(med.local_id || med.id || med.server_id || '');
+    const normalizedMedications = (medications || []).map((med) => {
+      const existingStableId = normalizeMedicationIdentity(med.local_id ?? med.client_uuid);
+      if (existingStableId) return { ...med, local_id: med.local_id || existingStableId, client_uuid: med.client_uuid || existingStableId };
+      const serverId = normalizeMedicationIdentity(med.server_id ?? med.id);
+      return serverId ? { ...med, local_id: `server_${serverId}`, client_uuid: `server_${serverId}` } : med;
+    });
+    if (session?.user && medications && JSON.stringify(medications) !== JSON.stringify(normalizedMedications)) {
+      await writeMedicationCache(session.user, normalizedMedications);
+    }
+    for (const med of normalizedMedications) {
+      const medicationId = stableMedicationNotificationId(med);
       if (!medicationId || !med.name || med.deleted_at) continue;
       if (med.reminder === false) {
         await notificationService.cancelMedicationNotifications(medicationId, owner);
@@ -1029,6 +1254,7 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
         }
       );
     }
+    await validateScheduledNotificationRefs(owner);
   } catch (error) {
     console.log('Notification bootstrap error:', error);
   }

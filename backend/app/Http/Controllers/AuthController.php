@@ -125,13 +125,14 @@ class AuthController extends Controller
             return response()->json(['message' => 'Google sign-in is not configured.'], 500);
         }
 
-        $googleUser = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
-        if (!$googleUser) {
+        $verification = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
+        if (!$verification['ok']) {
             return response()->json([
                 'message' => 'Google sign-in could not be verified. Please try again.',
-                'debug' => app()->environment('production') ? null : 'Check that GOOGLE_CLIENT_IDS includes the OAuth client ID in the id_token aud claim.',
+                'debug' => app()->environment('production') ? null : $verification['error'],
             ], 401);
         }
+        $googleUser = $verification['user'];
 
         $hasGoogleId = Schema::hasColumn('users', 'google_id');
         $hasAvatarUrl = Schema::hasColumn('users', 'avatar_url');
@@ -193,18 +194,20 @@ class AuthController extends Controller
         return $this->issueToken($user);
     }
 
-    protected function verifyGoogleIdToken(string $idToken, array $clientIds): ?array
+    protected function verifyGoogleIdToken(string $idToken, array $clientIds): array
     {
+        $clientIds = array_values(array_filter(array_map('trim', $clientIds)));
+
         try {
             $response = Http::timeout(5)->get('https://oauth2.googleapis.com/tokeninfo', [
                 'id_token' => $idToken,
             ]);
         } catch (\Throwable) {
-            return null;
+            return ['ok' => false, 'error' => 'invalid token'];
         }
 
         if (!$response->ok()) {
-            return null;
+            return ['ok' => false, 'error' => 'invalid token'];
         }
 
         $payload = $response->json();
@@ -212,26 +215,33 @@ class AuthController extends Controller
         $emailVerified = $payload['email_verified'] ?? false;
 
         if (!in_array(($payload['aud'] ?? null), $clientIds, true)) {
-            return null;
+            return ['ok' => false, 'error' => 'invalid audience'];
         }
 
         if (!in_array($issuer, ['accounts.google.com', 'https://accounts.google.com'], true)) {
-            return null;
+            return ['ok' => false, 'error' => 'invalid token'];
         }
 
-        if (empty($payload['sub']) || empty($payload['email'])) {
-            return null;
+        if (empty($payload['sub'])) {
+            return ['ok' => false, 'error' => 'invalid token'];
+        }
+
+        if (empty($payload['email'])) {
+            return ['ok' => false, 'error' => 'missing email'];
         }
 
         if (!($emailVerified === true || $emailVerified === 'true' || $emailVerified === '1')) {
-            return null;
+            return ['ok' => false, 'error' => 'Google account not verified'];
         }
 
         return [
-            'sub' => $payload['sub'],
-            'email' => $payload['email'],
-            'name' => $payload['name'] ?? null,
-            'picture' => $payload['picture'] ?? null,
+            'ok' => true,
+            'user' => [
+                'sub' => $payload['sub'],
+                'email' => $payload['email'],
+                'name' => $payload['name'] ?? null,
+                'picture' => $payload['picture'] ?? null,
+            ],
         ];
     }
 

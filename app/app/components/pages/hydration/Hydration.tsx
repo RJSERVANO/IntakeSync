@@ -228,7 +228,6 @@ export default function Hydration() {
   const [caffeineLevel, setCaffeineLevel] = useState<BeverageLevel>('none');
   const [beverageNotes, setBeverageNotes] = useState('');
   const [customBeverageName, setCustomBeverageName] = useState('');
-  const [initialGoalStep, setInitialGoalStep] = useState<'choice' | 'custom'>('choice');
   const [deletedEntryKeys, setDeletedEntryKeys] = useState<Set<string>>(new Set());
   const [hasScrolled, setHasScrolled] = useState(false);
   const [calendarExpanded, setCalendarExpanded] = useState(false);
@@ -793,7 +792,8 @@ export default function Hydration() {
     });
   }
 
-  function changeGoal() {
+  function openGoalEditor() {
+    setShowInitialGoalModal(false);
     setCustomGoalInput('');
     setShowGoalEditorModal(true);
   }
@@ -1053,25 +1053,7 @@ export default function Hydration() {
     if (idealGoal) {
       await updateGoal(idealGoal);
       setShowInitialGoalModal(false);
-      setInitialGoalStep('choice');
     }
-  }
-
-  // Handle setting custom goal from initial modal
-  async function handleSetCustomGoal() {
-    const val = parseInt(customGoalInput || '0', 10);
-    if (!val || val <= 0) {
-      showNotice('warning', 'Invalid Input', 'Please enter a positive amount');
-      return;
-    }
-    if (val < 1000 || val > 5000) {
-      showNotice('warning', 'Invalid Range', 'Goal must be between 1000-5000ml');
-      return;
-    }
-    await updateGoal(val);
-    setShowInitialGoalModal(false);
-    setInitialGoalStep('choice');
-    setCustomGoalInput('');
   }
 
   function getMotivationalMessage() {
@@ -1110,7 +1092,7 @@ export default function Hydration() {
           <Text style={styles.headerSubtitle}>{fmt(totalToday())} / {fmt(goal)} ml today</Text>
         </View>
         <TouchableOpacity
-          onPress={() => setShowGoalEditorModal(true)}
+          onPress={openGoalEditor}
           style={styles.headerIconButton}
           activeOpacity={0.8}
           accessibilityLabel="Change hydration goal"
@@ -1661,101 +1643,56 @@ export default function Hydration() {
 
       {/* Initial Hydration Goal Modal - Appears on First Load */}
       <Modal
-        visible={showInitialGoalModal}
+        visible={showInitialGoalModal && !showGoalEditorModal}
         transparent
         animationType="fade"
         onRequestClose={() => {}}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            {initialGoalStep === 'choice' ? (
-              <>
-                <View style={styles.initialModalIcon}>
-                  <Ionicons name="water" size={48} color="#3B82F6" />
-                </View>
-                <Text style={styles.modalTitle}>Set Your Hydration Goal</Text>
-                <Text style={styles.modalMessage}>
-                  Let us get started by setting your daily water intake goal.
+            <View style={styles.initialModalIcon}>
+              <Ionicons name="water" size={48} color="#3B82F6" />
+            </View>
+            <Text style={styles.modalTitle}>Set Your Hydration Goal</Text>
+            <Text style={styles.modalMessage}>
+              Let us get started by setting your daily water intake goal.
+            </Text>
+
+            {idealGoal && (
+              <View style={styles.recommendedGoalBox}>
+                <Text style={styles.recommendedLabel}>Recommended for You:</Text>
+                <Text style={styles.recommendedValue}>{idealGoal} ml</Text>
+                <Text style={styles.recommendedExplain}>
+                  Estimated from your profile details
                 </Text>
-                
-                {idealGoal && (
-                  <View style={styles.recommendedGoalBox}>
-                    <Text style={styles.recommendedLabel}>📊 Recommended for You:</Text>
-                    <Text style={styles.recommendedValue}>{idealGoal} ml</Text>
-                    <Text style={styles.recommendedExplain}>
-                      Estimated from your profile details
-                    </Text>
-                  </View>
-                )}
-                
-                <View style={styles.modalButtons}>
-                  {idealGoal ? (
-                    <>
-                      <TouchableOpacity 
-                        style={styles.modalButtonPrimary}
-                        onPress={handleSetRecommendedGoal}
-                      >
-                        <Text style={styles.modalButtonPrimaryText}>✓ Use Recommended</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity 
-                        style={styles.modalButtonSecondary}
-                        onPress={() => setInitialGoalStep('custom')}
-                      >
-                        <Text style={styles.modalButtonSecondaryText}>Custom Amount</Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : (
-                    <TouchableOpacity 
-                      style={styles.modalButtonPrimary}
-                      onPress={() => setInitialGoalStep('custom')}
-                    >
-                      <Text style={styles.modalButtonPrimaryText}>Set Custom Goal</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </>
-            ) : (
-              <>
-                <View style={styles.initialModalIcon}>
-                  <Ionicons name="create" size={48} color="#F59E0B" />
-                </View>
-                <Text style={styles.modalTitle}>Custom Hydration Goal</Text>
-                <Text style={styles.modalMessage}>
-                  Enter your daily water intake goal in milliliters (1000-5000ml)
-                </Text>
-                
-                <TextInput
-                  placeholder="Enter amount in ml"
-                  keyboardType="numeric"
-                  value={customGoalInput}
-                  onChangeText={setCustomGoalInput}
-                  style={styles.customGoalInput}
-                  placeholderTextColor="#9CA3AF"
-                />
-                
-                <Text style={styles.inputHint}>
-                  💡 Recommended: 2000-3000ml for most adults
-                </Text>
-                
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={styles.modalButtonSecondary}
-                    onPress={() => {
-                      setInitialGoalStep('choice');
-                      setCustomGoalInput('');
-                    }}
-                  >
-                    <Text style={styles.modalButtonSecondaryText}>Back</Text>
-                  </TouchableOpacity>
+              </View>
+            )}
+
+            <View style={styles.modalButtons}>
+              {idealGoal ? (
+                <>
                   <TouchableOpacity 
                     style={styles.modalButtonPrimary}
-                    onPress={handleSetCustomGoal}
+                    onPress={handleSetRecommendedGoal}
                   >
-                    <Text style={styles.modalButtonPrimaryText}>Set Goal</Text>
+                    <Text style={styles.modalButtonPrimaryText}>Use Recommended</Text>
                   </TouchableOpacity>
-                </View>
-              </>
-            )}
+                  <TouchableOpacity 
+                    style={styles.modalButtonSecondary}
+                    onPress={openGoalEditor}
+                  >
+                    <Text style={styles.modalButtonSecondaryText}>Custom Amount</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={styles.modalButtonPrimary}
+                  onPress={openGoalEditor}
+                >
+                  <Text style={styles.modalButtonPrimaryText}>Set Custom Goal</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
       </Modal>
@@ -2098,7 +2035,5 @@ const styles = StyleSheet.create({
   recommendedLabel: { fontSize: 12, color: '#1E40AF', fontWeight: '600', marginBottom: 4 },
   recommendedValue: { fontSize: 28, fontWeight: '900', color: '#1E3A8A', marginBottom: 4 },
   recommendedExplain: { fontSize: 12, color: '#3B82F6', lineHeight: 16 },
-  customGoalInput: { borderWidth: 2, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: '#0F172A', marginBottom: 8 },
-  inputHint: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 16, fontStyle: 'italic' },
 });
 

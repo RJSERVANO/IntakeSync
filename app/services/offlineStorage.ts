@@ -38,8 +38,15 @@ export interface CachedSession {
   lastSuccessfulLoginAt: string;
 }
 
+export function getSessionUserIdentifier(user?: any | null): string | null {
+  const id = user?.id ?? user?.user_id;
+  if (id !== null && id !== undefined && String(id).trim()) return String(id).trim();
+  if (typeof user?.email === 'string' && user.email.trim()) return user.email.trim().toLowerCase();
+  return null;
+}
+
 export function hasValidCachedSession(session: any): session is CachedSession {
-  return typeof session?.token === 'string' && session.token.trim().length > 0;
+  return typeof session?.token === 'string' && session.token.trim().length > 0 && !!getSessionUserIdentifier(session?.user);
 }
 
 export async function getCachedSession(): Promise<CachedSession | null> {

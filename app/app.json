@@ -30,6 +30,7 @@
       "favicon": "./assets/images/foregroundapp.png"
     },
     "plugins": [
+      "./plugins/withAndroidBackupDisabled",
       "expo-router",
       "expo-font",
       [

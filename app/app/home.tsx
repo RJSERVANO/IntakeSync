@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable, Keyboard } from 'react-native';
+import { ActivityIndicator, View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable, Keyboard } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -110,6 +110,15 @@ interface QuickStatus {
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 
+const DEFAULT_QUICK_STATUS: QuickStatus = {
+  medicationsLeft: 0,
+  hydrationPercentage: 0,
+  hydrationTotal: 0,
+  hydrationGoal: 2000,
+  medicationsTaken: 0,
+  medicationsTotal: 0,
+};
+
 const resolveHydrationGoal = (hydrationData: any, fallback = 2000) => {
   const goal = Number(
     hydrationData?.daily_goal_ml ??
@@ -138,18 +147,12 @@ export default function Home() {
   useFontScaleVersion();
   const insets = useSafeAreaInsets();
   const { token, offline } = useLocalSearchParams();
+  const routeToken = Array.isArray(token) ? token[0] : token;
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [quickStatus, setQuickStatus] = useState<QuickStatus>({ 
-    medicationsLeft: 0, 
-    hydrationPercentage: 0,
-    hydrationTotal: 0,
-    hydrationGoal: 2000,
-    medicationsTaken: 0,
-    medicationsTotal: 0
-  });
+  const [quickStatus, setQuickStatus] = useState<QuickStatus>(DEFAULT_QUICK_STATUS);
   const [hydrationEntries, setHydrationEntries] = useState<any[] | null>(null);
   const [selectedAvatar, setSelectedAvatar] = useState<SelectedAvatar | null>(null);
   const [headerElevated, setHeaderElevated] = useState(false);
@@ -182,6 +185,26 @@ export default function Home() {
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const avatarSource = getAvatarSource(selectedAvatar);
 
+  const clearVisibleHomeState = useCallback(() => {
+    setUser(null);
+    setTimeline([]);
+    setQuickStatus(DEFAULT_QUICK_STATUS);
+    setHydrationEntries(null);
+    setSelectedAvatar(null);
+    setWeeklyReport(null);
+    setPatterns([]);
+    setSnoozeSuggestions([]);
+    setUpcomingMedications([]);
+    setNotificationStats(null);
+    setPendingSyncCount(0);
+    setMedicineSuggestions([]);
+    setShowSuggestions(false);
+    setMedicineSearchMessage(null);
+    setSelectedMedicineResult(null);
+    setInlineNotice(null);
+    setSyncing(false);
+  }, []);
+
   const showInlineNotice = useCallback((message: string) => {
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setInlineNotice(message);
@@ -197,6 +220,10 @@ export default function Home() {
   const loadSelectedAvatar = useCallback(async () => {
     try {
       const session = await getCachedSession();
+      if (!hasValidCachedSession(session)) {
+        setSelectedAvatar(null);
+        return;
+      }
       const owner = getCacheOwner(session?.user ?? user);
       const key = owner.owner_id || owner.owner_email ? getUserScopedKey(owner, 'avatar') : null;
       const raw = key ? await AsyncStorage.getItem(key) : null;
@@ -213,7 +240,7 @@ export default function Home() {
   useFocusEffect(
     useCallback(() => {
       loadSelectedAvatar();
-      const syncToken = (token as string | undefined);
+      const syncToken = routeToken;
       (async () => {
         if (syncToken) {
           await processSyncQueue(syncToken, async (item, response) => {
@@ -225,7 +252,7 @@ export default function Home() {
         const summary = await getSyncQueueSummary();
         setPendingSyncCount(summary.pending);
       })();
-    }, [loadSelectedAvatar, token])
+    }, [loadSelectedAvatar, routeToken])
   );
 
   // Debounce medicine search
@@ -319,21 +346,17 @@ export default function Home() {
   }, [quickStatus.hydrationPercentage, previousHydrationPercentage, showInlineNotice, user]);
 
   useEffect(() => {
-    // Safety timeout - always set loading to false after 5 seconds max (very aggressive)
-    const safetyTimeout = setTimeout(() => {
-      console.log('Safety timeout: forcing loading to false after 5 seconds');
-      setLoading(false);
-      // Set default user if still loading
-      setUser((prevUser: any) => prevUser || { name: 'User', email: '', nickname: 'User' });
-    }, 5000);
+    let cancelled = false;
 
     async function load() {
       try {
-        console.log('Home: token=', token);
-        if (!token) {
+        const activeToken = routeToken?.trim() || '';
+        console.log('Home: token=', activeToken);
+        if (!activeToken) {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
-            setUser(cached.user || { name: 'User', email: '', nickname: 'User' });
+            if (cancelled) return;
+            setUser(cached.user);
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cached.user), 'home_summary'), cached.user);
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
@@ -346,11 +369,10 @@ export default function Home() {
               }));
             }
             setOfflineMode(true);
-            clearTimeout(safetyTimeout);
             setLoading(false);
             return;
           }
-          clearTimeout(safetyTimeout);
+          clearVisibleHomeState();
           setLoading(false);
           router.replace({ pathname: '/login' } as any);
           return;
@@ -360,12 +382,14 @@ export default function Home() {
         let backgroundUser: any = null;
         try {
           const cached = await getCachedSession();
-          const sessionUser = cached?.user ?? null;
+          const sessionMatchesRoute = hasValidCachedSession(cached) && cached.token === activeToken;
+          const sessionUser = sessionMatchesRoute ? cached.user : null;
           backgroundUser = sessionUser;
           if (sessionUser) {
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser);
             const hydrationCache = await readHydrationCache<any>();
             const cachedMeds = await readMedicationCache<any[]>(sessionUser);
+            if (cancelled) return;
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
             if (hydrationCache) {
@@ -384,22 +408,27 @@ export default function Home() {
                 medicationsTotal: cachedMeds.length,
               }));
             }
-            setUser(sessionUser || { name: 'User', email: '', nickname: 'User' });
-            clearTimeout(safetyTimeout);
+            setUser(sessionUser);
             setLoading(false);
             setSyncing(true);
           }
           const me = await Promise.race([
-            api.get('/me', token as string, 3000), // 3 second timeout - very short
+            api.get('/me', activeToken, 3000), // 3 second timeout - very short
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
           ]) as any;
           console.log('Home: /me response:', me);
+          if (!hasValidCachedSession({ token: activeToken, user: me })) {
+            await clearCachedSession();
+            clearVisibleHomeState();
+            router.replace({ pathname: '/login' } as any);
+            return;
+          }
           backgroundUser = me;
+          if (cancelled) return;
           setUser(me);
           setOfflineMode(false);
-          await updateCachedUser(me, token as string);
+          await updateCachedUser(me, activeToken);
           // Set loading to false immediately after getting user data
-          clearTimeout(safetyTimeout);
           setLoading(false);
         } catch (meErr: any) {
           console.log('Home: /me error:', meErr);
@@ -407,13 +436,20 @@ export default function Home() {
           // If it's an auth error, redirect to login
           if (api.isAuthError(meErr)) {
             await clearCachedSession();
+            clearVisibleHomeState();
             router.replace({ pathname: '/login' } as any);
             return;
           }
           const cached = await getCachedSession();
-          setUser(cached?.user || { name: 'User', email: '', nickname: 'User' });
+          if (!hasValidCachedSession(cached) || cached.token !== activeToken) {
+            clearVisibleHomeState();
+            setLoading(false);
+            router.replace({ pathname: '/login' } as any);
+            return;
+          }
+          if (cancelled) return;
+          setUser(cached.user);
           setOfflineMode(true);
-          clearTimeout(safetyTimeout);
           setLoading(false);
           // For other errors, continue to show UI with default data
         }
@@ -423,9 +459,9 @@ export default function Home() {
         setTimeout(() => {
           // Load quick status data (non-blocking with timeouts)
           Promise.allSettled([
-            api.get('/hydration', token as string, 3000).catch(() => null),
-            api.get('/medications/upcoming', token as string, 3000).catch(() => null),
-            api.get('/medications/stats', token as string, 3000).catch(() => null),
+            api.get('/hydration', activeToken, 3000).catch(() => null),
+            api.get('/medications/upcoming', activeToken, 3000).catch(() => null),
+            api.get('/medications/stats', activeToken, 3000).catch(() => null),
           ]).then((results) => {
             const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
@@ -476,7 +512,7 @@ export default function Home() {
           });
           
           // Load timeline separately to avoid blocking on errors
-          api.get('/notifications/today-timeline', token as string, 3000)
+          api.get('/notifications/today-timeline', activeToken, 3000)
             .then((timelineData) => {
               if (Array.isArray(timelineData)) {
                 setTimeline(timelineData);
@@ -488,7 +524,7 @@ export default function Home() {
               setTimeline([]);
             });
 
-          api.get('/notifications/stats', token as string, 3000)
+          api.get('/notifications/stats', activeToken, 3000)
             .then((statsData) => {
               setNotificationStats(statsData || null);
             })
@@ -500,10 +536,9 @@ export default function Home() {
       } catch (err: any) {
         console.log('Home load error:', err);
         setSyncing(false);
-        // Set default user immediately to allow UI to render
-        setUser({ name: 'User', email: '', nickname: 'User' });
-        clearTimeout(safetyTimeout);
+        clearVisibleHomeState();
         setLoading(false);
+        router.replace({ pathname: '/login' } as any);
         // Don't show alerts for network/timeout errors
         if (err?.status !== 408 && err?.status !== 0 && err?.status !== undefined) {
           const message = err?.data?.message || err?.data || err?.message || 'Failed to load data';
@@ -514,20 +549,20 @@ export default function Home() {
     load();
     
     return () => {
-      clearTimeout(safetyTimeout);
+      cancelled = true;
     };
-  }, [token, router]);
+  }, [routeToken, router, clearVisibleHomeState]);
 
   // Load Routine Insights for every logged-in user (non-blocking)
   useEffect(() => {
-    if (token) {
+    if (routeToken) {
       const loadInsights = async () => {
         try {
           // Use Promise.allSettled to prevent one failing from blocking others
           const results = await Promise.allSettled([
-            api.get('/insights/weekly-report', token as string),
-            api.get('/insights/patterns', token as string),
-            api.get('/insights/snooze-analysis', token as string),
+            api.get('/insights/weekly-report', routeToken),
+            api.get('/insights/patterns', routeToken),
+            api.get('/insights/snooze-analysis', routeToken),
           ]);
           
           if (results[0].status === 'fulfilled' && results[0].value) {
@@ -545,18 +580,18 @@ export default function Home() {
       };
       loadInsights();
     }
-  }, [token]);
+  }, [routeToken]);
 
   // Real-time hydration data refresh when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      if (!token || loading) return;
+      if (!routeToken || loading) return;
 
       const refreshHydrationData = async () => {
         try {
           const [hydrationRes, statsRes] = await Promise.all([
-            api.get('/hydration', token as string, 3000).catch(() => null),
-            api.get('/medications/stats', token as string, 3000).catch(() => null),
+            api.get('/hydration', routeToken, 3000).catch(() => null),
+            api.get('/medications/stats', routeToken, 3000).catch(() => null),
           ]);
           
           if (hydrationRes) {
@@ -589,19 +624,19 @@ export default function Home() {
       };
       
       refreshHydrationData();
-    }, [token, loading, quickStatus.hydrationGoal])
+    }, [routeToken, loading, quickStatus.hydrationGoal])
   );
 
   // Real-time hydration polling - refresh every 10 seconds
   useEffect(() => {
-    if (!token || loading) return;
+    if (!routeToken || loading) return;
 
     const fetchHydrationStatus = async () => {
       try {
         const results = await Promise.allSettled([
-          api.get('/hydration', token as string, 3000).catch(() => null),
-          api.get('/medications/upcoming', token as string, 3000).catch(() => null),
-          api.get('/medications/stats', token as string, 3000).catch(() => null),
+          api.get('/hydration', routeToken, 3000).catch(() => null),
+          api.get('/medications/upcoming', routeToken, 3000).catch(() => null),
+          api.get('/medications/stats', routeToken, 3000).catch(() => null),
         ]);
         
         const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -637,7 +672,7 @@ export default function Home() {
     const pollInterval = setInterval(fetchHydrationStatus, 10000);
 
     return () => clearInterval(pollInterval);
-  }, [token, loading]);
+  }, [routeToken, loading]);
 
   // Use nickname if available, otherwise fall back to first name
   const displayName = user?.nickname || user?.name?.split(' ')[0] || 'User';
@@ -649,7 +684,7 @@ export default function Home() {
   })();
 
   const handleInsightsPress = () => {
-    router.push({ pathname: '/insights', params: { token } } as any);
+    router.push({ pathname: '/insights', params: { token: routeToken } } as any);
   };
 
   const menuItems = [
@@ -672,8 +707,10 @@ export default function Home() {
         secondaryText: 'Cancel',
         onPrimary: async () => {
           setNoticeModal(null);
+          clearVisibleHomeState();
+          setLoading(true);
           try {
-            await api.post('/logout', {}, token as string);
+            await api.post('/logout', {}, routeToken as string);
           } catch (err) {
             console.log('Logout error:', err);
           }
@@ -685,7 +722,7 @@ export default function Home() {
     }
 
     if ('route' in item && item.route) {
-      router.push({ pathname: item.route, params: { token } } as any);
+      router.push({ pathname: item.route, params: { token: routeToken } } as any);
     } else {
       setNoticeModal({ type: 'info', title: 'Coming Soon', message: `${item.label} will be available soon.` });
     }
@@ -822,7 +859,7 @@ export default function Home() {
   );
 
   const handleNotificationPress = () => {
-    router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any);
+    router.push({ pathname: '/components/pages/notification/Notification', params: { token: routeToken } } as any);
   };
 
   const renderBeverageMini = (
@@ -992,7 +1029,7 @@ export default function Home() {
         notes: entry.notes,
         drink_label: entry.drink_label,
         timestamp: entry.timestamp,
-      }, token as string);
+      }, routeToken as string);
       await markBeverageLogSynced(localId);
       const syncedEntries = newEntries.map((item) => item.local_id === localId ? {
         ...item,
@@ -1014,6 +1051,14 @@ export default function Home() {
       setSyncing(false);
     }
   };
+
+  if (loading || !user) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="small" color="#2563EB" />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1041,7 +1086,7 @@ export default function Home() {
           
           <TouchableOpacity
             style={styles.profileAvatar}
-            onPress={() => router.push({ pathname: '/components/pages/profile/Profile', params: { token } } as any)}
+            onPress={() => router.push({ pathname: '/components/pages/profile/Profile', params: { token: routeToken } } as any)}
             activeOpacity={0.82}
           >
             {renderHeaderAvatar()}
@@ -1177,7 +1222,7 @@ export default function Home() {
           {/* Beverage Intake Card */}
           <Pressable
             style={({ pressed }) => [styles.featureCard, styles.beverageCard, pressed && styles.cardPressed]}
-            onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}
+            onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token: routeToken } } as any)}
           >
             <View style={styles.summaryCardHeader}>
               <View>
@@ -1230,7 +1275,7 @@ export default function Home() {
           {/* Medication Summary Card */}
           <Pressable
             style={({ pressed }) => [styles.featureCard, styles.medicationCard, pressed && styles.cardPressed]}
-            onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}
+            onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token: routeToken } } as any)}
           >
             <View style={styles.summaryCardHeader}>
               <View>
@@ -1251,7 +1296,7 @@ export default function Home() {
                 style={({ pressed }) => [styles.medicationAddChip, pressed && styles.chipPressed]}
                 onPress={(e) => {
                   e.stopPropagation();
-                  router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any);
+                  router.push({ pathname: '/components/pages/medication/Medication', params: { token: routeToken } } as any);
                 }}
               >
                 <Text style={styles.quickActionText} maxFontSizeMultiplier={FONT_SCALE.button} numberOfLines={1}>+ Add</Text>
