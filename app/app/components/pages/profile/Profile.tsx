@@ -7,7 +7,7 @@ import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
 import AvatarSelector, { SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
 import * as api from '../../../api';
-import { clearCachedSession, getCachedSession, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { clearCachedSession, getCachedSession, getUserRemoteAvatarUri, getUserSelectedAvatar, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { formatBackendBirthDateForInput } from '../../../../utils/profileValidation';
@@ -29,13 +29,13 @@ export default function Profile() {
   const [selectedAvatar, setSelectedAvatar] = React.useState<SelectedAvatar | null>(null);
   const insets = useSafeAreaInsets();
   const displayUser = visibleUser || user || { name: 'User', email: '', nickname: 'User' };
-  const googleAvatarUri = displayUser?.picture || displayUser?.photo || displayUser?.photo_url || displayUser?.avatar_url;
+  const googleAvatarUri = getUserRemoteAvatarUri(displayUser);
   const avatarSource = getAvatarSource(selectedAvatar) || (googleAvatarUri ? { uri: googleAvatarUri } : null);
 
   const applyVisibleUser = React.useCallback(async (nextUser: any) => {
     const withAvatar = await mergeLocalAvatarIntoUser(nextUser);
     setVisibleUser(withAvatar);
-    setSelectedAvatar(withAvatar?.selected_avatar || null);
+    setSelectedAvatar(getUserSelectedAvatar(withAvatar));
     return withAvatar;
   }, []);
 
@@ -131,7 +131,7 @@ export default function Profile() {
     const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
     setCachedToken(session?.token);
     setVisibleUser(cachedVisible);
-    setSelectedAvatar(cachedVisible?.selected_avatar || null);
+    setSelectedAvatar(getUserSelectedAvatar(cachedVisible));
     if (showSync) setSyncing(Boolean(token));
   }, [token]);
 
@@ -145,13 +145,13 @@ export default function Profile() {
       const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
       if (!mounted) return;
       setVisibleUser(cachedVisible);
-      setSelectedAvatar(cachedVisible?.selected_avatar || null);
+      setSelectedAvatar(getUserSelectedAvatar(cachedVisible));
       setSyncing(Boolean(token));
       if (user) {
         const freshUser = await mergeLocalAvatarIntoUser(user);
         if (!mounted) return;
         setVisibleUser(freshUser);
-        setSelectedAvatar(freshUser?.selected_avatar || null);
+        setSelectedAvatar(getUserSelectedAvatar(freshUser));
         await writeProfileCache(freshUser, freshUser);
       }
       setSyncing(false);
@@ -173,7 +173,7 @@ export default function Profile() {
           const freshUser = await mergeLocalAvatarIntoUser(user);
           if (!active) return;
           setVisibleUser(freshUser);
-          setSelectedAvatar(freshUser?.selected_avatar || null);
+          setSelectedAvatar(getUserSelectedAvatar(freshUser));
           await writeProfileCache(freshUser, freshUser);
         })
         .catch(() => undefined)

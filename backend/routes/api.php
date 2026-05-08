@@ -25,7 +25,7 @@ Route::get('medicines/{id}', [OtcMedicineController::class, 'show']);
 
 // Admin endpoints (no auth required for admin panel)
 Route::get('hydration/stats', [App\Http\Controllers\HydrationController::class, 'stats']);
-Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getAdminStats']);
+Route::get('admin/medications/stats', [App\Http\Controllers\MedicationController::class, 'getAdminStats']);
 Route::get('admin/notifications/stats', [App\Http\Controllers\NotificationController::class, 'getAdminStats']);
 Route::get('admin/dashboard-stats', [App\Http\Controllers\AdminController::class, 'getDashboardStats']);
 
@@ -46,6 +46,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('medications', [App\Http\Controllers\MedicationController::class, 'store']);
     Route::get('medications/upcoming', [App\Http\Controllers\MedicationController::class, 'getUpcoming']);
     Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getStats']);
+    Route::get('medications/history/all', [App\Http\Controllers\MedicationController::class, 'allHistory']);
     Route::get('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'show']);
     Route::put('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'update']);
     Route::delete('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'destroy']);

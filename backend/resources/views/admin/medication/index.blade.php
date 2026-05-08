@@ -241,7 +241,7 @@
         try {
             const timeRange = document.getElementById('timeRange').value;
             console.log('Loading medication data for', timeRange, 'days');
-            const response = await fetch(`/api/medications/stats?days=${timeRange}`);
+            const response = await fetch(`/api/admin/medications/stats?days=${timeRange}`);
             console.log('Response status:', response.status);
             const data = await response.json();
             console.log('Received medication data:', data);

@@ -15,12 +15,14 @@ export default function useUser(token?: string) {
     try {
       if (!token) {
         const cached = await getCachedSession();
-        setUser(cached?.user ?? null);
+        const cachedUser = await mergeLocalAvatarIntoUser(cached?.user ?? null);
+        setUser(cachedUser);
         return;
       }
       const cached = await getCachedSession();
       if (cached?.user) {
-        setUser(cached.user);
+        const cachedUser = await mergeLocalAvatarIntoUser(cached.user);
+        setUser(cachedUser);
         setLoading(false);
       }
       const data: any = await api.get('/me', token as string);
@@ -41,7 +43,8 @@ export default function useUser(token?: string) {
         return;
       }
       const cached = await getCachedSession();
-      setUser(cached?.user ?? null);
+      const cachedUser = await mergeLocalAvatarIntoUser(cached?.user ?? null);
+      setUser(cachedUser);
     } finally {
       setLoading(false);
     }

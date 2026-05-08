@@ -138,6 +138,10 @@ type CachedMedicationForNotifications = {
   end_date?: string | null;
   frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
   days_of_week?: number[];
+  created_at?: string | null;
+  local_created_at?: string | null;
+  schedule_created_at?: string | null;
+  client_created_at?: string | null;
   deleted_at?: string | null;
 };
 
@@ -853,6 +857,8 @@ function getMedicationDoseOccurrences(
   const start = parseLocalDate(options?.startDate);
   const end = parseLocalDate(options?.endDate);
   const scheduleCreatedAt = options?.scheduleCreatedAt ? new Date(options.scheduleCreatedAt).getTime() : null;
+  const scheduleCreatedMinute = scheduleCreatedAt ? new Date(scheduleCreatedAt) : null;
+  if (scheduleCreatedMinute) scheduleCreatedMinute.setSeconds(0, 0);
   if (end) end.setHours(23, 59, 59, 999);
   const occurrences: Date[] = [];
   const seenOccurrences = new Set<string>();
@@ -863,14 +869,15 @@ function getMedicationDoseOccurrences(
     day.setHours(0, 0, 0, 0);
     if (start && day.getTime() < start.getTime()) continue;
     if (end && day.getTime() > end.getTime()) continue;
-    if (options?.frequency === 'weekly' && options.daysOfWeek?.length && !options.daysOfWeek.includes(day.getDay())) continue;
+    if ((options?.frequency === 'weekly' || options?.frequency === 'custom') && options.daysOfWeek?.length && !options.daysOfWeek.includes(day.getDay())) continue;
+    if (options?.frequency === 'monthly' && start && day.getDate() !== start.getDate()) continue;
 
     times.forEach((timeStr) => {
       const source = new Date(timeStr);
       if (Number.isNaN(source.getTime())) return;
       const doseTime = new Date(day);
       doseTime.setHours(source.getHours(), source.getMinutes(), source.getSeconds(), 0);
-      if (scheduleCreatedAt && doseTime.getTime() < scheduleCreatedAt) return;
+      if (scheduleCreatedMinute && doseTime.getTime() < scheduleCreatedMinute.getTime()) return;
       const parts = dateParts(doseTime);
       const occurrenceKey = `${parts.date}:${parts.time}`;
       if (doseTime.getTime() > now.getTime() && !seenOccurrences.has(occurrenceKey)) {
@@ -1174,7 +1181,21 @@ export async function rescheduleMedicationNotifications(medications: (Partial<Ca
     if (med.reminder === false) {
       await notificationService.cancelMedicationNotifications(medicationId, owner);
     } else {
-      await notificationService.scheduleMedicationNotifications(medicationId, med.name, med.dosage || '', med.times || [], undefined, { owner });
+      await notificationService.scheduleMedicationNotifications(
+        medicationId,
+        med.name,
+        med.dosage || '',
+        med.times || [],
+        undefined,
+        {
+          owner,
+          startDate: med.start_date || null,
+          endDate: med.end_date || null,
+          frequency: med.frequency,
+          daysOfWeek: med.days_of_week || [],
+          scheduleCreatedAt: med.schedule_created_at || med.client_created_at || med.local_created_at || med.created_at || null,
+        }
+      );
     }
   }
   await validateScheduledNotificationRefs(owner);
@@ -1270,6 +1291,7 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
           endDate: med.end_date || null,
           frequency: med.frequency,
           daysOfWeek: med.days_of_week || [],
+          scheduleCreatedAt: med.schedule_created_at || med.client_created_at || med.local_created_at || med.created_at || null,
         }
       );
     }

@@ -46,7 +46,8 @@ class MedicationController extends Controller
         unset($data['local_id']);
 
         if ($clientUuid) {
-            $existing = Medication::where('user_id', $user->id)
+            $existing = Medication::withTrashed()
+                ->where('user_id', $user->id)
                 ->where('client_uuid', $clientUuid)
                 ->first();
 
@@ -130,6 +131,10 @@ class MedicationController extends Controller
         ]);
 
         $this->authorizeForUser($user, 'delete', $medication);
+        $medication->history()->whereNull('medication_name_snapshot')->update([
+            'medication_name_snapshot' => $medication->name,
+            'dosage_snapshot' => $medication->dosage,
+        ]);
         $medication->delete();
         Log::debug('MedicationController::destroy success', ['medication_id' => $medication->id]);
         return response()->json(null, 204);
@@ -217,6 +222,8 @@ class MedicationController extends Controller
             'time' => $scheduledTime,
             'scheduled_time' => $scheduledTime,
             'taken_time' => $data['status'] === 'completed' ? now() : null,
+            'medication_name_snapshot' => $medication->name,
+            'dosage_snapshot' => $medication->dosage,
         ]);
 
         Log::info('History entry created', [
@@ -242,6 +249,20 @@ class MedicationController extends Controller
             'count' => $historyEntries->count(),
         ]);
         return response()->json($historyEntries);
+    }
+
+    public function allHistory(Request $request)
+    {
+        $user = $request->user();
+        $historyEntries = $this->dedupeMedicationHistory(
+            MedicationHistory::with('medication')
+                ->where('user_id', $user->id)
+                ->orderBy('time', 'desc')
+                ->orderBy('created_at', 'desc')
+                ->get()
+        )->map(fn($entry) => $this->serializeHistoryEntry($entry));
+
+        return response()->json($historyEntries->values());
     }
 
     public function getUpcoming(Request $request)
@@ -302,9 +323,9 @@ class MedicationController extends Controller
         $this->autoMarkMissedMedications($user);
 
         $stats = [
-            'total_medications' => $medications->count(),
+            'total_medications' => Medication::withTrashed()->where('user_id', $user->id)->count(),
             'active_medications' => $medications
-                ->filter(fn($med) => $med->reminder && $med->active !== false && (!$med->end_date || Carbon::parse($med->end_date)->endOfDay()->gte(now())))
+                ->filter(fn($med) => $med->active !== false && (!$med->end_date || Carbon::parse($med->end_date)->endOfDay()->gte(now())))
                 ->count(),
             'total_reminders_today' => 0,
             'completed_today' => 0,
@@ -317,16 +338,44 @@ class MedicationController extends Controller
 
         foreach ($medications as $med) {
             $stats['total_reminders_today'] += count($this->scheduledDosesForDate($med, $now));
-
-            $history = $this->dedupeMedicationHistory($med->history()
-                ->whereBetween('time', [$todayStart, $todayEnd])
-                ->get());
-
-            $stats['completed_today'] += $history->where('status', 'completed')->count();
-            $stats['missed_today'] += $history->whereIn('status', ['skipped', 'missed'])->count();
         }
 
+        $todayHistory = $this->dedupeMedicationHistory(
+            MedicationHistory::where('user_id', $user->id)
+                ->whereBetween('time', [$todayStart, $todayEnd])
+                ->get()
+        );
+
+        $stats['completed_today'] = $todayHistory->where('status', 'completed')->count();
+        $stats['missed_today'] = $todayHistory->whereIn('status', ['skipped', 'missed'])->count();
+
         return response()->json($stats);
+    }
+
+    private function serializeHistoryEntry(MedicationHistory $entry): array
+    {
+        $medication = $entry->medication;
+        return [
+            'id' => $entry->id,
+            'medication_id' => $entry->medication_id,
+            'user_id' => $entry->user_id,
+            'client_uuid' => $entry->client_uuid,
+            'status' => $entry->status,
+            'time' => optional($entry->time)->toISOString(),
+            'scheduled_time' => optional($entry->scheduled_time ?: $entry->time)->toISOString(),
+            'taken_time' => optional($entry->taken_time)->toISOString(),
+            'logged_at' => optional($entry->taken_time ?: $entry->created_at)->toISOString(),
+            'created_at' => optional($entry->created_at)->toISOString(),
+            'updated_at' => optional($entry->updated_at)->toISOString(),
+            'medication_name_snapshot' => $entry->medication_name_snapshot ?: $medication?->name,
+            'dosage_snapshot' => $entry->dosage_snapshot ?: $medication?->dosage,
+            'medication' => $medication ? [
+                'id' => $medication->id,
+                'name' => $medication->name,
+                'dosage' => $medication->dosage,
+                'deleted_at' => optional($medication->deleted_at)->toISOString(),
+            ] : null,
+        ];
     }
 
     private function normalizeDoseTime(Carbon $date): Carbon
@@ -458,6 +507,8 @@ class MedicationController extends Controller
                     'time' => $scheduled,
                     'scheduled_time' => $scheduled,
                     'taken_time' => null,
+                    'medication_name_snapshot' => $medication->name,
+                    'dosage_snapshot' => $medication->dosage,
                 ]);
             }
         }

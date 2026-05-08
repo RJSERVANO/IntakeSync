@@ -20,6 +20,8 @@ class MedicationHistory extends Model
         'taken_time',
         'time',
         'client_uuid',
+        'medication_name_snapshot',
+        'dosage_snapshot',
     ];
 
     protected $casts = [
@@ -30,7 +32,7 @@ class MedicationHistory extends Model
 
     public function medication()
     {
-        return $this->belongsTo(Medication::class);
+        return $this->belongsTo(Medication::class)->withTrashed();
     }
 
     public function user()

@@ -10,8 +10,11 @@ import {
   filterOtcReferenceMedicines,
   getCacheOwner,
   getCachedSession,
+  getUserRemoteAvatarUri,
+  getUserSelectedAvatar,
   getUserScopedKey,
   hasValidCachedSession,
+  mergeLocalAvatarIntoUser,
   readHydrationCache,
   readMedicationCache,
   readOwnedOfflineCache,
@@ -183,7 +186,15 @@ export default function Home() {
   const goalCompletionShownRef = useRef(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insightsScore = weeklyReport?.overall_score ?? 0;
-  const avatarSource = getAvatarSource(selectedAvatar);
+  const remoteAvatarUri = getUserRemoteAvatarUri(user);
+  const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
+
+  const applyVisibleUser = useCallback(async (nextUser: any) => {
+    const withAvatar = await mergeLocalAvatarIntoUser(nextUser);
+    setUser(withAvatar);
+    setSelectedAvatar(getUserSelectedAvatar(withAvatar));
+    return withAvatar;
+  }, []);
 
   const clearVisibleHomeState = useCallback(() => {
     setUser(null);
@@ -217,29 +228,27 @@ export default function Home() {
     };
   }, []);
 
-  const loadSelectedAvatar = useCallback(async () => {
+  const loadHeaderUserFromCache = useCallback(async () => {
     try {
       const session = await getCachedSession();
       if (!hasValidCachedSession(session)) {
         setSelectedAvatar(null);
         return;
       }
-      const owner = getCacheOwner(session?.user ?? user);
-      const key = owner.owner_id || owner.owner_email ? getUserScopedKey(owner, 'avatar') : null;
-      const raw = key ? await AsyncStorage.getItem(key) : null;
-      setSelectedAvatar(raw ? JSON.parse(raw) : null);
+      if (routeToken && session.token !== routeToken) return;
+      await applyVisibleUser(session.user);
     } catch (err) {
       console.log('Home avatar load error:', err);
     }
-  }, [user]);
+  }, [applyVisibleUser, routeToken]);
 
   useEffect(() => {
-    loadSelectedAvatar();
-  }, [loadSelectedAvatar]);
+    loadHeaderUserFromCache();
+  }, [loadHeaderUserFromCache]);
 
   useFocusEffect(
     useCallback(() => {
-      loadSelectedAvatar();
+      loadHeaderUserFromCache();
       const syncToken = routeToken;
       (async () => {
         if (syncToken) {
@@ -252,7 +261,7 @@ export default function Home() {
         const summary = await getSyncQueueSummary();
         setPendingSyncCount(summary.pending);
       })();
-    }, [loadSelectedAvatar, routeToken])
+    }, [loadHeaderUserFromCache, routeToken])
   );
 
   // Debounce medicine search
@@ -356,11 +365,11 @@ export default function Home() {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
             if (cancelled) return;
-            setUser(cached.user);
-            const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cached.user), 'home_summary'), cached.user);
+            const cachedUser = await applyVisibleUser(cached.user);
+            const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cachedUser), 'home_summary'), cachedUser);
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
-            const cachedMeds = await readMedicationCache<any[]>(cached.user);
+            const cachedMeds = await readMedicationCache<any[]>(cachedUser);
             if (cachedMeds) {
               setQuickStatus((prev) => ({
                 ...prev,
@@ -383,7 +392,7 @@ export default function Home() {
         try {
           const cached = await getCachedSession();
           const sessionMatchesRoute = hasValidCachedSession(cached) && cached.token === activeToken;
-          const sessionUser = sessionMatchesRoute ? cached.user : null;
+          const sessionUser = sessionMatchesRoute ? await mergeLocalAvatarIntoUser(cached.user) : null;
           backgroundUser = sessionUser;
           if (sessionUser) {
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser);
@@ -408,7 +417,7 @@ export default function Home() {
                 medicationsTotal: cachedMeds.length,
               }));
             }
-            setUser(sessionUser);
+            await applyVisibleUser(sessionUser);
             setLoading(false);
             setSyncing(true);
           }
@@ -423,9 +432,10 @@ export default function Home() {
             router.replace({ pathname: '/login' } as any);
             return;
           }
-          backgroundUser = me;
+          const visibleMe = await mergeLocalAvatarIntoUser(me);
+          backgroundUser = visibleMe;
           if (cancelled) return;
-          setUser(me);
+          await applyVisibleUser(visibleMe);
           setOfflineMode(false);
           await updateCachedUser(me, activeToken);
           // Set loading to false immediately after getting user data
@@ -448,7 +458,7 @@ export default function Home() {
             return;
           }
           if (cancelled) return;
-          setUser(cached.user);
+          await applyVisibleUser(cached.user);
           setOfflineMode(true);
           setLoading(false);
           // For other errors, continue to show UI with default data
@@ -551,7 +561,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [routeToken, router, clearVisibleHomeState]);
+  }, [routeToken, router, clearVisibleHomeState, applyVisibleUser]);
 
   // Load Routine Insights for every logged-in user (non-blocking)
   useEffect(() => {

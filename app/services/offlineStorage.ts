@@ -601,6 +601,36 @@ export async function mergeLocalAvatarIntoUser<T = any>(user: T): Promise<T> {
   return { ...(user as any), ...avatarDataToUserFields(avatar) };
 }
 
+export function getUserSelectedAvatar(user?: any | null) {
+  const selected = user?.selected_avatar;
+  if (selected?.type === 'custom' && typeof selected.uri === 'string' && selected.uri.trim()) {
+    return { type: 'custom' as const, uri: selected.uri.trim() };
+  }
+  if (selected?.type === 'preset' && typeof selected.id === 'string' && selected.id.trim()) {
+    return { type: 'preset' as const, id: selected.id.trim() };
+  }
+  if (typeof user?.avatar_uri === 'string' && user.avatar_uri.trim()) {
+    return { type: 'custom' as const, uri: user.avatar_uri.trim() };
+  }
+  if (typeof user?.avatar_key === 'string' && user.avatar_key.trim()) {
+    return { type: 'preset' as const, id: user.avatar_key.trim() };
+  }
+  return null;
+}
+
+export function getUserRemoteAvatarUri(user?: any | null): string | null {
+  const fields = [
+    user?.avatar_url,
+    user?.avatar,
+    user?.photo,
+    user?.picture,
+    user?.profile_photo_url,
+    user?.photo_url,
+  ];
+  const uri = fields.find((value) => typeof value === 'string' && value.trim());
+  return typeof uri === 'string' ? uri.trim() : null;
+}
+
 export function getMedicationCacheKey(userIdOrEmail?: string | number | null) {
   return getUserScopedKey({ id: userIdOrEmail || null }, 'medications');
 }
