@@ -11,14 +11,16 @@ import {
   getCachedSession,
   getMedicationClearedHistoryCacheKey,
   getUserCacheIdentifier,
+  readDeletedMedicationTombstones,
   readMedicationCache,
   readMedicationHistoryCache,
   searchCachedOtcMedicinesWithMeta,
+  writeDeletedMedicationTombstones,
   writeMedicationCache,
   writeMedicationHistoryCache,
   writeOtcSearchCache,
 } from '../../../../services/offlineStorage';
-import { enqueueSyncAction, getPendingSyncActions, mergeLatestPendingAction, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
+import { enqueueSyncAction, getPendingSyncActions, mergeLatestPendingAction, removePendingMedicationActionsForDelete, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
 import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService } from '../../../../services/notificationService';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -258,6 +260,31 @@ function getMedicationIdentityValues(med: Partial<MedicationItem> | any) {
     .map((value) => String(value));
 }
 
+function sameMedication(a: Partial<MedicationItem> | any, b: Partial<MedicationItem> | any) {
+  const aIdentities = getMedicationIdentityValues(a);
+  const bIdentities = new Set(getMedicationIdentityValues(b));
+  if (aIdentities.length > 0 && bIdentities.size > 0) {
+    return aIdentities.some((identity) => bIdentities.has(identity));
+  }
+
+  const aName = typeof a?.name === 'string' ? a.name.trim().toLowerCase() : '';
+  const bName = typeof b?.name === 'string' ? b.name.trim().toLowerCase() : '';
+  const aDosage = typeof a?.dosage === 'string' ? a.dosage.trim().toLowerCase() : '';
+  const bDosage = typeof b?.dosage === 'string' ? b.dosage.trim().toLowerCase() : '';
+  const aTimes = Array.isArray(a?.times) ? a.times.map(String).sort().join('|') : '';
+  const bTimes = Array.isArray(b?.times) ? b.times.map(String).sort().join('|') : '';
+  return !!aName && aName === bName && aDosage === bDosage && aTimes === bTimes;
+}
+
+function medicationMatchesDeletedKeys(med: Partial<MedicationItem> | any, deletedKeys: Set<string>) {
+  return getMedicationIdentityValues(med).some((identity) => deletedKeys.has(identity));
+}
+
+function filterDeletedMedicationRecords<T extends Partial<MedicationItem> | any>(items: T[], deletedKeys: Set<string>) {
+  if (deletedKeys.size === 0) return items;
+  return items.filter((item) => !medicationMatchesDeletedKeys(item, deletedKeys));
+}
+
 function mergeMedicationRecord(existing: MedicationItem | undefined, incoming: MedicationItem): MedicationItem {
   if (!existing) return incoming;
   return {
@@ -303,13 +330,17 @@ function mergeMedicationLists(...lists: MedicationItem[][]) {
   return merged;
 }
 
-function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingActions: any[]) {
+function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingActions: any[], deletedKeys = new Set<string>()) {
   const pendingCreates: MedicationItem[] = [];
-  let nextMeds = [...baseMeds];
+  let nextMeds = filterDeletedMedicationRecords([...baseMeds], deletedKeys);
 
   pendingActions.forEach((item) => {
     const payload = item?.payload || {};
+    const actionIdentities = new Set(getMedicationIdentityValues({ ...payload, local_id: item.local_id }));
+    const isDeleted = Array.from(actionIdentities).some((identity) => deletedKeys.has(identity));
+
     if (item.action_type === 'CREATE_MEDICATION') {
+      if (isDeleted) return;
       pendingCreates.push({
         ...payload,
         id: String(payload.id || item.local_id),
@@ -319,6 +350,7 @@ function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingAction
     }
 
     if (item.action_type === 'UPDATE_MEDICATION') {
+      if (isDeleted) return;
       const updated = {
         ...payload,
         id: String(payload.id || payload.server_id || item.local_id),
@@ -334,7 +366,7 @@ function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingAction
     }
   });
 
-  return mergeMedicationLists(nextMeds, pendingCreates);
+  return filterDeletedMedicationRecords(mergeMedicationLists(nextMeds, pendingCreates), deletedKeys);
 }
 
 function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
@@ -435,6 +467,7 @@ export default function Medication() {
   const [medicationCacheLoaded, setMedicationCacheLoaded] = useState(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const missedDoseSyncKeys = useRef<Set<string>>(new Set());
+  const deletedMedicationKeysRef = useRef<Set<string>>(new Set());
   const hydratingMedicationCacheRef = useRef(false);
   const medicationOwnerRef = useRef<string | null>(null);
   const medicationCacheOwner = getUserCacheIdentifier(currentUser);
@@ -605,19 +638,46 @@ export default function Medication() {
     if (!user || hydratingMedicationCacheRef.current) return;
     if (!medicationCacheLoaded && nextMeds.length === 0 && !allowEmpty) return;
     if (nextMeds.length === 0 && !allowEmpty) return;
-    await writeMedicationCache(user, nextMeds);
+    await writeMedicationCache(user, filterDeletedMedicationRecords(nextMeds, deletedMedicationKeysRef.current));
+  }
+
+  async function addDeletedMedicationTombstones(user: any, med: MedicationItem) {
+    const next = new Set([
+      ...Array.from(deletedMedicationKeysRef.current),
+      ...getMedicationIdentityValues(med),
+    ]);
+    deletedMedicationKeysRef.current = next;
+    if (user) await writeDeletedMedicationTombstones(user, Array.from(next));
+    return next;
+  }
+
+  async function removeDeletedMedicationTombstones(user: any, med: MedicationItem) {
+    const keysToRemove = new Set(getMedicationIdentityValues(med));
+    const next = new Set(Array.from(deletedMedicationKeysRef.current).filter((key) => !keysToRemove.has(key)));
+    deletedMedicationKeysRef.current = next;
+    if (user) await writeDeletedMedicationTombstones(user, Array.from(next));
+  }
+
+  function filterDeletedUpcomingItems(items: any[], deletedKeys = deletedMedicationKeysRef.current) {
+    if (deletedKeys.size === 0) return items || [];
+    return (items || []).filter((item) => {
+      const med = item?.medication || item;
+      return !medicationMatchesDeletedKeys(med, deletedKeys);
+    });
   }
 
   function mergeServerWithLocalMedications(serverMeds: any[], localMeds: MedicationItem[], pendingActions: any[] = []) {
     const localColorById = new Map<string, string | undefined>();
+    const deletedKeys = deletedMedicationKeysRef.current;
+    const safeLocalMeds = filterDeletedMedicationRecords(localMeds, deletedKeys);
     localMeds.forEach((med) => {
       getMedicationIdentityValues(med).forEach((identity) => localColorById.set(identity, med.color));
     });
-    const normalizedServerMeds = (serverMeds || []).map((med) => normalizeMedication(
+    const normalizedServerMeds = filterDeletedMedicationRecords((serverMeds || []).map((med) => normalizeMedication(
       med,
       localColorById.get(String(med.id)) || localColorById.get(String(med.server_id)) || localColorById.get(String(med.local_id))
-    ));
-    return applyPendingMedicationActions(mergeMedicationLists(localMeds, normalizedServerMeds), pendingActions);
+    )), deletedKeys);
+    return applyPendingMedicationActions(mergeMedicationLists(safeLocalMeds, normalizedServerMeds), pendingActions, deletedKeys);
   }
 
   useEffect(() => {
@@ -635,7 +695,12 @@ export default function Medication() {
         const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
         const localHistory: HistoryEntry[] = sessionUser ? (await readMedicationHistoryCache<HistoryEntry[]>(sessionUser)) || [] : [];
         const pendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
-        const cachedMeds = applyPendingMedicationActions(localMeds, pendingActions);
+        const deletedKeys = new Set(sessionUser ? await readDeletedMedicationTombstones(sessionUser) : []);
+        pendingActions
+          .filter((item) => item.action_type === 'DELETE_MEDICATION')
+          .forEach((item) => getMedicationIdentityValues({ ...(item.payload || {}), local_id: item.local_id }).forEach((identity) => deletedKeys.add(identity)));
+        deletedMedicationKeysRef.current = deletedKeys;
+        const cachedMeds = applyPendingMedicationActions(localMeds, pendingActions, deletedKeys);
         if (!mounted) return;
         setMeds(cachedMeds);
         setHistory(dedupeMedicationHistory(localHistory));
@@ -647,7 +712,7 @@ export default function Medication() {
         if (!token) {
           setOfflineMode(true);
           if (cachedMeds.length > 0 && sessionUser && cachedMeds.length !== localMeds.length) {
-            await writeMedicationCacheIfSafe(sessionUser, cachedMeds);
+            await writeMedicationCacheIfSafe(sessionUser, cachedMeds, true);
           }
           showInlineNotice('Offline mode - showing cached medications.');
           return;
@@ -667,7 +732,7 @@ export default function Medication() {
           // Load everything in parallel for better performance
           const [historyResults, statsData, upcomingData] = await Promise.allSettled([
             // Load all medication histories in parallel
-            Promise.all((serverMeds || []).map(async (m) => {
+            Promise.all(filterDeletedMedicationRecords(serverMeds || [], deletedMedicationKeysRef.current).map(async (m) => {
               try {
                 const h = await api.get(`/medications/${m.id}/history`, token as string);
                 return (h || []).map((hh: any) => normalizeHistoryEntry(hh, m.id.toString()));
@@ -728,7 +793,7 @@ export default function Medication() {
           // Set upcoming
           if (upcomingData.status === 'fulfilled') {
             if (!mounted) return;
-            setUpcoming(upcomingData.value || []);
+            setUpcoming(filterDeletedUpcomingItems(upcomingData.value || [], deletedKeys));
           }
           setOfflineMode(false);
         }
@@ -1137,7 +1202,7 @@ export default function Medication() {
         completed_today: 0,
         missed_today: 0
       });
-      setUpcoming(upcomingData || []);
+      setUpcoming(filterDeletedUpcomingItems(upcomingData || []));
     } catch (e) {
       console.log('Failed to reload stats/upcoming:', e);
     }
@@ -1151,8 +1216,9 @@ export default function Medication() {
         // Load histories
         (async () => {
           const serverMeds: any[] = await api.get('/medications', token as string);
-          console.log('Loading history for', serverMeds.length, 'medications');
-          return Promise.all((serverMeds || []).map(async (m) => {
+          const activeServerMeds = filterDeletedMedicationRecords(serverMeds || [], deletedMedicationKeysRef.current);
+          console.log('Loading history for', activeServerMeds.length, 'medications');
+          return Promise.all(activeServerMeds.map(async (m) => {
             try {
               const h = await api.get(`/medications/${m.id}/history`, token as string);
               console.log(`Medication ${m.id} (${m.name}): ${h.length} history entries`);
@@ -1200,7 +1266,7 @@ export default function Medication() {
 
       // Update upcoming
       if (upcomingData.status === 'fulfilled') {
-        setUpcoming(upcomingData.value || []);
+        setUpcoming(filterDeletedUpcomingItems(upcomingData.value || []));
       }
     } catch (e) {
       console.log('Failed to reload all data:', e);
@@ -1210,7 +1276,7 @@ export default function Medication() {
   function deleteMedication(id: string) {
     const actionKey = `delete:${id}`;
     if (busyActions[actionKey]) return;
-    const medToDelete = meds.find((med) => med.id === id);
+    const medToDelete = meds.find((med) => String(med.id) === String(id));
     if (!medToDelete) return;
 
     setDeleteTarget(medToDelete);
@@ -1223,19 +1289,31 @@ export default function Medication() {
     if (busyActions[actionKey]) return;
 
     setActionBusy(actionKey, true);
-    await cancelMedicationNotifications(String(deleteTarget.local_id || deleteTarget.id));
-
     const previous = meds;
     const previousHistory = history;
-    const newMeds = previous.filter((m) => m.id !== id);
-    const newHistory = previousHistory.filter((entry) => entry.medId.toString() !== id.toString());
+    const previousUpcoming = upcoming;
+    const tombstones = await addDeletedMedicationTombstones(currentUser, deleteTarget);
+    const deleteIdentities = getMedicationIdentityValues(deleteTarget);
+    await Promise.all(getMedicationNotificationIds(deleteTarget).map((notificationId) => cancelMedicationNotifications(notificationId)));
+
+    const newMeds = previous.filter((m) => !sameMedication(m, deleteTarget) && !medicationMatchesDeletedKeys(m, tombstones));
+    const newHistory = previousHistory;
+    const newUpcoming = filterDeletedUpcomingItems(previousUpcoming, tombstones);
     setMeds(newMeds);
+    setUpcoming(newUpcoming);
+    if (editing && sameMedication(editing, deleteTarget)) {
+      setEditing(null);
+      setModalVisible(false);
+    }
+    setDeleteTarget(null);
     setHistory(dedupeMedicationHistory(newHistory));
     try {
       await writeMedicationCache(currentUser, newMeds);
       await writeMedicationHistoryCache(currentUser, newHistory);
     } catch {
+      await removeDeletedMedicationTombstones(currentUser, deleteTarget);
       setMeds(previous);
+      setUpcoming(previousUpcoming);
       setHistory(previousHistory);
       showNotice('error', 'Delete Failed', 'Could not update local storage. Please try again.');
       setActionBusy(actionKey, false);
@@ -1243,29 +1321,30 @@ export default function Medication() {
     }
 
     let deleted = true;
-    if (deleteTarget.sync_status === 'pending' && !deleteTarget.server_id) {
+    const pendingCleanup = await removePendingMedicationActionsForDelete(deleteIdentities);
+    if ((deleteTarget.sync_status === 'pending' && !deleteTarget.server_id) || pendingCleanup.removedCreate) {
       await removePendingActionByLocalId(deleteTarget.local_id || deleteTarget.id);
     } else if (token) {
-      deleted = await performServerDelete(id, previous, newMeds, previousHistory);
+      deleted = await performServerDelete(deleteTarget, previous, newMeds, previousHistory, previousUpcoming);
     } else {
       await enqueueSyncAction({
         action_type: 'DELETE_MEDICATION',
         method: 'DELETE',
         local_id: deleteTarget.local_id || id,
-        payload: { id, server_id: deleteTarget.server_id || id },
+        payload: { ...deleteTarget, id, server_id: deleteTarget.server_id || id },
       });
       showInlineNotice('Medication deleted offline. Will sync when connected.');
     }
 
     if (deleted) {
-      setDeleteTarget(null);
       showInlineNotice('Medication deleted');
     }
     setActionBusy(actionKey, false);
   }
 
   // Helper: attempt server deletion and provide richer error handling / retry
-  async function performServerDelete(id: string, previous: MedicationItem[], newMeds: MedicationItem[], previousHistory: HistoryEntry[]): Promise<boolean> {
+  async function performServerDelete(deleteMed: MedicationItem, previous: MedicationItem[], newMeds: MedicationItem[], previousHistory: HistoryEntry[], previousUpcoming: any[]): Promise<boolean> {
+    const id = String(deleteMed.server_id || deleteMed.id);
     try {
       await api.del(`/medications/${id}`, token as string);
       // Reload all data from server after successful deletion
@@ -1291,8 +1370,8 @@ export default function Medication() {
         await enqueueSyncAction({
           action_type: 'DELETE_MEDICATION',
           method: 'DELETE',
-          local_id: previous.find((m) => m.id === id)?.local_id || id,
-          payload: { id, server_id: previous.find((m) => m.id === id)?.server_id || id },
+          local_id: deleteMed.local_id || deleteMed.id,
+          payload: { ...deleteMed, id: deleteMed.id, server_id: deleteMed.server_id || deleteMed.id },
         });
         setOfflineMode(true);
         showInlineNotice('Medication deleted offline. Will sync when connected.');
@@ -1300,7 +1379,9 @@ export default function Medication() {
       }
 
       // For other errors, revert and notify user
+      await removeDeletedMedicationTombstones(currentUser, deleteMed);
       setMeds(previous);
+      setUpcoming(previousUpcoming);
       setHistory(previousHistory);
       try { await writeMedicationCache(currentUser, previous); } catch {}
       try { await writeMedicationHistoryCache(currentUser, previousHistory); } catch {}
@@ -1319,9 +1400,11 @@ export default function Medication() {
         secondaryText: 'OK',
         onPrimary: async () => {
           setNoticeModal(null);
+          await addDeletedMedicationTombstones(currentUser, deleteMed);
           setMeds(newMeds);
+          setUpcoming(filterDeletedUpcomingItems(previousUpcoming));
           try { await writeMedicationCache(currentUser, newMeds); } catch {}
-          const retried = await performServerDelete(id, previous, newMeds, previousHistory);
+          const retried = await performServerDelete(deleteMed, previous, newMeds, previousHistory, previousUpcoming);
           if (retried) setDeleteTarget(null);
         },
       });
@@ -1788,6 +1871,13 @@ export default function Medication() {
     return String(med.local_id || med.id);
   }
 
+  function getMedicationNotificationIds(med: MedicationItem) {
+    const ids = new Set(getMedicationIdentityValues(med));
+    if (med.server_id) ids.add(`server_${med.server_id}`);
+    if (med.id) ids.add(`server_${med.id}`);
+    return Array.from(ids);
+  }
+
   function getMedicationOwnerKey() {
     return String(currentUser?.id ?? currentUser?.user_id ?? currentUser?.email ?? 'local');
   }
@@ -2106,7 +2196,8 @@ export default function Medication() {
     upcoming.forEach((item) => {
       const rawMed = item?.medication;
       if (!rawMed) return;
-      const matchedMed = meds.find((m) => m.id.toString() === rawMed.id?.toString());
+      if (medicationMatchesDeletedKeys(rawMed, deletedMedicationKeysRef.current)) return;
+      const matchedMed = meds.find((m) => sameMedication(m, rawMed));
       const med = normalizeMedication(rawMed, matchedMed?.color);
       const nextReminder = item?.next_reminder;
       if (!nextReminder || new Date(nextReminder).getTime() <= now.getTime()) return;

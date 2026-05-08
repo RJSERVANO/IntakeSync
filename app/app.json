@@ -31,6 +31,7 @@
     },
     "plugins": [
       "./plugins/withAndroidBackupDisabled",
+      "@react-native-google-signin/google-signin",
       "expo-router",
       "expo-font",
       [

@@ -1,149 +1,67 @@
 import { useCallback } from 'react';
-import * as AuthSession from 'expo-auth-session';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as api from '../app/api';
 
-WebBrowser.maybeCompleteAuthSession();
-
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
-const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
-const useProxy = process.env.EXPO_PUBLIC_GOOGLE_USE_PROXY === 'true';
 const isExpoGo =
   (Constants as any).appOwnership === 'expo' ||
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-const expoProjectFullName =
-  process.env.EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME ||
-  (Constants.expoConfig as any)?.originalFullName ||
-  (Constants.expoConfig?.owner && Constants.expoConfig?.slug
-    ? `@${Constants.expoConfig.owner}/${Constants.expoConfig.slug}`
-    : '');
-const nativeRedirectUri = AuthSession.makeRedirectUri({
-  scheme: 'intakesync',
-});
+const useNativeGoogleSignIn = Platform.OS === 'android' && !isExpoGo;
+let nativeGoogleSignInConfigured = false;
 
-type ExpoProxyRedirectOptions = {
-  useProxy: true;
-  native?: string;
-  scheme?: string;
-  path?: string;
-  preferLocalhost?: boolean;
-  isTripleSlashed?: boolean;
-  queryParams?: Record<string, string | undefined>;
-};
+export const googleRedirectUri = 'native-google-signin';
 
-function makeExpoGoRedirectUri() {
-  if (expoProjectFullName) {
-    return `https://auth.expo.io/${expoProjectFullName}`;
-  }
+function configureNativeGoogleSignIn() {
+  if (nativeGoogleSignInConfigured) return;
 
-  const redirectUri = AuthSession.makeRedirectUri({
-    useProxy: true,
-  } as ExpoProxyRedirectOptions);
-
-  if (redirectUri.startsWith('https://auth.expo.io/')) {
-    return redirectUri;
-  }
-
-  return redirectUri;
+  GoogleSignin.configure({
+    webClientId: googleWebClientId,
+    scopes: ['profile', 'email'],
+    offlineAccess: false,
+  });
+  nativeGoogleSignInConfigured = true;
 }
-
-function getRedirectErrorMessage(error?: string | null, description?: string | null) {
-  if (error === 'invalid_request') {
-    return 'Google sign-in could not start. Check the Google OAuth redirect URI and try again.';
-  }
-
-  if (error === 'redirect_uri_mismatch' || description?.includes('redirect_uri_mismatch')) {
-    return 'Google sign-in redirect URI does not match Google Cloud. Copy the logged redirect URI into your Web OAuth client.';
-  }
-
-  return description || 'Google sign-in was cancelled or could not be completed.';
-}
-
-function getFallbackExpoGoRedirectUri() {
-  return `https://auth.expo.io/${expoProjectFullName}`;
-}
-
-const selectedClientId = useProxy ? googleWebClientId : googleAndroidClientId;
-const selectedClientIdType = useProxy ? 'web' : 'android';
-
-// Expo Go fallback uses the AuthSession proxy redirect with the Web OAuth client.
-// APK builds use the configured app scheme redirect with the Android OAuth client.
-export const googleRedirectUri = useProxy ? makeExpoGoRedirectUri() : nativeRedirectUri;
 
 if (__DEV__) {
-  console.log('[GoogleAuth] platform:', Constants.platform);
-  console.log('[GoogleAuth] redirect URI:', googleRedirectUri);
-  console.log('[GoogleAuth] useProxy:', useProxy);
-  console.log('[GoogleAuth] selected client ID type:', selectedClientIdType);
+  console.log('[GoogleAuth] platform:', Platform.OS);
+  console.log('[GoogleAuth] mode:', useNativeGoogleSignIn ? 'native' : 'unsupported-native-only');
+  console.log('[GoogleAuth] redirect URI:', 'not used');
   console.log('[GoogleAuth] web client ID configured:', Boolean(googleWebClientId));
-  console.log('[GoogleAuth] android client ID configured:', Boolean(googleAndroidClientId));
-  console.log('[GoogleAuth] response type:', useProxy ? 'id_token' : 'code with token exchange');
-  console.log('[GoogleAuth] backend endpoint: /oauth/google');
-  if (isExpoGo && !useProxy) {
-    console.warn('[GoogleAuth] Expo Go is running with proxy disabled. APK mode is primary, but Expo Go Google sign-in may require EXPO_PUBLIC_GOOGLE_USE_PROXY=true.');
-  }
-}
-if (useProxy && !expoProjectFullName) {
-  console.warn(
-    '[GoogleAuth] Proxy mode was requested but Expo project full name is missing. ' +
-      'Set EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME=@your-expo-username/IntakeSync so the logged redirect URI can be registered in Google Cloud.'
-  );
-}
-if (useProxy && expoProjectFullName && googleRedirectUri !== getFallbackExpoGoRedirectUri()) {
-  console.log('[GoogleAuth] Expo proxy redirect fallback:', getFallbackExpoGoRedirectUri());
+  console.log('[GoogleAuth] backend endpoint:', '/oauth/google');
 }
 
 export function useGoogleAuth() {
-  const [, , promptAsync] = Google.useAuthRequest({
-    clientId: selectedClientId || 'missing-google-client-id',
-    webClientId: googleWebClientId || undefined,
-    androidClientId: googleAndroidClientId || undefined,
-    redirectUri: googleRedirectUri,
-    responseType: useProxy ? 'id_token' : undefined,
-    scopes: ['openid', 'profile', 'email'],
-    selectAccount: true,
-    shouldAutoExchangeCode: !useProxy,
-  });
-
   const signInWithGoogle = useCallback(async () => {
-    if (!selectedClientId) {
-      throw new Error(useProxy ? 'Google web client ID is missing.' : 'Google Android client ID is missing.');
+    if (!useNativeGoogleSignIn) {
+      throw new Error('Google Sign-In for this build requires the Android APK or a development build.');
     }
 
-    const result = await promptAsync();
-    if (result.type === 'error') {
-      throw new Error(
-        getRedirectErrorMessage(
-          result.params?.error || result.errorCode,
-          result.params?.error_description || result.error?.description
-        )
-      );
+    if (!googleWebClientId) {
+      throw new Error('Google web client ID is missing.');
     }
 
-    if (result.type !== 'success') {
+    configureNativeGoogleSignIn();
+    await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    const result = await GoogleSignin.signIn();
+
+    if (result.type === 'cancelled') {
       return null;
     }
 
-    if (result.params?.error) {
-      throw new Error(
-        getRedirectErrorMessage(result.params.error, result.params.error_description)
-      );
-    }
-
-    const idToken = result.params?.id_token || (result.authentication as any)?.idToken;
+    const idToken = result.data.idToken;
     if (__DEV__) {
-      console.log('[GoogleAuth] response type:', result.type);
-      console.log('[GoogleAuth] id_token exists:', Boolean(idToken));
+      console.log('[GoogleAuth] native idToken exists:', Boolean(idToken));
       console.log('[GoogleAuth] backend endpoint called:', '/oauth/google');
     }
+
     if (!idToken) {
-      throw new Error('Google did not return an identity token.');
+      throw new Error('Google did not return an ID token. Please try again.');
     }
 
     return api.post('/oauth/google', { id_token: idToken });
-  }, [promptAsync]);
+  }, []);
 
   return { signInWithGoogle, googleRedirectUri };
 }

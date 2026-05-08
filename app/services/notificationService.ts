@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readMedicationCache, writeMedicationCache } from './offlineStorage';
+import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, writeMedicationCache } from './offlineStorage';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
@@ -734,6 +734,17 @@ function stableMedicationNotificationId(medication: Partial<CachedMedicationForN
   return normalizeMedicationIdentity(medication.local_id ?? medication.client_uuid ?? medication.id ?? medication.server_id);
 }
 
+function cachedMedicationIdentityValues(medication: Partial<CachedMedicationForNotifications> & { client_uuid?: string | number | null }) {
+  return [
+    medication.local_id,
+    medication.client_uuid,
+    medication.id,
+    medication.server_id,
+  ]
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((value) => String(value));
+}
+
 function getScheduledRequestData(request: NotificationRequestLike): NotificationData {
   return (request.content?.data || {}) as NotificationData;
 }
@@ -1223,7 +1234,11 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
     }
 
     const medications = session?.user ? await readMedicationCache<CachedMedicationForNotifications[]>(session.user) : null;
-    const normalizedMedications = (medications || []).map((med) => {
+    const deletedMedicationKeys = new Set(session?.user ? await readDeletedMedicationTombstones(session.user) : []);
+    const activeMedications = (medications || []).filter((med) => (
+      !cachedMedicationIdentityValues(med).some((identity) => deletedMedicationKeys.has(identity))
+    ));
+    const normalizedMedications = activeMedications.map((med) => {
       const existingStableId = normalizeMedicationIdentity(med.local_id ?? med.client_uuid);
       if (existingStableId) return { ...med, local_id: med.local_id || existingStableId, client_uuid: med.client_uuid || existingStableId };
       const serverId = normalizeMedicationIdentity(med.server_id ?? med.id);

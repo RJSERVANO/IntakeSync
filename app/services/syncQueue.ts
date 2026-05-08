@@ -306,6 +306,37 @@ export async function removePendingActionByLocalId(local_id: string) {
   await writeQueue(queue.filter((item) => item.local_id !== local_id || item.status === 'synced'));
 }
 
+function syncMedicationIdentityValues(item: SyncQueueItem) {
+  const payload = item.payload || {};
+  return [
+    item.local_id,
+    payload.id,
+    payload.server_id,
+    payload.local_id,
+    payload.client_uuid,
+    payload.medication_id,
+  ]
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map((value) => String(value));
+}
+
+export async function removePendingMedicationActionsForDelete(identities: string[]) {
+  const identitySet = new Set(identities.filter(Boolean).map(String));
+  if (identitySet.size === 0) return { removedCreate: false };
+
+  const queue = await readQueue();
+  let removedCreate = false;
+  const next = queue.filter((item) => {
+    if (!['CREATE_MEDICATION', 'UPDATE_MEDICATION'].includes(item.action_type) || item.status === 'synced') return true;
+    const matches = syncMedicationIdentityValues(item).some((identity) => identitySet.has(identity));
+    if (matches && item.action_type === 'CREATE_MEDICATION') removedCreate = true;
+    return !matches;
+  });
+
+  if (next.length !== queue.length) await writeQueue(next);
+  return { removedCreate };
+}
+
 export async function getSyncQueueSummary() {
   const queue = await readQueue();
   const session = await getCachedSession();

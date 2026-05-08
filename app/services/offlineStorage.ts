@@ -509,6 +509,10 @@ export function getMedicationClearedHistoryCacheKey(userIdOrEmail?: string | num
   return getUserScopedKey({ id: userIdOrEmail || null }, 'medication_history_cleared_keys');
 }
 
+export function getDeletedMedicationTombstonesCacheKey(userIdOrEmail?: string | number | null) {
+  return getUserScopedKey({ id: userIdOrEmail || null }, 'deleted_medication_tombstones');
+}
+
 export function cacheOwnerMatches(payload: any, user?: any | null) {
   const owner = getCacheOwner(user);
   if (!payload || !owner) return false;
@@ -562,6 +566,23 @@ export async function writeMedicationHistoryCache(user: any | null | undefined, 
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationHistoryCacheKey(ownerKey), user, data);
+}
+
+export async function readDeletedMedicationTombstones(user?: any | null): Promise<string[]> {
+  const ownerKey = getUserCacheIdentifier(user);
+  if (!ownerKey) return [];
+  const payload = await readOwnedOfflineCache<string[]>(getDeletedMedicationTombstonesCacheKey(ownerKey), user);
+  return Array.isArray(payload?.data) ? payload.data.filter(Boolean).map(String) : [];
+}
+
+export async function writeDeletedMedicationTombstones(user: any | null | undefined, keys: string[]): Promise<void> {
+  const ownerKey = getUserCacheIdentifier(user);
+  if (!ownerKey) return;
+  await writeOwnedOfflineCache(
+    getDeletedMedicationTombstonesCacheKey(ownerKey),
+    user,
+    Array.from(new Set(keys.filter(Boolean).map(String))),
+  );
 }
 
 export async function readHydrationCache<T = any>(): Promise<T | null> {
