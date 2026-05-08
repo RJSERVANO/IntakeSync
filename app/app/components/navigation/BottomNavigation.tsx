@@ -3,6 +3,7 @@ import { Platform, View, Text, TouchableOpacity, StyleSheet } from 'react-native
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, usePathname, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FONT_SCALE } from '../../../utils/fontScaling';
 
 interface BottomNavigationProps {
   currentRoute?: string;
@@ -110,7 +111,12 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
           <Text style={[
             styles.navLabel,
             activeTab === item.key && styles.activeNavLabel
-          ]}>
+          ]}
+            maxFontSizeMultiplier={FONT_SCALE.nav}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
             {item.label}
           </Text>
         </TouchableOpacity>
@@ -165,6 +171,8 @@ const styles = StyleSheet.create({
     color: '#A0B4E0',
     marginTop: 2,
     fontWeight: '600',
+    maxWidth: '100%',
+    textAlign: 'center',
   },
   activeNavLabel: {
     color: '#FFFFFF',

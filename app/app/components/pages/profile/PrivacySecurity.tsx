@@ -8,6 +8,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import ScreenHeader from '../../common/ScreenHeader';
 import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
 import { getCachedSession } from '../../../../services/offlineStorage';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 
 export default function PrivacySecurity() {
   const { token } = useLocalSearchParams();
@@ -137,8 +138,8 @@ export default function PrivacySecurity() {
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.modalTitle}>Change Password</Text>
-                <Text style={styles.modalSubtitle}>Use uppercase, lowercase, a number, and a symbol.</Text>
+                <Text style={styles.modalTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Change Password</Text>
+                <Text style={styles.modalSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>Use uppercase, lowercase, a number, and a symbol.</Text>
               </View>
               <TouchableOpacity style={styles.closeButton} onPress={closeModal} disabled={loading}>
                 <Ionicons name="close" size={22} color="#475569" />
@@ -153,10 +154,10 @@ export default function PrivacySecurity() {
 
               <View style={styles.modalActions}>
                 <TouchableOpacity style={styles.cancelButton} onPress={closeModal} disabled={loading}>
-                  <Text style={styles.cancelText}>Cancel</Text>
+                  <Text style={styles.cancelText} maxFontSizeMultiplier={FONT_SCALE.button}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.saveButton, loading && styles.saveButtonDisabled]} onPress={handleChangePassword} disabled={loading}>
-                  <Text style={styles.saveButtonText}>{loading ? 'Updating...' : 'Update Password'}</Text>
+                  <Text style={styles.saveButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>{loading ? 'Updating...' : 'Update Password'}</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -183,8 +184,8 @@ function InfoCard({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap;
         <Ionicons name={icon} size={22} color="#2563EB" />
       </View>
       <View style={styles.infoContent}>
-        <Text style={styles.infoTitle}>{title}</Text>
-        <Text style={styles.infoText}>{text}</Text>
+        <Text style={styles.infoTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.infoText} maxFontSizeMultiplier={FONT_SCALE.description}>{text}</Text>
       </View>
     </View>
   );
@@ -197,8 +198,8 @@ function InfoRow({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap; 
         <Ionicons name={icon} size={20} color="#2563EB" />
       </View>
       <View style={styles.settingContent}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        <Text style={styles.settingDescription}>{text}</Text>
+        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.settingDescription} maxFontSizeMultiplier={FONT_SCALE.description}>{text}</Text>
       </View>
     </View>
   );
@@ -209,7 +210,7 @@ function PasswordField({ label, value, onChangeText }: { label: string; value: s
 
   return (
     <View style={styles.formGroup}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.label} maxFontSizeMultiplier={FONT_SCALE.description}>{label}</Text>
       <View style={styles.passwordInputRow}>
         <TextInput
           style={styles.passwordInput}
@@ -220,6 +221,8 @@ function PasswordField({ label, value, onChangeText }: { label: string; value: s
           onChangeText={onChangeText}
           autoCapitalize="none"
           autoCorrect={false}
+          textAlignVertical="center"
+          maxFontSizeMultiplier={FONT_SCALE.input}
         />
         <TouchableOpacity
           style={styles.passwordToggle}
@@ -244,7 +247,7 @@ function PasswordChecklist({ password }: { password: string }) {
             size={15}
             color={rule.valid ? '#10B981' : '#94A3B8'}
           />
-          <Text style={[styles.passwordRuleText, rule.valid && styles.passwordRuleTextValid]}>
+          <Text style={[styles.passwordRuleText, rule.valid && styles.passwordRuleTextValid]} maxFontSizeMultiplier={FONT_SCALE.description}>
             {rule.label}
           </Text>
         </View>
@@ -451,6 +454,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 48,
   },
   passwordInput: {
     flex: 1,
@@ -459,6 +463,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 15,
     color: '#0F172A',
+    minHeight: 48,
   },
   passwordToggle: {
     width: 44,
@@ -480,17 +485,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   passwordRuleText: {
     color: '#64748B',
     fontSize: 12,
     fontWeight: '700',
+    flex: 1,
+    minWidth: 0,
   },
   passwordRuleTextValid: {
     color: '#047857',
   },
   modalActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginTop: 4,
   },

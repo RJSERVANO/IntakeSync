@@ -9,6 +9,7 @@ import { notificationSettings } from '../services/notificationSettings';
 import { enqueueSyncAction, mergeLatestPendingAction } from '../services/syncQueue';
 import { getCachedSession, readSettingsCache, updateCachedUser, writeSettingsCache } from '../services/offlineStorage';
 import InlineNotice from './components/common/InlineNotice';
+import { FONT_SCALE } from '../utils/fontScaling';
 
 const { height } = Dimensions.get('window');
 
@@ -390,14 +391,16 @@ export default function Onboarding() {
                 value={data.nickname || ''}
                 onChangeText={(text) => updateData('nickname', text)}
                 autoFocus
+                textAlignVertical="center"
+                maxFontSizeMultiplier={FONT_SCALE.input}
               />
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip for now</Text>
+                <Text style={styles.skipButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Skip for now</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
+                <Text style={styles.nextButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Next</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -415,7 +418,7 @@ export default function Onboarding() {
             </Text>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <View style={styles.buttonWithIcon}>
-                <Text style={styles.primaryButtonText}>Let&apos;s go</Text>
+                <Text style={styles.primaryButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Let&apos;s go</Text>
                 <Ionicons name="hand-right-outline" size={20} color="#fff" style={{ marginLeft: 8 }} />
               </View>
             </TouchableOpacity>
@@ -452,7 +455,7 @@ export default function Onboarding() {
                     <Text style={[styles.climateText, data.climate === option.value && styles.climateTextSelected]}>
                       {option.label}
                     </Text>
-                    <Text style={styles.optionHint}>{option.hint}</Text>
+                    <Text style={styles.optionHint} maxFontSizeMultiplier={FONT_SCALE.description}>{option.hint}</Text>
                   </View>
                   {data.climate === option.value && <Ionicons name="checkmark-circle" size={22} color="#2563EB" />}
                 </TouchableOpacity>
@@ -460,10 +463,10 @@ export default function Onboarding() {
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
+                <Text style={styles.skipButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Skip</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
+                <Text style={styles.nextButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Next</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -477,7 +480,7 @@ export default function Onboarding() {
                 <Ionicons name="fitness-outline" size={18} color="#2563EB" />
               </View>
               <Text style={styles.infoText}>
-                We’ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
+                Weâ€™ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>How active are you most weeks?</Text>
@@ -514,17 +517,17 @@ export default function Onboarding() {
                   </>
                 ) : (
                   <Text style={styles.goalPreviewText}>
-                    We’ll use a standard 2,000 ml goal for now. You can adjust it later.
+                    Weâ€™ll use a standard 2,000 ml goal for now. You can adjust it later.
                   </Text>
                 )}
               </View>
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
+                <Text style={styles.skipButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Skip</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
+                <Text style={styles.nextButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Next</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -538,7 +541,7 @@ export default function Onboarding() {
                 <Ionicons name="analytics-outline" size={18} color="#2563EB" />
               </View>
               <Text style={styles.infoText}>
-                We’ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
+                Weâ€™ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>How much do you weigh?</Text>
@@ -554,9 +557,11 @@ export default function Onboarding() {
                 keyboardType="numeric"
                 returnKeyType="done"
                 maxLength={6}
+                textAlignVertical="center"
+                maxFontSizeMultiplier={FONT_SCALE.input}
               />
               <View style={styles.weightUnitBadge}>
-                <Text style={styles.weightUnitBadgeText}>{selectedWeightUnit}</Text>
+                <Text style={styles.weightUnitBadgeText} maxFontSizeMultiplier={FONT_SCALE.chip}>{selectedWeightUnit}</Text>
               </View>
             </View>
             <View style={styles.unitSelector}>
@@ -572,7 +577,7 @@ export default function Onboarding() {
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={nextStep} style={[styles.nextButton, styles.fullWidthButton]}>
-                <Text style={styles.nextButtonText}>Next</Text>
+                <Text style={styles.nextButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>Next</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -601,7 +606,7 @@ export default function Onboarding() {
               style={styles.primaryButton}
               disabled={loading}
             >
-              <Text style={styles.primaryButtonText}>{loading ? 'Requesting...' : 'Enable Reminders'}</Text>
+              <Text style={styles.primaryButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>{loading ? 'Requesting...' : 'Enable Reminders'}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={skipNotifications} style={styles.secondaryButton} disabled={loading}>
               <Text style={styles.secondaryButtonText}>Skip for now</Text>
@@ -618,7 +623,7 @@ export default function Onboarding() {
             <Text style={styles.title}>Set up medication reminders?</Text>
             <Text style={styles.description}>You can add your medicines and reminder times now, or set them up later from the Medication tab.</Text>
             <TouchableOpacity onPress={openMedicationSetup} style={styles.primaryButton} disabled={loading}>
-              <Text style={styles.primaryButtonText}>{loading ? 'Opening...' : 'Set up now'}</Text>
+              <Text style={styles.primaryButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>{loading ? 'Opening...' : 'Set up now'}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={nextStep} style={styles.secondaryButton} disabled={loading}>
               <Text style={styles.secondaryButtonText}>I&apos;ll do it later</Text>
@@ -637,7 +642,7 @@ export default function Onboarding() {
             <Text style={styles.title}>Your profile is created!</Text>
             <Text style={styles.description}>Your hydration goal is ready, and you can update reminders anytime.</Text>
             <TouchableOpacity onPress={() => completeOnboarding()} style={styles.primaryButton} disabled={loading}>
-              <Text style={styles.primaryButtonText}>{loading ? 'Loading...' : 'Continue'}</Text>
+              <Text style={styles.primaryButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>{loading ? 'Loading...' : 'Continue'}</Text>
             </TouchableOpacity>
           </View>
         );
@@ -654,7 +659,7 @@ export default function Onboarding() {
           <View style={styles.progressBarBackground}>
             <View style={[styles.progressBarFill, { width: `${((currentStep + 1) / steps.length) * 100}%` }]} />
           </View>
-          <Text style={styles.progressText}>{currentStep + 1} of {steps.length}</Text>
+          <Text style={styles.progressText} maxFontSizeMultiplier={FONT_SCALE.chip}>{currentStep + 1} of {steps.length}</Text>
         </View>
       </View>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
@@ -824,6 +829,7 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 54,
     shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.05,
@@ -834,6 +840,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 16,
     paddingHorizontal: 10,
+    minHeight: 50,
     color: '#0F172A',
     fontSize: 16,
     fontWeight: '700',
@@ -846,6 +853,7 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 54,
     shadowColor: '#1E3A8A',
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.05,
@@ -856,6 +864,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 16,
     paddingHorizontal: 10,
+    minHeight: 50,
     color: '#0F172A',
     fontSize: 16,
     fontWeight: '800',
@@ -887,6 +896,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    flexWrap: 'wrap',
   },
   sectionHeader: {
     fontSize: 22,
@@ -960,6 +970,7 @@ const styles = StyleSheet.create({
   },
   buttonRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
@@ -989,6 +1000,7 @@ const styles = StyleSheet.create({
   skipButtonText: {
     color: '#6B7280',
     fontSize: 16,
+    textAlign: 'center',
   },
   nextButton: {
     flex: 1,
@@ -1007,6 +1019,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
   fullWidthButton: {
     flex: 1,
@@ -1027,6 +1040,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
   secondaryButton: {
     paddingVertical: 15,
@@ -1446,3 +1460,4 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 });
+

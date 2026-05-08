@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { FONT_SCALE } from '../../../utils/fontScaling';
 
 type InlineNoticeProps = {
   visible: boolean;
@@ -29,7 +30,7 @@ export default function InlineNotice({
   return (
     <View pointerEvents="none" style={[styles.notice, { backgroundColor: NOTICE_COLORS[type] }, top !== undefined && { top }]}>
       <Ionicons name={iconName} size={16} color="#FFFFFF" />
-      <Text style={styles.noticeText}>{message}</Text>
+      <Text style={styles.noticeText} maxFontSizeMultiplier={FONT_SCALE.chip}>{message}</Text>
     </View>
   );
 }
@@ -46,6 +47,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    flexWrap: 'wrap',
     gap: 6,
     shadowColor: '#000',
     shadowOpacity: 0.12,
@@ -56,5 +58,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '800',
+    flexShrink: 1,
+    textAlign: 'center',
   },
 });

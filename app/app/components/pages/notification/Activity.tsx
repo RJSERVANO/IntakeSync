@@ -23,6 +23,7 @@ import {
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
 import { getScheduledNotificationRefs } from '../../../../services/notificationService';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -605,7 +606,7 @@ export default function Activity() {
           <Text style={styles.cardMessage} numberOfLines={2}>{item.message || 'Notification record'}</Text>
           <View style={styles.metaRow}>
             <View style={[styles.statusPill, { backgroundColor: tone.bg, borderColor: tone.border }]}>
-              <Text style={[styles.statusText, { color: tone.color }]}>{tone.label}</Text>
+              <Text style={[styles.statusText, { color: tone.color }]} maxFontSizeMultiplier={FONT_SCALE.chip}>{tone.label}</Text>
             </View>
             <Text style={styles.cardTime}>{formatMeta(when)}</Text>
           </View>
@@ -641,8 +642,8 @@ export default function Activity() {
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
         <View style={styles.headerCopy}>
-          <Text style={styles.title}>Notifications</Text>
-          <Text style={styles.subtitle}>Reminders and alerts that need your attention.</Text>
+          <Text style={styles.title} maxFontSizeMultiplier={FONT_SCALE.title}>Notifications</Text>
+          <Text style={styles.subtitle} maxFontSizeMultiplier={FONT_SCALE.description}>Reminders and alerts that need your attention.</Text>
         </View>
         <TouchableOpacity
           style={styles.settingsButton}
@@ -671,9 +672,9 @@ export default function Activity() {
                 <View style={[styles.counterIcon, { backgroundColor: `${counter.color}14` }]}>
                   <Ionicons name={counter.icon} size={15} color={counter.color} />
                 </View>
-                <Text style={[styles.counterValue, { color: counter.color }]}>{counter.value}</Text>
+                <Text style={[styles.counterValue, { color: counter.color }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{counter.value}</Text>
               </View>
-              <Text style={styles.counterLabel}>{counter.label}</Text>
+              <Text style={styles.counterLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>{counter.label}</Text>
             </View>
           ))}
         </View>
@@ -703,7 +704,7 @@ export default function Activity() {
               style={[styles.filterChip, filter === item.key && styles.filterChipActive]}
               onPress={() => setFilter(item.key as InboxFilter)}
             >
-              <Text style={[styles.filterText, filter === item.key && styles.filterTextActive]}>{item.label}</Text>
+              <Text style={[styles.filterText, filter === item.key && styles.filterTextActive]} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1}>{item.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -910,6 +911,7 @@ const styles = StyleSheet.create({
   },
   counterCard: {
     flex: 1,
+    minWidth: 76,
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     borderWidth: 1,
@@ -921,6 +923,7 @@ const styles = StyleSheet.create({
   counterTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 6,
   },
   counterIcon: {
@@ -932,13 +935,12 @@ const styles = StyleSheet.create({
   },
   counterValue: {
     fontSize: 17,
-    lineHeight: 20,
     fontWeight: '900',
+    flexShrink: 1,
   },
   counterLabel: {
     color: '#64748B',
     fontSize: 10,
-    lineHeight: 12,
     fontWeight: '800',
   },
   sectionTitle: {
@@ -981,6 +983,8 @@ const styles = StyleSheet.create({
   filterChip: {
     paddingHorizontal: 12,
     paddingVertical: 7,
+    minHeight: 34,
+    justifyContent: 'center',
     borderRadius: 999,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,

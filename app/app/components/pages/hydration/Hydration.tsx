@@ -19,6 +19,7 @@ import {
   resolveHydrationGoal,
 } from '../../../../utils/hydrationHelpers';
 import { usePulseAnimation } from '../../../../hooks/useHydrationAnimations';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 
 interface UserDetails {
   weight?: number;
@@ -1139,8 +1140,8 @@ export default function Hydration() {
         <View style={styles.progressCardRow}>
           <View style={styles.progressCardLeft}>
             <View style={styles.progressHeaderLine}>
-              <Text style={styles.progressHeadline}>{Math.round(percent())}%</Text>
-              <Text style={styles.progressSubText}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
+              <Text style={styles.progressHeadline} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{Math.round(percent())}%</Text>
+              <Text style={styles.progressSubText} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{fmt(totalToday())} / {fmt(goal)} ml</Text>
             </View>
             <View style={styles.progressBarWrapper}>
               <View style={styles.progressBarBg} />
@@ -1159,7 +1160,7 @@ export default function Hydration() {
               <Ionicons name="time-outline" size={15} color="#C2410C" />
             </View>
             <Text style={styles.missedMiniLabel}>Missed Reminders</Text>
-            <Text style={styles.missedMiniNumber}>{missedCount}</Text>
+            <Text style={styles.missedMiniNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{missedCount}</Text>
             <Text style={styles.missedMiniHelper}>Reminders you skipped today</Text>
           </View>
         </View>
@@ -1222,7 +1223,7 @@ export default function Hydration() {
                 activeOpacity={0.75}
               >
                 <Ionicons name="water" size={15} color={quickWaterFeedback === amount ? '#FFFFFF' : '#1E3A8A'} />
-                <Text style={[styles.waterChipText, quickWaterFeedback === amount && styles.waterChipTextPressed]}>{amount} ml</Text>
+                <Text style={[styles.waterChipText, quickWaterFeedback === amount && styles.waterChipTextPressed]} maxFontSizeMultiplier={FONT_SCALE.button} numberOfLines={1}>{amount} ml</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1268,6 +1269,8 @@ export default function Hydration() {
                 placeholder="Custom beverage name"
                 maxLength={80}
                 style={styles.fullInputAlt}
+                textAlignVertical="center"
+                maxFontSizeMultiplier={FONT_SCALE.input}
               />
             )}
 
@@ -1275,7 +1278,7 @@ export default function Hydration() {
             <View style={styles.levelRow}>
               {LEVEL_OPTIONS.map((option) => (
                 <TouchableOpacity key={option.value} style={[styles.levelChip, caffeineLevel === option.value && styles.optionChipSelected]} onPress={() => setCaffeineLevel(option.value)} activeOpacity={0.85}>
-                  <Text style={[styles.optionChipText, caffeineLevel === option.value && styles.optionChipTextSelected]}>{option.label}</Text>
+                  <Text style={[styles.optionChipText, caffeineLevel === option.value && styles.optionChipTextSelected]} maxFontSizeMultiplier={FONT_SCALE.chip}>{option.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1284,7 +1287,7 @@ export default function Hydration() {
             <View style={styles.levelRow}>
               {LEVEL_OPTIONS.map((option) => (
                 <TouchableOpacity key={option.value} style={[styles.levelChip, sugarLevel === option.value && styles.optionChipSelected]} onPress={() => setSugarLevel(option.value)} activeOpacity={0.85}>
-                  <Text style={[styles.optionChipText, sugarLevel === option.value && styles.optionChipTextSelected]}>{option.label}</Text>
+                  <Text style={[styles.optionChipText, sugarLevel === option.value && styles.optionChipTextSelected]} maxFontSizeMultiplier={FONT_SCALE.chip}>{option.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1293,7 +1296,7 @@ export default function Hydration() {
             <View style={styles.amountRow}>
               {QUICK_WATER_AMOUNTS.map((amount) => (
                 <TouchableOpacity key={amount} style={[styles.amountChip, amountInput === String(amount) && styles.amountChipActive]} onPress={() => setAmountInput(String(amount))} activeOpacity={0.85}>
-                  <Text style={[styles.amountChipText, amountInput === String(amount) && styles.amountChipTextActive]}>{amount} ml</Text>
+                  <Text style={[styles.amountChipText, amountInput === String(amount) && styles.amountChipTextActive]} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1}>{amount} ml</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1305,6 +1308,8 @@ export default function Hydration() {
               placeholderTextColor="#64748B"
               keyboardType="numeric"
               style={styles.inputAltFull}
+              textAlignVertical="center"
+              maxFontSizeMultiplier={FONT_SCALE.input}
             />
 
             <Text style={styles.formLabel}>Notes (optional)</Text>
@@ -1316,10 +1321,12 @@ export default function Hydration() {
               maxLength={50}
               style={styles.notesInputAlt}
               returnKeyType="done"
+              textAlignVertical="center"
+              maxFontSizeMultiplier={FONT_SCALE.input}
             />
 
             <View style={styles.logButtonRow}>
-              <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText}>Log</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText} maxFontSizeMultiplier={FONT_SCALE.button}>Log</Text></TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1876,8 +1883,8 @@ const styles = StyleSheet.create({
   amountChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
   amountChipText: { color: '#1E3A8A', fontWeight: '900', fontSize: 12 },
   amountChipTextActive: { color: '#FFFFFF' },
-  quickChipRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 7 },
-  waterChip: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 12, paddingVertical: 9, paddingHorizontal: 6 },
+  quickChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  waterChip: { flex: 1, minWidth: 86, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 12, paddingVertical: 9, paddingHorizontal: 6 },
   waterChipPressed: { backgroundColor: '#2563EB', borderColor: '#2563EB', transform: [{ scale: 0.96 }] },
   waterChipText: { color: '#1E3A8A', fontWeight: '900', marginLeft: 4, fontSize: 12 },
   waterChipTextPressed: { color: '#FFFFFF' },
@@ -1897,12 +1904,12 @@ const styles = StyleSheet.create({
   levelChip: { minWidth: 70, alignItems: 'center', paddingHorizontal: 10, paddingVertical: 9, borderRadius: 10, borderWidth: 1, borderColor: '#D1D5DB', backgroundColor: '#FFFFFF', marginBottom: 8 },
   customRowAlt: { flexDirection: 'row', marginTop: 12 },
   inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8, color:'#0F172A' },
-  inputAltFull: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 11, color:'#0F172A', marginTop: 4, marginBottom: 10 },
-  fullInputAlt: { backgroundColor:'#FFFFFF', borderRadius:10, borderWidth: 1, borderColor: '#CBD5E1', paddingHorizontal:12, paddingVertical: 11, color:'#0F172A', marginTop: 10 },
+  inputAltFull: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 11, minHeight: 46, color:'#0F172A', marginTop: 4, marginBottom: 10 },
+  fullInputAlt: { backgroundColor:'#FFFFFF', borderRadius:10, borderWidth: 1, borderColor: '#CBD5E1', paddingHorizontal:12, paddingVertical: 11, minHeight: 46, color:'#0F172A', marginTop: 10 },
   addBtnAlt: { backgroundColor:'#2563EB', paddingHorizontal:18, justifyContent:'center', borderRadius:10, minHeight: 42, alignItems: 'center' },
   addBtnText: { color:'white', fontWeight:'800' },
   logButtonRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
-  notesInputAlt: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, marginTop: 4, color:'#0F172A' },
+  notesInputAlt: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, minHeight: 44, marginTop: 4, color:'#0F172A' },
 
   // Calendar styles
   calendarCard: { backgroundColor:'#FFFFFF', borderRadius:16, padding:14, marginBottom:16, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:8, elevation:2 },
@@ -1974,10 +1981,10 @@ const styles = StyleSheet.create({
   historyMeta: { color:'#94A3B8', fontSize: 12, marginTop: 3, fontWeight: '700' },
   historyAmt: { fontWeight:'900', color:'#0F172A', minWidth: 54, textAlign: 'right' },
   /* horizontal progress layout */
-  progressCardRow: { backgroundColor: 'white', borderRadius: 16, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 3 },
+  progressCardRow: { backgroundColor: 'white', borderRadius: 16, padding: 12, marginBottom: 12, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 3 },
   progressCardLeft: { flex: 1, paddingRight: 12 },
   progressCardRight: { width: 116, alignItems: 'center', backgroundColor: '#FFF7ED', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 8, borderWidth: 1, borderColor: '#FED7AA' },
-  progressHeaderLine: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  progressHeaderLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   progressHeadline: { fontSize: 30, fontWeight: '900', color: '#0F172A' },
   progressBarWrapper: { marginTop: 8, height: 7, borderRadius: 8, backgroundColor: 'transparent', overflow: 'hidden' },
   progressBarBg: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#F1F5F9', borderRadius: 8 },

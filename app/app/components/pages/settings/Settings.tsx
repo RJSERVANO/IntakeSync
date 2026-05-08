@@ -9,6 +9,7 @@ import { processSyncQueue } from '../../../../services/syncQueue';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import ScreenHeader from '../../common/ScreenHeader';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 
 type SettingPrefs = {
   useMetricUnits: boolean;
@@ -126,8 +127,8 @@ export default function Settings() {
             <Image source={require('../../../../assets/images/mainlogo.png')} style={styles.appLogo} resizeMode="contain" />
           </View>
           <View style={styles.versionInfo}>
-            <Text style={styles.appName}>IntakeSync</Text>
-            <Text style={styles.versionText}>Beverage tracking and medication adherence support</Text>
+            <Text style={styles.appName} maxFontSizeMultiplier={FONT_SCALE.title}>IntakeSync</Text>
+            <Text style={styles.versionText} maxFontSizeMultiplier={FONT_SCALE.description}>Beverage tracking and medication adherence support</Text>
           </View>
         </View>
 
@@ -284,7 +285,7 @@ export default function Settings() {
 function SettingGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.settingsGroup}>
-      <Text style={styles.groupTitle}>{title}</Text>
+      <Text style={styles.groupTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
       <View style={styles.groupContainer}>{children}</View>
     </View>
   );
@@ -309,8 +310,8 @@ function SwitchRow({
         <Ionicons name={icon} size={21} color="#2563EB" />
       </View>
       <View style={styles.settingContent}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        <Text style={styles.settingSubtitle}>{subtitle}</Text>
+        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
       </View>
       <Switch
         value={value}
@@ -329,8 +330,8 @@ function InfoRow({ icon, title, subtitle }: { icon: keyof typeof Ionicons.glyphM
         <Ionicons name={icon} size={21} color="#2563EB" />
       </View>
       <View style={styles.settingContent}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        <Text style={styles.settingSubtitle}>{subtitle}</Text>
+        <Text style={styles.settingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
       </View>
     </View>
   );
@@ -343,10 +344,10 @@ function DisabledRow({ icon, title, subtitle }: { icon: keyof typeof Ionicons.gl
         <Ionicons name={icon} size={21} color="#94A3B8" />
       </View>
       <View style={styles.settingContent}>
-        <Text style={styles.disabledTitle}>{title}</Text>
-        <Text style={styles.settingSubtitle}>{subtitle}</Text>
+        <Text style={styles.disabledTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={styles.settingSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text>
       </View>
-      <Text style={styles.badge}>Unavailable</Text>
+      <Text style={styles.badge} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1}>Unavailable</Text>
     </View>
   );
 }
@@ -367,6 +368,7 @@ const styles = StyleSheet.create({
   offlineBanner: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 8,
     backgroundColor: '#EFF6FF',
     borderWidth: 1,
@@ -470,6 +472,7 @@ const styles = StyleSheet.create({
   settingContent: {
     flex: 1,
     minWidth: 0,
+    flexShrink: 1,
   },
   settingTitle: {
     fontSize: 15,
@@ -486,7 +489,6 @@ const styles = StyleSheet.create({
   settingSubtitle: {
     fontSize: 13,
     color: '#64748B',
-    lineHeight: 18,
     fontWeight: '600',
   },
   separator: {
@@ -502,5 +504,6 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     fontSize: 11,
     fontWeight: '800',
+    flexShrink: 0,
   },
 });

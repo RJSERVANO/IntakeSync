@@ -14,6 +14,7 @@ import { notificationSettings } from '../../../../services/notificationSettings'
 import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
 
@@ -195,7 +196,7 @@ export default function NotificationSettings() {
           />
         </View>
 
-        <Text style={styles.sectionTitle}>Reminder Types</Text>
+        <Text style={styles.sectionTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Reminder Types</Text>
         <View style={styles.card}>
           <SettingRow
             icon="medical-outline"
@@ -216,7 +217,7 @@ export default function NotificationSettings() {
           />
         </View>
 
-        <Text style={styles.sectionTitle}>Alert Style</Text>
+        <Text style={styles.sectionTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Alert Style</Text>
         <View style={styles.card}>
           <SettingRow
             icon="volume-high-outline"
@@ -239,14 +240,14 @@ export default function NotificationSettings() {
 
         <View style={styles.infoBanner}>
           <Ionicons name="information-circle-outline" size={20} color="#2563EB" />
-          <Text style={styles.infoText}>
+          <Text style={styles.infoText} maxFontSizeMultiplier={FONT_SCALE.description}>
             Preferences are saved on this device. Android notifications also depend on app, channel, lock screen, battery, and Do Not Disturb settings.
           </Text>
         </View>
         {permissionBlocked ? (
           <TouchableOpacity style={styles.settingsLink} onPress={openAppSettings} activeOpacity={0.82}>
             <Ionicons name="open-outline" size={18} color="#2563EB" />
-            <Text style={styles.settingsLinkText}>Open App Settings</Text>
+            <Text style={styles.settingsLinkText} maxFontSizeMultiplier={FONT_SCALE.button}>Open App Settings</Text>
           </TouchableOpacity>
         ) : null}
       </ScrollView>
@@ -287,8 +288,8 @@ function SettingRow({
         <Ionicons name={icon} size={20} color={disabled ? '#94A3B8' : '#2563EB'} />
       </View>
       <View style={styles.settingContent}>
-        <Text style={[styles.settingTitle, disabled && styles.disabledText]}>{title}</Text>
-        <Text style={[styles.settingDescription, disabled && styles.disabledText]}>{description}</Text>
+        <Text style={[styles.settingTitle, disabled && styles.disabledText]} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+        <Text style={[styles.settingDescription, disabled && styles.disabledText]} maxFontSizeMultiplier={FONT_SCALE.description}>{description}</Text>
       </View>
       <Switch
         value={value}
@@ -347,6 +348,7 @@ const styles = StyleSheet.create({
   settingRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     paddingHorizontal: 14,
     paddingVertical: 13,
     gap: 10,
@@ -365,17 +367,16 @@ const styles = StyleSheet.create({
   settingContent: {
     flex: 1,
     minWidth: 0,
+    flexShrink: 1,
   },
   settingTitle: {
     fontSize: 14,
-    lineHeight: 18,
     fontWeight: '900',
     color: '#0F172A',
     marginBottom: 3,
   },
   settingDescription: {
     fontSize: 12,
-    lineHeight: 17,
     color: '#64748B',
     fontWeight: '600',
   },
@@ -390,6 +391,7 @@ const styles = StyleSheet.create({
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    flexWrap: 'wrap',
     gap: 10,
     backgroundColor: '#EFF6FF',
     borderRadius: 14,
@@ -402,7 +404,6 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#1E40AF',
     fontSize: 12,
-    lineHeight: 18,
     fontWeight: '700',
   },
   settingsLink: {
@@ -421,6 +422,7 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontSize: 13,
     fontWeight: '900',
+    textAlign: 'center',
   },
   recordActionRow: {
     flexDirection: 'row',

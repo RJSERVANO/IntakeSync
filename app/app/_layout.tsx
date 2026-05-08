@@ -6,7 +6,21 @@ import { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
 import { bootstrapNotificationSchedules, notificationService } from '../services/notificationService';
 import { initializeOfflineSync } from '../services/offlineSyncManager';
-import { LogBox } from 'react-native';
+import { LogBox, Text, TextInput } from 'react-native';
+import { FONT_SCALE } from '../utils/fontScaling';
+
+const ScalableText = Text as typeof Text & { defaultProps?: { maxFontSizeMultiplier?: number } };
+const ScalableTextInput = TextInput as typeof TextInput & { defaultProps?: { maxFontSizeMultiplier?: number } };
+
+ScalableText.defaultProps = {
+  ...ScalableText.defaultProps,
+  maxFontSizeMultiplier: FONT_SCALE.body,
+};
+
+ScalableTextInput.defaultProps = {
+  ...ScalableTextInput.defaultProps,
+  maxFontSizeMultiplier: FONT_SCALE.input,
+};
 
 // Suppress Expo Go push notification warning in UI
 LogBox.ignoreLogs([

@@ -23,6 +23,7 @@ import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notif
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
+import { FONT_SCALE } from '../../../../utils/fontScaling';
 
 type MedicationItem = {
   id: string;
@@ -2256,36 +2257,36 @@ export default function Medication() {
               <View style={styles.statIcon}>
                 <Ionicons name="medkit" size={14} color="#2563EB" />
               </View>
-              <Text style={styles.statNumber}>{displayStats.total_medications ?? 0}</Text>
+              <Text style={styles.statNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{displayStats.total_medications ?? 0}</Text>
             </View>
-            <Text style={styles.statLabel}>Total meds</Text>
+            <Text style={styles.statLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>Total meds</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('active')} activeOpacity={0.85}>
             <View style={styles.statTopRow}>
               <View style={styles.statIcon}>
                 <Ionicons name="checkmark-circle" size={14} color="#2563EB" />
               </View>
-              <Text style={styles.statNumber}>{displayStats.active_medications ?? 0}</Text>
+              <Text style={styles.statNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{displayStats.active_medications ?? 0}</Text>
             </View>
-            <Text style={styles.statLabel}>Active</Text>
+            <Text style={styles.statLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>Active</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.statCard} onPress={() => setStatsModalType('today')} activeOpacity={0.85}>
             <View style={styles.statTopRow}>
               <View style={styles.statIcon}>
                 <Ionicons name="calendar" size={14} color="#2563EB" />
               </View>
-              <Text style={styles.statNumber}>{displayStats.completed_today ?? 0}</Text>
+              <Text style={styles.statNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{displayStats.completed_today ?? 0}</Text>
             </View>
-            <Text style={styles.statLabel}>Taken today</Text>
+            <Text style={styles.statLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>Taken today</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.statCard, styles.statCardMissed]} onPress={() => setStatsModalType('missed')} activeOpacity={0.85}>
             <View style={styles.statTopRow}>
               <View style={[styles.statIcon, styles.statIconMissed]}>
                 <Ionicons name="alert-circle" size={14} color="#C2410C" />
               </View>
-              <Text style={styles.statNumber}>{displayStats.missed_today ?? 0}</Text>
+              <Text style={styles.statNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{displayStats.missed_today ?? 0}</Text>
             </View>
-            <Text style={styles.statLabel}>Missed</Text>
+            <Text style={styles.statLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>Missed</Text>
           </TouchableOpacity>
         </View>
 
@@ -2371,7 +2372,7 @@ export default function Medication() {
                         return (
                           <View key={chip.time} style={[styles.timeBadge, chipStyle.badgeStyle]}>
                             <Ionicons name={getDoseChipIcon(chip.status)} size={11} color={chipStyle.iconColor} />
-                            <Text style={[styles.timeText, chipStyle.textStyle]}>
+                            <Text style={[styles.timeText, chipStyle.textStyle]} maxFontSizeMultiplier={FONT_SCALE.chip}>
                               {new Date(chip.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })} - {getDoseChipLabel(chip.status)}
                             </Text>
                           </View>
@@ -2535,6 +2536,8 @@ export default function Medication() {
                   style={styles.input}
                   placeholder="e.g., Vitamin C, Biogesic, Neozep"
                   onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
+                  textAlignVertical="center"
+                  maxFontSizeMultiplier={FONT_SCALE.input}
                 />
 
                 {/* Medicine Suggestions in Modal */}
@@ -2594,7 +2597,7 @@ export default function Medication() {
               )}
 
               <Text style={styles.label}>Dosage</Text>
-              <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" />
+              <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" textAlignVertical="center" maxFontSizeMultiplier={FONT_SCALE.input} />
             </View>
 
             <View style={styles.formCard}>
@@ -2754,6 +2757,8 @@ export default function Medication() {
                 placeholder="Add notes about this medication..."
                 multiline
                 numberOfLines={3}
+                textAlignVertical="top"
+                maxFontSizeMultiplier={FONT_SCALE.input}
               />
 
               <Text style={styles.label}>Color</Text>
@@ -3299,6 +3304,7 @@ const styles = StyleSheet.create({
   // Stats Dashboard
   statsContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     paddingHorizontal: 20,
     marginBottom: 12,
     gap: 8,
@@ -3309,6 +3315,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 9,
     flex: 1,
+    minWidth: 76,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#000',
@@ -3317,7 +3324,7 @@ const styles = StyleSheet.create({
     elevation: 2
   },
   statCardMissed: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
-  statTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   statIcon: {
     width: 24,
     height: 24,
@@ -3327,8 +3334,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   statIconMissed: { backgroundColor: '#FFEDD5' },
-  statNumber: { fontSize: 17, lineHeight: 20, fontWeight: '900', color: '#0F172A' },
-  statLabel: { fontSize: 10, lineHeight: 12, color: '#64748B', marginTop: 3, fontWeight: '800' },
+  statNumber: { fontSize: 17, fontWeight: '900', color: '#0F172A', flexShrink: 1 },
+  statLabel: { fontSize: 10, color: '#64748B', marginTop: 3, fontWeight: '800' },
 
   // Sections
   sectionContainer: { paddingHorizontal: 20, marginBottom: 16 },
@@ -3359,10 +3366,10 @@ const styles = StyleSheet.create({
     marginRight: 10
   },
   upcomingInitial: { color: 'white', fontWeight: '700', fontSize: 18 },
-  upcomingContent: { flex: 1 },
+  upcomingContent: { flex: 1, minWidth: 0, flexShrink: 1 },
   upcomingName: { fontSize: 15, fontWeight: '900', color: '#0F172A' },
   upcomingTime: { fontSize: 12, color: '#64748B', marginTop: 3, fontWeight: '700' },
-  upcomingRight: { alignItems: 'flex-end' },
+  upcomingRight: { alignItems: 'flex-end', flexShrink: 0 },
   upcomingCountdown: { fontSize: 12, fontWeight: '900', color: '#1E3A8A', backgroundColor: '#EFF6FF', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, overflow: 'hidden' },
   upcomingEmptyCard: {
     backgroundColor: '#FFFFFF',
@@ -3402,15 +3409,15 @@ const styles = StyleSheet.create({
     borderWidth: 1
   },
   medicationInitial: { color: 'white', fontWeight: '700', fontSize: 20 },
-  medicationContent: { flex: 1 },
-  medicationName: { fontSize: 15, lineHeight: 19, fontWeight: '900', color: '#0F172A' },
-  medicationDosage: { fontSize: 11, lineHeight: 15, color: '#64748B', marginTop: 1, fontWeight: '700' },
+  medicationContent: { flex: 1, minWidth: 0 },
+  medicationName: { fontSize: 15, fontWeight: '900', color: '#0F172A' },
+  medicationDosage: { fontSize: 11, color: '#64748B', marginTop: 1, fontWeight: '700' },
   doseSummaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 4, alignItems: 'center' },
   doseSummaryText: { fontSize: 11, color: '#334155', fontWeight: '800' },
   doseSummaryMissed: { color: '#DC2626' },
   doseSummaryMuted: { fontSize: 11, color: '#64748B', fontWeight: '700' },
   medicationTimes: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 6, gap: 5 },
-  medicationNotes: { fontSize: 11, color: '#64748B', marginTop: 4, lineHeight: 15, fontWeight: '600' },
+  medicationNotes: { fontSize: 11, color: '#64748B', marginTop: 4, fontWeight: '600' },
 
   // Time Badges
   timeBadge: {
@@ -3421,10 +3428,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
+    maxWidth: '100%',
     borderWidth: 1,
     borderColor: '#BFDBFE',
   },
-  timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 10 },
+  timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 10, flexShrink: 1 },
   timeBadgeUpcoming: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
   timeBadgeTaken: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
   timeBadgeMissed: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
@@ -3623,6 +3631,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
+    minHeight: 46,
     borderBottomWidth: 1,
     borderBottomColor: '#DBEAFE',
     backgroundColor: '#FFFFFF'
@@ -3777,7 +3786,7 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontWeight: '600'
   },
-  notesInput: { height: 78, textAlignVertical: 'top' },
+  notesInput: { minHeight: 78, textAlignVertical: 'top' },
   selectedMedicineCard: {
     flexDirection: 'row',
     alignItems: 'center',

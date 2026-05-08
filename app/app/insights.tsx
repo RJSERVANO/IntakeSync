@@ -15,6 +15,7 @@ import {
   writeMedicationCache,
   writeMedicationHistoryCache,
 } from '../services/offlineStorage';
+import { FONT_SCALE } from '../utils/fontScaling';
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 type MedicationStatus = 'completed' | 'skipped' | 'missed' | 'snoozed';
@@ -778,10 +779,16 @@ export default function InsightsScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <TouchableOpacity activeOpacity={0.82} style={styles.heroCard} onPress={() => setDetailModal('score')}>
           <View style={[styles.scoreCircle, { borderColor: insights.healthScore === null ? '#CBD5E1' : scoreColor }]}>
-            <Text style={[insights.healthScore === null ? styles.scoreEmptyText : styles.scoreValue, { color: scoreColor }]}>
+            <Text
+              style={[insights.healthScore === null ? styles.scoreEmptyText : styles.scoreValue, { color: scoreColor }]}
+              maxFontSizeMultiplier={FONT_SCALE.stat}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
               {insights.healthScore === null ? 'No score' : insights.healthScore}
             </Text>
-            {insights.healthScore !== null && <Text style={styles.scoreMax}>/100</Text>}
+            {insights.healthScore !== null && <Text style={styles.scoreMax} maxFontSizeMultiplier={FONT_SCALE.stat}>/100</Text>}
           </View>
           <View style={styles.heroCopy}>
             <Text style={styles.heroKicker}>Routine Score</Text>
@@ -812,7 +819,7 @@ export default function InsightsScreen() {
               </View>
               <Text style={styles.highlightTitle} numberOfLines={2}>Beverage Intake</Text>
             </View>
-            <Text style={[styles.highlightValue, { color: '#2563EB' }]}>{hasBeverageData ? `${formatNumber(insights.hydrationAvg || 0)} ml` : '-'}</Text>
+            <Text style={[styles.highlightValue, { color: '#2563EB' }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{hasBeverageData ? `${formatNumber(insights.hydrationAvg || 0)} ml` : '-'}</Text>
             <Text style={styles.highlightLabel}>Daily average</Text>
             <Text style={styles.notEnoughText}>{hasBeverageData ? `${insights.beverageDaysWithLogs} of 7 days logged` : 'Not enough data yet'}</Text>
           </TouchableOpacity>
@@ -824,7 +831,7 @@ export default function InsightsScreen() {
               </View>
               <Text style={styles.highlightTitle} numberOfLines={2}>Medication Adherence</Text>
             </View>
-            <Text style={[styles.highlightValue, { color: '#EF4444' }]}>{insights.medicationAdherence !== null ? `${insights.medicationAdherence}%` : '-'}</Text>
+            <Text style={[styles.highlightValue, { color: '#EF4444' }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.medicationAdherence !== null ? `${insights.medicationAdherence}%` : '-'}</Text>
             <Text style={styles.highlightLabel}>adherence</Text>
             <Text style={styles.missedText}>{hasMedicationData ? `${insights.completedDoses}/${insights.scheduledDoses} taken, ${insights.missedDoses} missed` : 'No schedule data yet.'}</Text>
           </TouchableOpacity>
@@ -884,9 +891,9 @@ export default function InsightsScreen() {
                       activeOpacity={0.78}
                       onPress={() => setSelectedDay(day)}
                     >
-                      <Text style={[styles.monthCellDate, !inDisplayedMonth && styles.monthCellDateMuted]}>{date.getDate()}</Text>
+                      <Text style={[styles.monthCellDate, !inDisplayedMonth && styles.monthCellDateMuted]} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1}>{date.getDate()}</Text>
                       <View style={[styles.monthStatusDot, { backgroundColor: meta.color }]} />
-                      <Text style={[styles.monthCellScore, { color: meta.color }]}>{day.score === null ? '-' : day.score}</Text>
+                      <Text style={[styles.monthCellScore, { color: meta.color }]} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{day.score === null ? '-' : day.score}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -924,7 +931,7 @@ export default function InsightsScreen() {
                       </View>
                       <View style={styles.weekTileScoreWrap}>
                         <Ionicons name={meta.icon as any} size={15} color={meta.color} />
-                        <Text style={[styles.weekTileScore, { color: meta.color }]}>{day.score === null ? '-' : day.score}</Text>
+                        <Text style={[styles.weekTileScore, { color: meta.color }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{day.score === null ? '-' : day.score}</Text>
                       </View>
                     </View>
                     <Text style={[styles.weekTileStatus, { color: meta.color }]} numberOfLines={1}>{meta.label}</Text>
@@ -950,11 +957,11 @@ export default function InsightsScreen() {
         <Text style={styles.modalRecommendation}>Routine Score combines Beverage and Medication when both are available. If only one exists, the score is normalized from that component and marked as partial.</Text>
         <View style={styles.modalStatGrid}>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{insights.beverageScore === null ? '-' : insights.beverageScore}</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.beverageScore === null ? '-' : insights.beverageScore}</Text>
             <Text style={styles.modalStatLabel}>Beverage score</Text>
           </View>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{insights.medicationScore === null ? '-' : insights.medicationScore}</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.medicationScore === null ? '-' : insights.medicationScore}</Text>
             <Text style={styles.modalStatLabel}>Medication score</Text>
           </View>
         </View>
@@ -967,11 +974,11 @@ export default function InsightsScreen() {
       <DetailModal visible={detailModal === 'beverage'} onClose={() => setDetailModal(null)} title="Beverage Intake" color="#2563EB" icon="water">
         <View style={styles.modalStatGrid}>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{formatNumber(insights.weeklyBeverageTotal)} ml</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{formatNumber(insights.weeklyBeverageTotal)} ml</Text>
             <Text style={styles.modalStatLabel}>weekly total</Text>
           </View>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{insights.hydrationAvg === null ? '-' : `${formatNumber(insights.hydrationAvg)} ml`}</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.hydrationAvg === null ? '-' : `${formatNumber(insights.hydrationAvg)} ml`}</Text>
             <Text style={styles.modalStatLabel}>daily average</Text>
           </View>
         </View>
@@ -985,11 +992,11 @@ export default function InsightsScreen() {
       <DetailModal visible={detailModal === 'medication'} onClose={() => setDetailModal(null)} title="Medication Adherence" color="#EF4444" icon="medkit-outline">
         <View style={styles.modalStatGrid}>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{insights.completedDoses}/{insights.scheduledDoses}</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.completedDoses}/{insights.scheduledDoses}</Text>
             <Text style={styles.modalStatLabel}>taken</Text>
           </View>
           <View style={styles.modalStatBox}>
-            <Text style={styles.modalStatValue}>{insights.missedDoses + insights.skippedDoses}</Text>
+            <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.missedDoses + insights.skippedDoses}</Text>
             <Text style={styles.modalStatLabel}>missed/skipped</Text>
           </View>
         </View>
@@ -1120,10 +1127,10 @@ const styles = StyleSheet.create({
   chartTitle: { fontSize: 17, fontWeight: '800', color: '#1F2937', marginBottom: 14 },
   weeklyTileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   weekTile: { width: '31.5%', minHeight: 142, borderRadius: 14, borderWidth: 1, padding: 9 },
-  weekTileHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginBottom: 6 },
+  weekTileHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginBottom: 6, flexWrap: 'wrap' },
   weekTileDay: { color: '#0F172A', fontSize: 12, fontWeight: '900' },
   weekTileDate: { color: '#64748B', fontSize: 11, fontWeight: '800', marginTop: 1 },
-  weekTileScoreWrap: { alignItems: 'center', minWidth: 30, gap: 2 },
+  weekTileScoreWrap: { alignItems: 'center', minWidth: 30, maxWidth: '100%', gap: 2 },
   weekTileScore: { fontSize: 16, fontWeight: '900' },
   weekTileStatus: { fontSize: 10, fontWeight: '900', marginBottom: 7 },
   weekMetricPill: { minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', paddingHorizontal: 6, paddingVertical: 5, marginTop: 5 },
@@ -1156,8 +1163,8 @@ const styles = StyleSheet.create({
   modalBodyContent: { paddingBottom: 4 },
   modalRecommendation: { fontSize: 14, color: '#4B5563', lineHeight: 21, marginBottom: 16 },
   modalSectionLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', marginBottom: 8, marginTop: 4 },
-  modalStatGrid: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  modalStatBox: { flex: 1, backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  modalStatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  modalStatBox: { flex: 1, minWidth: 130, backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   modalStatValue: { fontSize: 16, fontWeight: '800', color: '#1F2937', marginBottom: 4 },
   modalStatLabel: { fontSize: 12, color: '#64748B', fontWeight: '700' },
   modalListRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },

@@ -27,6 +27,7 @@ import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 import InlineNotice from './components/common/InlineNotice';
 import InlineSyncNotice from './components/common/InlineSyncNotice';
+import { FONT_SCALE } from '../utils/fontScaling';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
@@ -1080,8 +1081,8 @@ export default function Home() {
 
           {/* Welcome Section */}
           <View style={styles.welcomeSection}>
-            <Text style={styles.welcomeText} numberOfLines={2}>{displayName ? `${greetingPrefix}, ${displayName}` : 'Welcome back'}</Text>
-            <Text style={styles.welcomeSubtext}>Here is your routine summary for today.</Text>
+            <Text style={styles.welcomeText} numberOfLines={2} maxFontSizeMultiplier={FONT_SCALE.title}>{displayName ? `${greetingPrefix}, ${displayName}` : 'Welcome back'}</Text>
+            <Text style={styles.welcomeSubtext} maxFontSizeMultiplier={FONT_SCALE.description}>Here is your routine summary for today.</Text>
           <View>
             <View style={styles.searchContainer}>
               <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
@@ -1096,6 +1097,8 @@ export default function Home() {
                   if (!text.trim()) clearMedicineSearch();
                 }}
                 onFocus={() => medicineSearch.length >= 2 && setShowSuggestions(true)}
+                textAlignVertical="center"
+                maxFontSizeMultiplier={FONT_SCALE.input}
               />
               {medicineSearch.length > 0 && (
                 <TouchableOpacity 
@@ -1124,9 +1127,9 @@ export default function Home() {
                         <Ionicons name="medkit" size={19} color="#FFFFFF" />
                       </View>
                       <View style={styles.suggestionContent}>
-                        <Text style={styles.suggestionName}>{medicine.name}</Text>
-                        <Text style={styles.suggestionDetails}>{getMedicineMeta(medicine) || 'OTC medication'}</Text>
-                        {!!getMedicineUse(medicine) && <Text style={styles.suggestionUse} numberOfLines={2}>{getMedicineUse(medicine)}</Text>}
+                        <Text style={styles.suggestionName} maxFontSizeMultiplier={FONT_SCALE.title}>{medicine.name}</Text>
+                        <Text style={styles.suggestionDetails} maxFontSizeMultiplier={FONT_SCALE.description}>{getMedicineMeta(medicine) || 'OTC medication'}</Text>
+                        {!!getMedicineUse(medicine) && <Text style={styles.suggestionUse} numberOfLines={3} maxFontSizeMultiplier={FONT_SCALE.description}>{getMedicineUse(medicine)}</Text>}
                       </View>
                       <Ionicons name="add-circle" size={20} color="#1E3A8A" />
                     </TouchableOpacity>
@@ -1157,12 +1160,12 @@ export default function Home() {
               <Text style={styles.smartCardLabel}>Today Score</Text>
               {hasTodayScoreData && todayScore !== null ? (
                 <>
-                  <Text style={[styles.scoreValue, { color: todayScoreTextColor }]}>{todayScore}%</Text>
+                  <Text style={[styles.scoreValue, { color: todayScoreTextColor }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{todayScore}%</Text>
                   <Text style={styles.scoreHelper} numberOfLines={2}>{todayScoreBreakdown}</Text>
                 </>
               ) : (
                 <>
-                  <Text style={[styles.scoreEmptyValue, { color: todayScoreTextColor }]}>No score yet</Text>
+                  <Text style={[styles.scoreEmptyValue, { color: todayScoreTextColor }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>No score yet</Text>
                   <Text style={styles.scoreHelper} numberOfLines={2}>Log beverages or medication activity to start.</Text>
                 </>
               )}
@@ -1187,7 +1190,7 @@ export default function Home() {
             </View>
 
             <View style={styles.waterActionRow}>
-              <Text style={styles.primaryMetric}>{quickStatus.hydrationPercentage}%</Text>
+              <Text style={styles.primaryMetric} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{quickStatus.hydrationPercentage}%</Text>
               <Pressable
                 style={({ pressed }) => [styles.quickActionChip, pressed && styles.chipPressed]}
                 onPress={async (e) => {
@@ -1200,7 +1203,7 @@ export default function Home() {
                   }
                 }}
               >
-                <Text style={styles.quickActionText}>+250 ml</Text>
+                <Text style={styles.quickActionText} maxFontSizeMultiplier={FONT_SCALE.button} numberOfLines={1}>+250 ml</Text>
               </Pressable>
             </View>
 
@@ -1241,7 +1244,7 @@ export default function Home() {
               </View>
             </View>
             <View style={styles.metricRow}>
-              <Text style={[styles.primaryMetric, styles.medicationMetric]}>{medicationPercent}%</Text>
+              <Text style={[styles.primaryMetric, styles.medicationMetric]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{medicationPercent}%</Text>
               <Pressable
                 style={({ pressed }) => [styles.medicationAddChip, pressed && styles.chipPressed]}
                 onPress={(e) => {
@@ -1249,7 +1252,7 @@ export default function Home() {
                   router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any);
                 }}
               >
-                <Text style={styles.quickActionText}>+ Add</Text>
+                <Text style={styles.quickActionText} maxFontSizeMultiplier={FONT_SCALE.button} numberOfLines={1}>+ Add</Text>
               </Pressable>
             </View>
             {nextMedication && (
@@ -1652,7 +1655,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
     borderRadius: 14,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 8,
+    minHeight: 48,
     borderWidth: 1,
     borderColor: '#DBEAFE',
     shadowColor: '#1E3A8A',
@@ -1668,6 +1672,8 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     color: '#1F2937',
+    minHeight: 34,
+    paddingVertical: 6,
   },
   searchClear: {
     padding: 4,
@@ -2193,6 +2199,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 6,
+    gap: 10,
   },
   summaryCardTitle: {
     fontSize: 16,
@@ -2205,6 +2212,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#1E3A8A',
     marginBottom: 4,
+    flexShrink: 1,
   },
   waterActionRow: {
     flexDirection: 'row',
@@ -2213,12 +2221,14 @@ const styles = StyleSheet.create({
     gap: 14,
     marginTop: 2,
     marginBottom: 6,
+    flexWrap: 'wrap',
   },
   metricRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+    flexWrap: 'wrap',
   },
   medicationMetric: {
     color: '#EF4444',
@@ -2300,12 +2310,14 @@ const styles = StyleSheet.create({
   },
   beverageMiniGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginTop: 2,
     marginBottom: 4,
   },
   beverageMiniBox: {
     flex: 1,
+    minWidth: 120,
     backgroundColor: 'rgba(37, 99, 235, 0.04)',
     borderRadius: 10,
     paddingVertical: 8,
@@ -2318,6 +2330,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 7,
+    gap: 6,
   },
   miniLabelRow: {
     flexDirection: 'row',
@@ -2336,6 +2349,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#1E3A8A',
+    flexShrink: 1,
   },
   miniValue: {
     fontSize: 12,
@@ -2483,6 +2497,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 13,
     fontWeight: '800',
+    textAlign: 'center',
   },
   nextMedicationText: {
     fontSize: 13,

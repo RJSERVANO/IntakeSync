@@ -2,12 +2,14 @@ import React from 'react';
 import {
   ActivityIndicator,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { FONT_SCALE } from '../../../utils/fontScaling';
 
 export type ThemedNoticeType = 'success' | 'error' | 'warning' | 'info' | 'confirm' | 'destructive';
 
@@ -56,12 +58,17 @@ export default function ThemedNoticeModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
       <View style={styles.backdrop}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
         <View style={styles.card}>
           <View style={[styles.iconBadge, { backgroundColor: current.bg, borderColor: `${current.color}33` }]}>
             <Ionicons name={current.icon} size={28} color={current.color} />
           </View>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
+          <Text style={styles.title} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
+          <Text style={styles.message} maxFontSizeMultiplier={FONT_SCALE.body}>{message}</Text>
           <View style={styles.actions}>
             {showSecondary ? (
               <TouchableOpacity
@@ -70,7 +77,7 @@ export default function ThemedNoticeModal({
                 activeOpacity={0.84}
                 disabled={loading}
               >
-                <Text style={styles.secondaryText}>{secondaryText || 'Cancel'}</Text>
+                <Text style={styles.secondaryText} maxFontSizeMultiplier={FONT_SCALE.button}>{secondaryText || 'Cancel'}</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity
@@ -86,11 +93,12 @@ export default function ThemedNoticeModal({
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.primaryText}>{primaryLabel}</Text>
+                <Text style={styles.primaryText} maxFontSizeMultiplier={FONT_SCALE.button}>{primaryLabel}</Text>
               )}
             </TouchableOpacity>
           </View>
         </View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -103,6 +111,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+  },
+  scroll: {
+    width: '100%',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   card: {
     width: '100%',
@@ -131,14 +147,12 @@ const styles = StyleSheet.create({
   title: {
     color: '#0F172A',
     fontSize: 21,
-    lineHeight: 26,
     fontWeight: '900',
     textAlign: 'center',
   },
   message: {
     color: '#64748B',
     fontSize: 14,
-    lineHeight: 21,
     fontWeight: '700',
     textAlign: 'center',
     marginTop: 8,
@@ -146,6 +160,7 @@ const styles = StyleSheet.create({
   actions: {
     width: '100%',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginTop: 20,
   },
@@ -174,6 +189,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',
+    textAlign: 'center',
   },
   secondaryButton: {
     flex: 1,
@@ -190,5 +206,6 @@ const styles = StyleSheet.create({
     color: '#1E3A8A',
     fontSize: 15,
     fontWeight: '900',
+    textAlign: 'center',
   },
 });

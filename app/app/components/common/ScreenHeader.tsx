@@ -3,6 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FONT_SCALE } from '../../../utils/fontScaling';
 
 type ScreenHeaderProps = {
   title: string;
@@ -50,8 +51,8 @@ export default function ScreenHeader({
         </TouchableOpacity>
       ) : null}
       <View style={styles.titleWrap}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        <Text style={styles.title} maxFontSizeMultiplier={FONT_SCALE.title} numberOfLines={2}>{title}</Text>
+        {subtitle ? <Text style={styles.subtitle} maxFontSizeMultiplier={FONT_SCALE.description}>{subtitle}</Text> : null}
       </View>
       {rightAction ? <View style={styles.rightAction}>{rightAction}</View> : null}
     </View>
@@ -92,7 +93,6 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 12,
     fontWeight: '700',
-    lineHeight: 17,
     marginTop: 2,
   },
   rightAction: {
