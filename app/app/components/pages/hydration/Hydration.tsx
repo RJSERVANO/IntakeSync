@@ -20,6 +20,7 @@ import {
 } from '../../../../utils/hydrationHelpers';
 import { usePulseAnimation } from '../../../../hooks/useHydrationAnimations';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 interface UserDetails {
   weight?: number;
@@ -196,6 +197,7 @@ function calculateDailyGoal(user: UserDetails | null): number {
  */
 
 export default function Hydration() {
+  useFontScaleVersion();
   const { token: routeToken } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const [cachedToken, setCachedToken] = useState<string | undefined>();

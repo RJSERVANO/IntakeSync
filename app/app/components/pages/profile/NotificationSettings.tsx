@@ -15,6 +15,7 @@ import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../.
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound' | 'vibration';
 
@@ -29,6 +30,7 @@ const DEFAULT_PREFS: NotificationPrefs = {
 };
 
 export default function NotificationSettings() {
+  useFontScaleVersion();
   const { token } = useLocalSearchParams();
   void token;
   const [prefs, setPrefs] = useState<NotificationPrefs>(DEFAULT_PREFS);

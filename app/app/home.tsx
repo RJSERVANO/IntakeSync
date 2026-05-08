@@ -28,6 +28,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedN
 import InlineNotice from './components/common/InlineNotice';
 import InlineSyncNotice from './components/common/InlineSyncNotice';
 import { FONT_SCALE } from '../utils/fontScaling';
+import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
@@ -134,6 +135,7 @@ const resolveHydrationPercentage = (hydrationData: any, goal: number) => {
 };
 
 export default function Home() {
+  useFontScaleVersion();
   const insets = useSafeAreaInsets();
   const { token, offline } = useLocalSearchParams();
   const router = useRouter();

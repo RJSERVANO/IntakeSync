@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { FONT_SCALE } from '../../../utils/fontScaling';
+import { useFontScaleRefreshKey } from '../../accessibility/FontScaleProvider';
 
 type InlineSyncNoticeVariant = 'sync' | 'info' | 'warning';
 
@@ -28,12 +29,15 @@ export default function InlineSyncNotice({
   top,
   variant = 'sync',
 }: InlineSyncNoticeProps) {
+  const fontScaleRefreshKey = useFontScaleRefreshKey('inline-sync-notice');
+
   if (!visible || !message) return null;
 
   const colors = VARIANTS[variant];
 
   return (
     <View
+      key={fontScaleRefreshKey}
       pointerEvents="none"
       style={[
         styles.notice,

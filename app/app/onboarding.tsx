@@ -7,9 +7,10 @@ import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { notificationService } from '../services/notificationService';
 import { notificationSettings } from '../services/notificationSettings';
 import { enqueueSyncAction, mergeLatestPendingAction } from '../services/syncQueue';
-import { getCachedSession, readSettingsCache, updateCachedUser, writeSettingsCache } from '../services/offlineStorage';
+import { getCachedSession, markOnboardingComplete, readSettingsCache, updateCachedUser, writeSettingsCache } from '../services/offlineStorage';
 import InlineNotice from './components/common/InlineNotice';
 import { FONT_SCALE } from '../utils/fontScaling';
+import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 const { height } = Dimensions.get('window');
 
@@ -27,6 +28,7 @@ interface OnboardingData {
 }
 
 export default function Onboarding() {
+  useFontScaleVersion();
   const router = useRouter();
   const params = useLocalSearchParams();
   const token = params.token as string;
@@ -363,6 +365,11 @@ export default function Onboarding() {
         });
         await updateCachedUser({ ...(cached.user || {}), ...payload, onboarding_completed: true }, cached.token);
       }
+      const cached = await getCachedSession();
+      const payload = buildOnboardingPayload();
+      const completedUser = { ...(cached?.user || {}), ...payload, onboarding_completed: true };
+      await updateCachedUser(completedUser, cached?.token || token);
+      await markOnboardingComplete(completedUser);
       router.replace({ pathname: '/home', params: { token } } as any);
     } catch (err: any) {
       console.log('Error completing onboarding:', err);

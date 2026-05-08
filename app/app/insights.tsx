@@ -16,6 +16,7 @@ import {
   writeMedicationHistoryCache,
 } from '../services/offlineStorage';
 import { FONT_SCALE } from '../utils/fontScaling';
+import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 type MedicationStatus = 'completed' | 'skipped' | 'missed' | 'snoozed';
@@ -631,6 +632,7 @@ const DetailModal: React.FC<DetailModalProps> = ({ visible, onClose, title, colo
 );
 
 export default function InsightsScreen() {
+  useFontScaleVersion();
   const { token } = useLocalSearchParams();
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);

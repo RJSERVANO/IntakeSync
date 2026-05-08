@@ -24,6 +24,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 type MedicationItem = {
   id: string;
@@ -391,6 +392,7 @@ function dedupeMedicationHistory(entries: HistoryEntry[]) {
 }
 
 export default function Medication() {
+  useFontScaleVersion();
   const { token: routeToken, medicineName, medicineDosage, medicineData } = useLocalSearchParams();
   const router = useRouter();
   const insets = useSafeAreaInsets();

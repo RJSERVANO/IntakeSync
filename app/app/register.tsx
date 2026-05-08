@@ -10,7 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
-import { hasValidCachedSession, saveCachedSession } from '../services/offlineStorage';
+import { hasCompletedOnboarding, hasValidCachedSession, markOnboardingComplete, saveCachedSession } from '../services/offlineStorage';
 import { AuthField, AuthSelectField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authColors, authStyles, authShadows } from '../components/auth/authStyles';
@@ -161,14 +161,17 @@ export default function Register() {
         router.replace({ pathname: '/login' } as any);
         return;
       }
-      await saveCachedSession({ token: res.token, user: res.user });
+      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
+      await saveCachedSession({ token: res.token, user: sessionUser });
+      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
 
-      if (!res.onboarding_completed) {
+      if (!onboardingCompleted) {
         router.replace({
           pathname: '/onboarding',
-          params: { token: res.token, name: res.user?.name || name },
+          params: { token: res.token, name: sessionUser?.name || name },
         } as any);
       } else {
+        await markOnboardingComplete(sessionUser);
         router.replace({ pathname: '/home', params: { token: res.token } } as any);
       }
     } catch (err: any) {
@@ -196,14 +199,17 @@ export default function Register() {
         router.replace({ pathname: '/login' } as any);
         return;
       }
-      await saveCachedSession({ token: res.token, user: res.user });
+      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
+      await saveCachedSession({ token: res.token, user: sessionUser });
+      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
 
-      if (!res.onboarding_completed) {
+      if (!onboardingCompleted) {
         router.replace({
           pathname: '/onboarding',
-          params: { token: res.token, name: res.user?.name || '' },
+          params: { token: res.token, name: sessionUser?.name || '' },
         } as any);
       } else {
+        await markOnboardingComplete(sessionUser);
         router.replace({ pathname: '/home', params: { token: res.token } } as any);
       }
     } catch (err: any) {

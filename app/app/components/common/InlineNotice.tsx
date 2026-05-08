@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { FONT_SCALE } from '../../../utils/fontScaling';
+import { useFontScaleRefreshKey } from '../../accessibility/FontScaleProvider';
 
 type InlineNoticeProps = {
   visible: boolean;
@@ -25,10 +26,12 @@ export default function InlineNotice({
   top,
   type = 'success',
 }: InlineNoticeProps) {
+  const fontScaleRefreshKey = useFontScaleRefreshKey('inline-notice');
+
   if (!visible || !message) return null;
 
   return (
-    <View pointerEvents="none" style={[styles.notice, { backgroundColor: NOTICE_COLORS[type] }, top !== undefined && { top }]}>
+    <View key={fontScaleRefreshKey} pointerEvents="none" style={[styles.notice, { backgroundColor: NOTICE_COLORS[type] }, top !== undefined && { top }]}>
       <Ionicons name={iconName} size={16} color="#FFFFFF" />
       <Text style={styles.noticeText} maxFontSizeMultiplier={FONT_SCALE.chip}>{message}</Text>
     </View>

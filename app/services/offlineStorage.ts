@@ -7,6 +7,7 @@ export const SETTINGS_CACHE_KEY = '@intakesync:settings';
 export const NOTIFICATIONS_CACHE_KEY = '@intakesync:notifications';
 export const OTC_SEARCH_CACHE_KEY = '@intakesync:otc_search_cache:v1';
 export const OTC_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const ONBOARDING_COMPLETE_KEY_PREFIX = '@intakesync:onboarding_complete:';
 
 export type CacheOwner = {
   id?: string | number | null;
@@ -152,6 +153,46 @@ export async function writeOfflineCache(key: string, data: any): Promise<void> {
 
 function normalizeCachePart(value: string | number) {
   return String(value).trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '_');
+}
+
+export function getUserOnboardingId(user?: any | null): string | null {
+  const id = user?.id ?? user?.user_id;
+  if (id !== null && id !== undefined && String(id).trim()) return normalizeCachePart(id);
+  if (typeof user?.email === 'string' && user.email.trim()) {
+    return normalizeCachePart(user.email.trim().toLowerCase());
+  }
+  return null;
+}
+
+export function getOnboardingCompleteKey(userId: string | number): string {
+  return `${ONBOARDING_COMPLETE_KEY_PREFIX}${normalizeCachePart(userId)}`;
+}
+
+export async function hasCompletedOnboarding(user?: any | null): Promise<boolean> {
+  const userId = getUserOnboardingId(user);
+  if (!userId) return false;
+  try {
+    const completed = await AsyncStorage.getItem(getOnboardingCompleteKey(userId));
+    if (completed === 'true') return true;
+    if (user?.onboarding_completed === true) {
+      await AsyncStorage.setItem(getOnboardingCompleteKey(userId), 'true');
+      return true;
+    }
+    return false;
+  } catch {
+    return user?.onboarding_completed === true;
+  }
+}
+
+export async function markOnboardingComplete(user?: any | null): Promise<boolean> {
+  const userId = getUserOnboardingId(user);
+  if (!userId) return false;
+  try {
+    await AsyncStorage.setItem(getOnboardingCompleteKey(userId), 'true');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeOtcSearchQuery(query: string) {

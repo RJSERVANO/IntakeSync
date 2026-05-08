@@ -7,13 +7,15 @@ import {
   ImageBackground,
   Animated,
   FlatList,
-  Dimensions,
   TouchableOpacity,
   Platform,
+  useWindowDimensions,
   type ViewStyle,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFontScaleVersion } from '../../accessibility/FontScaleProvider';
+import { FONT_SCALE } from '../../../utils/fontScaling';
 
 type Props = {
   onFinish?: () => void;
@@ -45,12 +47,13 @@ const onboardingScreens = [
 ];
 
 export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) {
+  useFontScaleVersion();
   const insets = useSafeAreaInsets();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [activeDotIndex, setActiveDotIndex] = useState(0);
   const [currentPage, setCurrentPage] = useState(0);
   const [splashFinished, setSplashFinished] = useState(false);
-  const { width, height } = Dimensions.get('window');
+  const { width, height } = useWindowDimensions();
   const flatListRef = useRef<FlatList>(null);
   const getStartedScale = useRef(new Animated.Value(0)).current;
   const getStartedPressScale = useRef(new Animated.Value(1)).current;
@@ -333,12 +336,13 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
                   textShadowRadius: 8,
                 },
               ]}
+              maxFontSizeMultiplier={FONT_SCALE.title}
             >
               IntakeSync
             </Animated.Text>
 
             {/* Single tagline */}
-            <Animated.Text style={[styles.tagline, { opacity: fadeAnim }]}>
+            <Animated.Text style={[styles.tagline, { opacity: fadeAnim }]} maxFontSizeMultiplier={FONT_SCALE.description}>
               Helpful reminders for everyday routines.
             </Animated.Text>
 
@@ -363,7 +367,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
             </Animated.View>
           </View>
           <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom + 12, Platform.OS === 'ios' ? 28 : 22) }]}>
-            <Text style={styles.footerText}>© {new Date().getFullYear()} IntakeSync</Text>
+            <Text style={styles.footerText} maxFontSizeMultiplier={FONT_SCALE.chip}>© {new Date().getFullYear()} IntakeSync</Text>
           </View>
         </ImageBackground>
       </Animated.View>
@@ -381,7 +385,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
         onPress={onFinish}
         activeOpacity={0.82}
       >
-        <Text style={styles.skipText}>Skip</Text>
+        <Text style={styles.skipText} maxFontSizeMultiplier={FONT_SCALE.button}>Skip</Text>
       </TouchableOpacity>
       <FlatList
         ref={flatListRef}
@@ -477,8 +481,8 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
                   )}
                 </Animated.View>
               </Animated.View>
-              <Text style={styles.onboardingTitle}>{item.title}</Text>
-              <Text style={styles.onboardingDescription}>{item.description}</Text>
+              <Text style={styles.onboardingTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{item.title}</Text>
+              <Text style={styles.onboardingDescription} maxFontSizeMultiplier={FONT_SCALE.description}>{item.description}</Text>
               
               {/* Visible progress/next cue */}
               <View style={styles.nextCueRow}>
@@ -496,7 +500,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
               {/* Last screen: interactive visual + animated button */}
               {item.key === '3' && (
                 <View style={styles.lastScreenBlock}>
-                  <Text style={styles.lastScreenText}>Create an account to start your journey</Text>
+                  <Text style={styles.lastScreenText} maxFontSizeMultiplier={FONT_SCALE.description}>Create an account to start your journey</Text>
                 <Animated.View
                   style={{
                     opacity: personOpacity,
@@ -526,7 +530,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
                     activeOpacity={0.88}
                   >
                     <View style={styles.getStartedContent}>
-                      <Text style={styles.getStartedTextPremium}>Get Started</Text>
+                      <Text style={styles.getStartedTextPremium} maxFontSizeMultiplier={FONT_SCALE.button}>Get Started</Text>
                       <View style={styles.getStartedIconBadge}>
                         <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
                       </View>

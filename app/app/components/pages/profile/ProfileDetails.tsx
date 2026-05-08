@@ -8,6 +8,7 @@ import useUser from '../../../../hooks/useUser';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenHeader from '../../common/ScreenHeader';
 import { getCachedSession, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 interface UserDetails {
   name: string;
@@ -27,6 +28,7 @@ interface UserDetails {
 }
 
 export default function ProfileDetails() {
+  useFontScaleVersion();
   const { token } = useLocalSearchParams();
   const { user: fetchedUser, setUser: setFetchedUser, loading } = useUser(token as string | undefined);
   const [cachedProfile, setCachedProfile] = React.useState<UserDetails | null>(null);

@@ -10,6 +10,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import ScreenHeader from '../../common/ScreenHeader';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 type SettingPrefs = {
   useMetricUnits: boolean;
@@ -26,6 +27,7 @@ const DEFAULT_PREFS: SettingPrefs = {
 };
 
 export default function Settings() {
+  useFontScaleVersion();
   const router = useRouter();
   const { token: routeToken } = useLocalSearchParams();
   const insets = useSafeAreaInsets();

@@ -8,6 +8,7 @@ import { bootstrapNotificationSchedules, notificationService } from '../services
 import { initializeOfflineSync } from '../services/offlineSyncManager';
 import { LogBox, Text, TextInput } from 'react-native';
 import { FONT_SCALE } from '../utils/fontScaling';
+import { FontScaleProvider } from './accessibility/FontScaleProvider';
 
 const ScalableText = Text as typeof Text & { defaultProps?: { maxFontSizeMultiplier?: number } };
 const ScalableTextInput = TextInput as typeof TextInput & { defaultProps?: { maxFontSizeMultiplier?: number } };
@@ -81,7 +82,9 @@ export default function RootLayout() {
 
   return (
     <>
-      <Stack screenOptions={{ headerShown: false }} />
+      <FontScaleProvider>
+        <Stack screenOptions={{ headerShown: false }} />
+      </FontScaleProvider>
       <Toast />
     </>
   );

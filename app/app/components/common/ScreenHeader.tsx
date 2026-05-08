@@ -4,6 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FONT_SCALE } from '../../../utils/fontScaling';
+import { useFontScaleRefreshKey } from '../../accessibility/FontScaleProvider';
 
 type ScreenHeaderProps = {
   title: string;
@@ -22,6 +23,7 @@ export default function ScreenHeader({
 }: ScreenHeaderProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const fontScaleRefreshKey = useFontScaleRefreshKey('screen-header');
 
   const handleBack = () => {
     if (onBack) {
@@ -37,7 +39,7 @@ export default function ScreenHeader({
   };
 
   return (
-    <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
+    <View key={fontScaleRefreshKey} style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
       {showBackButton ? (
         <TouchableOpacity
           style={styles.backButton}

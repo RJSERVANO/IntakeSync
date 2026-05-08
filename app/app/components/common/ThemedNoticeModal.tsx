@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { FONT_SCALE } from '../../../utils/fontScaling';
+import { useFontScaleRefreshKey } from '../../accessibility/FontScaleProvider';
 
 export type ThemedNoticeType = 'success' | 'error' | 'warning' | 'info' | 'confirm' | 'destructive';
 
@@ -48,6 +49,7 @@ export default function ThemedNoticeModal({
   loading = false,
 }: Props) {
   const current = tone[type];
+  const fontScaleRefreshKey = useFontScaleRefreshKey('notice-modal');
   const showSecondary = type === 'confirm' || type === 'destructive' || !!secondaryText;
   const primaryLabel = primaryText || (showSecondary ? 'Confirm' : 'OK');
 
@@ -59,6 +61,7 @@ export default function ThemedNoticeModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={close}>
       <View style={styles.backdrop}>
         <ScrollView
+          key={fontScaleRefreshKey}
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}

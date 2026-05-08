@@ -9,8 +9,10 @@ import ScreenHeader from '../../common/ScreenHeader';
 import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
 import { getCachedSession } from '../../../../services/offlineStorage';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 export default function PrivacySecurity() {
+  useFontScaleVersion();
   const { token } = useLocalSearchParams();
   const [cachedToken, setCachedToken] = useState<string | undefined>();
   const authToken = (token as string | undefined) || cachedToken;

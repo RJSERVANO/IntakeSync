@@ -4,6 +4,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter, usePathname, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FONT_SCALE } from '../../../utils/fontScaling';
+import { useFontScaleRefreshKey } from '../../accessibility/FontScaleProvider';
 
 interface BottomNavigationProps {
   currentRoute?: string;
@@ -14,6 +15,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
   const pathname = usePathname();
   const { token } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
+  const fontScaleRefreshKey = useFontScaleRefreshKey('bottom-nav');
   
   // Determine active tab based on current route
   const getActiveTab = () => {
@@ -95,7 +97,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
 
   return (
     // allow touches to pass through areas not occupied by the nav
-    <View style={[styles.bottomNav, { paddingBottom: bottomPadding }]} pointerEvents="box-none">
+    <View key={fontScaleRefreshKey} style={[styles.bottomNav, { paddingBottom: bottomPadding }]} pointerEvents="box-none">
       {navigationItems.map((item) => (
         <TouchableOpacity
           key={item.key}

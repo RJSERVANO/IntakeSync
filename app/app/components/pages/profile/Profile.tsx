@@ -10,8 +10,10 @@ import AvatarSelector, { SelectedAvatar, getAvatarSource } from '../../AvatarSel
 import * as api from '../../../api';
 import { clearCachedSession, getCacheOwner, getCachedSession, getUserScopedKey, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
+import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 
 export default function Profile() {
+  useFontScaleVersion();
   const router = useRouter();
   const { token: routeToken } = useLocalSearchParams();
   const [cachedToken, setCachedToken] = React.useState<string | undefined>();
