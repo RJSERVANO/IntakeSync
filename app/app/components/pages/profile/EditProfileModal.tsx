@@ -6,6 +6,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import { writeProfileCache } from '../../../../services/offlineStorage';
+import {
+  capitalizeWords,
+  formatBackendBirthDateForInput,
+  formatBirthDateInput,
+  normalizePhilippineMobile,
+  parseBirthDate,
+} from '../../../../utils/profileValidation';
 
 interface Props {
   visible: boolean;
@@ -17,14 +24,21 @@ interface Props {
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function buildEditableUser(user: any) {
+  return {
+    ...(user || {}),
+    date_of_birth: user?.date_of_birth ? formatBackendBirthDateForInput(String(user.date_of_birth)) : '',
+  };
+}
+
 export default function EditProfileModal({ visible, onClose, token, user, onSaved }: Props) {
-  const [editData, setEditData] = useState<any>({ ...(user || {}) });
+  const [editData, setEditData] = useState<any>(buildEditableUser(user));
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
-    setEditData({ ...(user || {}) });
+    setEditData(buildEditableUser(user));
   }, [visible, user]);
 
   const updateField = (field: string, value: string) => {
@@ -71,6 +85,22 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         return;
       }
 
+      const normalizedPhone = editData.phone?.trim() ? normalizePhilippineMobile(editData.phone) : null;
+      if (editData.phone?.trim() && !normalizedPhone) {
+        setNotice({ type: 'warning', title: 'Validation Error', message: 'Enter a valid Philippine mobile number.' });
+        return;
+      }
+
+      const birthDateForBackend = editData.date_of_birth?.trim() ? parseBirthDate(editData.date_of_birth) : null;
+      if (editData.date_of_birth?.trim() && !birthDateForBackend) {
+        setNotice({
+          type: 'warning',
+          title: 'Validation Error',
+          message: 'Use mm/dd/yyyy with a real date. You must be between 13 and 120 years old.',
+        });
+        return;
+      }
+
       setSaving(true);
 
       if (!token) {
@@ -97,8 +127,8 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         name: editData.name.trim(),
         nickname: editData.nickname?.trim() || null,
         email: editData.email.trim(),
-        phone: editData.phone?.trim() || null,
-        date_of_birth: editData.date_of_birth?.trim() || null,
+        phone: normalizedPhone,
+        date_of_birth: birthDateForBackend,
         address: editData.address?.trim() || null,
         climate: editData.climate || null,
         exercise_frequency: editData.exercise_frequency || null,
@@ -161,9 +191,22 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
               <Field label="Full Name *" value={editData.name || ''} onChangeText={(value) => updateField('name', value)} placeholder="Enter full name" />
               <Field label="Nickname" value={editData.nickname || ''} onChangeText={(value) => updateField('nickname', value)} placeholder="What should we call you?" />
               <Field label="Email *" value={editData.email || ''} onChangeText={(value) => updateField('email', value)} placeholder="Enter email" keyboardType="email-address" />
-              <Field label="Phone" value={editData.phone || ''} onChangeText={(value) => updateField('phone', value)} placeholder="Enter phone number" keyboardType="phone-pad" />
-              <Field label="Date of Birth" value={editData.date_of_birth || ''} onChangeText={(value) => updateField('date_of_birth', value)} placeholder="YYYY-MM-DD" />
-              <Field label="Address" value={editData.address || ''} onChangeText={(value) => updateField('address', value)} placeholder="Enter address" multiline />
+              <Field label="Phone" value={editData.phone || ''} onChangeText={(value) => updateField('phone', value)} placeholder="09123456789" keyboardType="phone-pad" />
+              <Field
+                label="Date of Birth"
+                value={editData.date_of_birth || ''}
+                onChangeText={(value) => updateField('date_of_birth', formatBirthDateInput(value))}
+                placeholder="mm/dd/yyyy"
+                keyboardType="number-pad"
+                maxLength={10}
+              />
+              <Field
+                label="Address"
+                value={editData.address || ''}
+                onChangeText={(value) => updateField('address', capitalizeWords(value))}
+                placeholder="Enter address"
+                multiline
+              />
             </View>
 
             <Text style={styles.sectionHeader}>Hydration Profile</Text>
@@ -231,7 +274,8 @@ function Field(props: {
   value: string;
   placeholder: string;
   onChangeText: (value: string) => void;
-  keyboardType?: 'default' | 'email-address' | 'phone-pad';
+  keyboardType?: 'default' | 'email-address' | 'phone-pad' | 'number-pad';
+  maxLength?: number;
   multiline?: boolean;
 }) {
   return (
@@ -244,6 +288,7 @@ function Field(props: {
         placeholder={props.placeholder}
         placeholderTextColor="#94A3B8"
         keyboardType={props.keyboardType || 'default'}
+        maxLength={props.maxLength}
         multiline={props.multiline}
         numberOfLines={props.multiline ? 3 : 1}
       />

@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import ScreenHeader from '../../common/ScreenHeader';
 import { getCachedSession, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+import { formatBackendBirthDateForInput } from '../../../../utils/profileValidation';
 
 interface UserDetails {
   name: string;
@@ -136,7 +137,7 @@ export default function ProfileDetails() {
                   { label: 'Nickname', value: user.nickname },
                   { label: 'Email', value: user.email },
                   { label: 'Phone', value: user.phone },
-                  { label: 'Date of Birth', value: user.date_of_birth },
+                  { label: 'Date of Birth', value: user.date_of_birth ? formatBackendBirthDateForInput(user.date_of_birth) : user.date_of_birth },
                   { label: 'Address', value: user.address },
                 ],
               },
