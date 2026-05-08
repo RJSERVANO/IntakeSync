@@ -34,7 +34,12 @@ type MedicationItem = {
   end_date?: string | null;
   frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
   days_of_week?: number[];
+  active?: boolean;
   deleted_at?: string | null;
+  created_at?: string;
+  local_created_at?: string;
+  schedule_created_at?: string;
+  client_created_at?: string;
 };
 
 type MedicationEvent = {
@@ -49,6 +54,14 @@ type MedicationEvent = {
   logged_at?: string;
   created_at?: string;
   updated_at?: string;
+  medication_name_snapshot?: string;
+  dosage_snapshot?: string;
+  medication?: {
+    id?: string | number;
+    name?: string;
+    dosage?: string;
+    deleted_at?: string | null;
+  } | null;
 };
 
 type DailyInsight = {
@@ -121,7 +134,7 @@ type DailyInsightContext = {
   now: Date;
 };
 
-const MISSED_DOSE_GRACE_MS = 60 * 1000;
+const MISSED_DOSE_GRACE_MS = 30 * 60 * 1000;
 const SCORE_COLORS = {
   empty: '#64748B',
   attention: '#EF4444',
@@ -260,29 +273,43 @@ const getScoreColor = (score: number | null) => {
 
 const normalizeHistoryEntry = (entry: any, medId?: string | number): MedicationEvent => ({
   ...entry,
-  id: entry?.id?.toString?.() || entry?.local_id || `${medId || getMedicationId(entry)}:${getMedicationDoseTime(entry)}:${entry?.status || 'recorded'}`,
-  medId: entry?.medId || entry?.medication_id || medId,
+  id: entry?.id?.toString?.() || entry?.local_id || `${medId || entry?.medication?.id || getMedicationId(entry)}:${getMedicationDoseTime(entry)}:${entry?.status || 'recorded'}`,
+  medId: entry?.medId || entry?.medication_id || entry?.medication?.id || medId,
   time: entry?.time || entry?.scheduled_time || entry?.scheduled_at,
   status: entry?.status,
   loggedAt: entry?.loggedAt || entry?.logged_at || entry?.taken_time || entry?.taken_at || entry?.completed_at || entry?.created_at || entry?.updated_at,
+  medication_name_snapshot: entry?.medication_name_snapshot || entry?.medication?.name,
+  dosage_snapshot: entry?.dosage_snapshot || entry?.medication?.dosage,
 });
 
 const isMedicationScheduledOnDate = (med: MedicationItem, date: Date) => {
-  if (!med.times?.length || med.deleted_at || med.reminder === false) return false;
+  if (!med.times?.length || med.deleted_at || med.active === false || med.reminder === false) return false;
   const dayStart = new Date(date);
   dayStart.setHours(0, 0, 0, 0);
-  if (med.start_date && parseDateStringLocal(med.start_date).getTime() > dayStart.getTime()) return false;
+  const scheduleStart = med.start_date ? parseDateStringLocal(med.start_date) : null;
+  if (scheduleStart && scheduleStart.getTime() > dayStart.getTime()) return false;
   if (med.end_date) {
     const end = parseDateStringLocal(med.end_date);
     end.setHours(23, 59, 59, 999);
     if (end.getTime() < dayStart.getTime()) return false;
   }
-  if (med.frequency === 'weekly' && med.days_of_week?.length) return med.days_of_week.includes(date.getDay());
+  if ((med.frequency === 'weekly' || med.frequency === 'custom') && med.days_of_week?.length) return med.days_of_week.includes(date.getDay());
+  if (med.frequency === 'monthly' && scheduleStart) return date.getDate() === scheduleStart.getDate();
   return true;
+};
+
+const getMedicationScheduleCreatedAt = (med: MedicationItem) => {
+  const raw = med.schedule_created_at || med.client_created_at || med.local_created_at || med.created_at;
+  if (!raw) return null;
+  const created = new Date(raw);
+  if (Number.isNaN(created.getTime())) return null;
+  created.setSeconds(0, 0);
+  return created.getTime();
 };
 
 const getMedicationDoseOccurrencesForDate = (med: MedicationItem, date: Date) => {
   if (!isMedicationScheduledOnDate(med, date)) return [];
+  const scheduleCreatedAt = getMedicationScheduleCreatedAt(med);
   return (med.times || [])
     .map((time) => {
       const source = new Date(time);
@@ -292,6 +319,7 @@ const getMedicationDoseOccurrencesForDate = (med: MedicationItem, date: Date) =>
       return occurrence;
     })
     .filter((item): item is Date => !!item)
+    .filter((item) => !scheduleCreatedAt || item.getTime() >= scheduleCreatedAt)
     .sort((a, b) => a.getTime() - b.getTime());
 };
 
@@ -680,15 +708,26 @@ export default function InsightsScreen() {
       if (refreshFailures.some((result: any) => api.isNetworkError(result.reason))) {
         setOfflineNotice('Offline mode - showing routine insights saved on this device.');
       }
-      const historyResults = await Promise.allSettled(
-        backendMeds.map(async (med) => {
-          const history = await api.get(`/medications/${med.server_id || med.id}/history`, activeToken, 4000);
-          return (history || []).map((entry: any) => normalizeHistoryEntry(entry, med.id));
-        })
-      );
-      const backendHistory = historyResults.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+      let backendHistory: MedicationEvent[] = [];
+      try {
+        const allHistory = await api.get('/medications/history/all', activeToken, 5000);
+        backendHistory = Array.isArray(allHistory)
+          ? allHistory.map((entry: any) => normalizeHistoryEntry(entry, entry?.medication_id || entry?.medication?.id))
+          : [];
+      } catch (historyError) {
+        if (api.isNetworkError(historyError)) {
+          setOfflineNotice('Offline mode - showing routine insights saved on this device.');
+        }
+        const historyResults = await Promise.allSettled(
+          backendMeds.map(async (med) => {
+            const history = await api.get(`/medications/${med.server_id || med.id}/history`, activeToken, 4000);
+            return (history || []).map((entry: any) => normalizeHistoryEntry(entry, med.id));
+          })
+        );
+        backendHistory = historyResults.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
+      }
       if (local.user && backendMeds.length > 0) await writeMedicationCache(local.user, backendMeds);
-      if (local.user && backendHistory.length > 0) await writeMedicationHistoryCache(local.user, dedupeMedicationEvents([...backendHistory, ...(local.medicationHistoryCache || [])]));
+      if (local.user) await writeMedicationHistoryCache(local.user, dedupeMedicationEvents([...backendHistory, ...(local.medicationHistoryCache || [])]));
       if (backendHydration) {
         const pendingEntries = Array.isArray(local.hydrationCache?.entries)
           ? local.hydrationCache.entries.filter((entry: any) => entry?.sync_status === 'pending' || entry?.sync_status === 'failed')
