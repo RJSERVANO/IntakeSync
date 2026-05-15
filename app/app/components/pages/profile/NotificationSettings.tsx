@@ -10,6 +10,7 @@ import {
   notificationService,
   validateScheduledNotificationRefs,
 } from '../../../../services/notificationService';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { notificationSettings } from '../../../../services/notificationSettings';
 import { getCachedSession, readSettingsCache, writeSettingsCache } from '../../../../services/offlineStorage';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
@@ -86,10 +87,13 @@ export default function NotificationSettings() {
   const loadSettings = async () => {
     try {
       const session = await getCachedSession();
+      const context = await captureAuthSessionContext(session?.token, session?.user ?? null);
+      if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
       setCurrentUser(session?.user ?? null);
       const cached = session?.user ? await readSettingsCache<any>(session.user) : null;
       const next = { ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) };
       const permission = await notificationService.getPermissionStatus();
+      if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
       setPermissionState(permission);
       const normalized = permission.granted ? next : { ...next, allowNotifications: false };
       setPrefs(normalized);
@@ -140,7 +144,7 @@ export default function NotificationSettings() {
         next = { ...prefs, allowNotifications: false };
       } else {
         setPermissionBlocked(false);
-        setNoticeModal({ type: 'success', title: 'Notifications Enabled', message: 'Hydration and medication reminders can now appear on this device.' });
+        setNoticeModal({ type: 'success', title: 'Reminders enabled', message: 'Notifications are on.' });
       }
     }
 

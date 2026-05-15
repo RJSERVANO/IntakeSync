@@ -4,14 +4,16 @@ import Login from './login';
 import * as api from './api';
 import CustomSplash from './components/branding/CustomSplash';
 import {
-  clearCachedSession,
   getCachedSession,
   hasCompletedOnboarding,
+  hasSeenStartupSplash,
   hasValidCachedSession,
+  markStartupSplashSeen,
   updateCachedUser,
 } from '../services/offlineStorage';
+import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../services/authSession';
 
-type StartupState = 'hydrating' | 'guestSplash' | 'guestLogin' | 'redirecting';
+type StartupState = 'hydrating' | 'guestSplash' | 'redirecting';
 
 export default function Index() {
   const router = useRouter();
@@ -22,30 +24,39 @@ export default function Index() {
 
     async function checkStartupState() {
       try {
+        const seenStartupSplash = await hasSeenStartupSplash();
         const cached = await getCachedSession();
         if (!mounted) return;
 
         if (hasValidCachedSession(cached)) {
+          const context = await captureAuthSessionContext(cached.token, cached.user);
           let user = cached.user;
           let completed = await hasCompletedOnboarding(user);
 
           if (!completed) {
             try {
               const remoteUser: any = await api.get('/me', cached.token, 3500);
-              if (!mounted) return;
+              if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
               user = { ...(user || {}), ...(remoteUser || {}) };
               await updateCachedUser(user, cached.token);
               completed = await hasCompletedOnboarding(user);
             } catch (err: any) {
               if (api.isAuthError(err)) {
-                await clearCachedSession();
-                if (mounted) setStartupState('guestSplash');
+                const cleared = await handleAuthFailureIfCurrent({ context });
+                if (!mounted) return;
+                if (!cleared) return;
+                if (seenStartupSplash) {
+                  setStartupState('redirecting');
+                  router.replace({ pathname: '/login' } as any);
+                } else {
+                  setStartupState('guestSplash');
+                }
                 return;
               }
             }
           }
 
-          if (!mounted) return;
+          if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
 
           if (completed) {
             setStartupState('redirecting');
@@ -61,9 +72,18 @@ export default function Index() {
           return;
         }
 
+        if (seenStartupSplash) {
+          setStartupState('redirecting');
+          router.replace({ pathname: '/login' } as any);
+          return;
+        }
+
         setStartupState('guestSplash');
       } catch {
-        if (mounted) setStartupState('guestSplash');
+        if (mounted) {
+          setStartupState('redirecting');
+          router.replace({ pathname: '/login' } as any);
+        }
       }
     }
 
@@ -79,7 +99,16 @@ export default function Index() {
   }
 
   if (startupState === 'guestSplash') {
-    return <CustomSplash mode="full" onFinish={() => setStartupState('guestLogin')} />;
+    return (
+      <CustomSplash
+        mode="full"
+        onFinish={async () => {
+          await markStartupSplashSeen().catch(() => undefined);
+          setStartupState('redirecting');
+          router.replace({ pathname: '/login' } as any);
+        }}
+      />
+    );
   }
 
   return <Login />;

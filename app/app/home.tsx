@@ -5,8 +5,8 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
+import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../services/authSession';
 import {
-  clearCachedSession,
   filterOtcReferenceMedicines,
   getCacheOwner,
   getCachedSession,
@@ -30,6 +30,7 @@ import {
 } from '../services/offlineStorage';
 import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
 import { subscribeHomeRefresh } from '../services/homeEvents';
+import { performLocalLogout } from '../services/logoutSession';
 import { deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
@@ -41,6 +42,8 @@ import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
+const LAST_HOME_REFRESH_KEY = '@intakesync_last_home_refresh_at';
+const HOME_BACKGROUND_REFRESH_TTL_MS = 45 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 
 function createBeverageLocalId() {
@@ -152,7 +155,11 @@ const resolveHydrationGoal = (hydrationData: any, fallback = 2000) => {
   return Number.isFinite(goal) && goal > 0 ? goal : fallback;
 };
 
-const resolveHydrationTotal = (hydrationData: any) => Number(hydrationData?.today_total ?? 0) || 0;
+const resolveHydrationTotal = (hydrationData: any) => {
+  const explicitTotal = Number(hydrationData?.today_total);
+  if (Number.isFinite(explicitTotal)) return explicitTotal;
+  return Array.isArray(hydrationData?.entries) ? totalHydrationForLocalDay(hydrationData.entries) : 0;
+};
 
 const resolveHydrationPercentage = (hydrationData: any, goal: number) => {
   const percentage = Number(hydrationData?.percentage);
@@ -163,6 +170,23 @@ const resolveHydrationPercentage = (hydrationData: any, goal: number) => {
   const total = resolveHydrationTotal(hydrationData);
   return goal > 0 ? Math.round((total / goal) * 100) : 0;
 };
+
+function buildMergedHydrationPayload(backendData: any, localData: any, fallbackGoal = 2000) {
+  const goal = resolveHydrationGoal(backendData || localData, fallbackGoal);
+  const backendEntries = Array.isArray(backendData?.entries) ? backendData.entries : [];
+  const localEntries = Array.isArray(localData?.entries) ? localData.entries : [];
+  const entries = mergeHydrationEntries(localEntries, backendEntries);
+  const todayTotal = totalHydrationForLocalDay(entries);
+  return {
+    ...(localData || {}),
+    ...(backendData || {}),
+    goal,
+    daily_goal_ml: goal,
+    today_total: todayTotal,
+    percentage: goal > 0 ? Math.round((todayTotal / goal) * 100) : 0,
+    entries,
+  };
+}
 
 export default function Home() {
   useFontScaleVersion();
@@ -205,6 +229,8 @@ export default function Home() {
   const goalCompletionShownRef = useRef(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshFromCacheInFlightRef = useRef(false);
+  const backgroundRefreshInFlightRef = useRef(false);
+  const homeRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const remoteAvatarUri = getUserRemoteAvatarUri(user);
   const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
@@ -246,7 +272,18 @@ export default function Home() {
   useEffect(() => {
     return () => {
       if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+      if (homeRefreshDebounceRef.current) clearTimeout(homeRefreshDebounceRef.current);
     };
+  }, []);
+
+  const shouldRunHomeBackgroundRefresh = useCallback(async () => {
+    const raw = await AsyncStorage.getItem(LAST_HOME_REFRESH_KEY);
+    const lastRefreshAt = raw ? Number(raw) : 0;
+    return !Number.isFinite(lastRefreshAt) || Date.now() - lastRefreshAt > HOME_BACKGROUND_REFRESH_TTL_MS;
+  }, []);
+
+  const markHomeBackgroundRefreshed = useCallback(async () => {
+    await AsyncStorage.setItem(LAST_HOME_REFRESH_KEY, String(Date.now()));
   }, []);
 
   const loadHeaderUserFromCache = useCallback(async () => {
@@ -324,14 +361,26 @@ export default function Home() {
       void applyCacheFirstHomeSummary(user);
       const syncToken = routeToken;
       (async () => {
-        if (syncToken) {
-          await processSyncQueue(syncToken, async (item, response) => {
-            if (item.action_type === 'LOG_BEVERAGE') {
-              await markCachedHydrationEntrySynced(item.local_id, response);
-            }
-          }).catch(() => {});
+        const context = await captureAuthSessionContext(syncToken);
+        if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
+        const before = await getSyncQueueSummary();
+        if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
+        setPendingSyncCount(before.pending);
+        if (syncToken && before.pending > 0) {
+          setSyncing(true);
+          try {
+            await processSyncQueue(syncToken, async (item, response) => {
+              if (!(await isAuthSessionContextCurrent(context))) return;
+              if (item.action_type === 'LOG_BEVERAGE') {
+                await markCachedHydrationEntrySynced(item.local_id, response);
+              }
+            }).catch(() => {});
+          } finally {
+            if (await isAuthSessionContextCurrent(context)) setSyncing(false);
+          }
         }
         const summary = await getSyncQueueSummary();
+        if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
         setPendingSyncCount(summary.pending);
       })();
     }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, routeToken, user])
@@ -339,7 +388,10 @@ export default function Home() {
 
   useEffect(() => {
     const subscription = subscribeHomeRefresh(() => {
-      void applyCacheFirstHomeSummary(user);
+      if (homeRefreshDebounceRef.current) clearTimeout(homeRefreshDebounceRef.current);
+      homeRefreshDebounceRef.current = setTimeout(() => {
+        void applyCacheFirstHomeSummary(user);
+      }, 100);
     });
     return () => subscription.remove();
   }, [applyCacheFirstHomeSummary, user]);
@@ -421,7 +473,7 @@ export default function Home() {
     
     // Show over-hydration modal when exceeding 110% (after goal was already completed)
     if (currentPercentage > 110 && previousHydrationPercentage >= 100 && previousHydrationPercentage <= 110) {
-      showInlineNotice('High intake logged. Stay mindful.');
+      showInlineNotice('High intake logged');
     }
     
     // Update previous percentage
@@ -440,6 +492,8 @@ export default function Home() {
     async function load() {
       try {
         const activeToken = routeToken?.trim() || '';
+        const context = await captureAuthSessionContext(activeToken || undefined);
+        if (activeToken && !(await isAuthSessionContextCurrent(context))) return;
         if (!activeToken) {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
@@ -484,16 +538,14 @@ export default function Home() {
             await applyVisibleUser(sessionUser);
             await applyCacheFirstHomeSummary(sessionUser);
             setLoading(false);
-            setSyncing(true);
           }
           const me = await Promise.race([
             api.get('/me', activeToken, 3000), // 3 second timeout - very short
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
           ]) as any;
+          if (!(await isAuthSessionContextCurrent(context))) return;
           if (!hasValidCachedSession({ token: activeToken, user: me })) {
-            await clearCachedSession();
-            clearVisibleHomeState();
-            router.replace({ pathname: '/login' } as any);
+            await handleAuthFailureIfCurrent({ context, router });
             return;
           }
           const visibleMe = await mergeLocalAvatarIntoUser(me);
@@ -509,13 +561,14 @@ export default function Home() {
           setSyncing(false);
           // If it's an auth error, redirect to login
           if (api.isAuthError(meErr)) {
-            await clearCachedSession();
-            clearVisibleHomeState();
-            router.replace({ pathname: '/login' } as any);
+            if (await handleAuthFailureIfCurrent({ context, router })) {
+              clearVisibleHomeState();
+            }
             return;
           }
           const cached = await getCachedSession();
           if (!hasValidCachedSession(cached) || cached.token !== activeToken) {
+            if (!(await isAuthSessionContextCurrent(context))) return;
             clearVisibleHomeState();
             setLoading(false);
             router.replace({ pathname: '/login' } as any);
@@ -528,7 +581,16 @@ export default function Home() {
           // For other errors, continue to show UI with default data
         }
         
-        // Load other data in background (non-blocking, won't affect loading state)
+        if (!await shouldRunHomeBackgroundRefresh()) {
+          return;
+        }
+
+        if (backgroundRefreshInFlightRef.current) {
+          return;
+        }
+        backgroundRefreshInFlightRef.current = true;
+
+        // Load other data in background (non-blocking, quiet, won't affect loading state)
         // These run after loading is already set to false
         setTimeout(() => {
           // Load quick status data (non-blocking with timeouts)
@@ -545,81 +607,105 @@ export default function Home() {
             const historyData = results[4].status === 'fulfilled' ? results[4].value : null;
             
             const hydrationGoal = resolveHydrationGoal(hydrationData);
-            const hydrationTotal = resolveHydrationTotal(hydrationData);
-            const hydrationPercentage = hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0;
-            const hydrationEntries = Array.isArray(hydrationData?.entries) ? hydrationData.entries : null;
-            setHydrationEntries(hydrationEntries);
-            setUpcomingMedications((current) => current.length ? current : (Array.isArray(upcoming) ? upcoming : []));
+            const writeHydration = async () => {
+              if (!(await isAuthSessionContextCurrent(context))) return null;
+              const currentHydration = await readHydrationCache<any>();
+              if (!(await isAuthSessionContextCurrent(context))) return null;
+              const mergedHydration = buildMergedHydrationPayload(hydrationData, currentHydration, hydrationGoal);
+              const hydrationEntries = Array.isArray(mergedHydration.entries) ? mergedHydration.entries : [];
+              setHydrationEntries(hydrationEntries);
+              setQuickStatus((prev) => ({
+                ...prev,
+                hydrationPercentage: mergedHydration.percentage,
+                hydrationTotal: mergedHydration.today_total,
+                hydrationGoal: mergedHydration.goal,
+              }));
+              await writeHydrationCache(mergedHydration);
+              return mergedHydration;
+            };
+            void isAuthSessionContextCurrent(context).then((current) => {
+              if (!current) return;
+              setUpcomingMedications((currentItems) => currentItems.length ? currentItems : (Array.isArray(upcoming) ? upcoming : []));
+            });
             if (backgroundUser && Array.isArray(medicationsData)) {
-              writeMedicationCache(backgroundUser, medicationsData).catch(() => {});
+              void isAuthSessionContextCurrent(context).then((current) => {
+                if (current) writeMedicationCache(backgroundUser, medicationsData).catch(() => {});
+              });
             }
             if (backgroundUser && Array.isArray(historyData)) {
-              writeMedicationHistoryCache(backgroundUser, historyData).catch(() => {});
+              void isAuthSessionContextCurrent(context).then((current) => {
+                if (current) writeMedicationHistoryCache(backgroundUser, historyData).catch(() => {});
+              });
             }
-            
-            setQuickStatus((prev) => ({
-              ...prev,
-              hydrationPercentage,
-              hydrationTotal,
-              hydrationGoal,
-            }));
-            writeHydrationCache({
-              ...hydrationData,
-              goal: hydrationGoal,
-              daily_goal_ml: hydrationGoal,
-              today_total: hydrationTotal,
-              percentage: hydrationPercentage,
-              entries: hydrationEntries || [],
-            }).catch(() => {});
-            void applyCacheFirstHomeSummary(backgroundUser);
+            void writeHydration().then(() => applyCacheFirstHomeSummary(backgroundUser)).catch(() => undefined);
             const owner = getCacheOwner(backgroundUser);
             if (owner.owner_id || owner.owner_email) {
-              writeOwnedOfflineCache(getUserScopedKey(owner, 'home_summary'), backgroundUser, {
-                quickStatus: {
-                  hydrationPercentage,
-                  hydrationTotal,
-                  hydrationGoal,
-                },
-                upcomingMedications: Array.isArray(upcoming) ? upcoming : [],
-              }).catch(() => {});
+              void isAuthSessionContextCurrent(context).then((current) => {
+                if (!current) return;
+                writeOwnedOfflineCache(getUserScopedKey(owner, 'home_summary'), backgroundUser, {
+                  quickStatus: {
+                    hydrationPercentage: hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0,
+                    hydrationTotal: hydrationData ? resolveHydrationTotal(hydrationData) : 0,
+                    hydrationGoal,
+                  },
+                  upcomingMedications: Array.isArray(upcoming) ? upcoming : [],
+                }).catch(() => {});
+              });
             }
+            void isAuthSessionContextCurrent(context).then((current) => {
+              if (current) void markHomeBackgroundRefreshed();
+            });
           }).catch(() => {
-            setQuickStatus((prev) => ({
-              ...prev,
-              hydrationPercentage: 0,
-              hydrationTotal: 0,
-              hydrationGoal: 2000,
-            }));
+            void isAuthSessionContextCurrent(context).then((current) => {
+              if (!current) return;
+              setQuickStatus((prev) => ({
+                ...prev,
+                hydrationPercentage: 0,
+                hydrationTotal: 0,
+                hydrationGoal: 2000,
+              }));
+            });
           });
           
           // Load timeline separately to avoid blocking on errors
           api.get('/notifications/today-timeline', activeToken, 3000)
             .then((timelineData) => {
+              void isAuthSessionContextCurrent(context).then((current) => {
+                if (!current) return;
               if (Array.isArray(timelineData)) {
                 setTimeline(timelineData);
               } else {
                 setTimeline([]);
               }
+              });
             })
             .catch(() => {
-              setTimeline([]);
+              void isAuthSessionContextCurrent(context).then((current) => current && setTimeline([]));
             });
 
           api.get('/notifications/stats', activeToken, 3000)
             .then((statsData) => {
-              setNotificationStats(statsData || null);
+              void isAuthSessionContextCurrent(context).then((current) => current && setNotificationStats(statsData || null));
             })
             .catch(() => {
-              setNotificationStats(null);
+              void isAuthSessionContextCurrent(context).then((current) => current && setNotificationStats(null));
             })
-            .finally(() => setSyncing(false));
+            .finally(() => {
+              void isAuthSessionContextCurrent(context).then((current) => {
+                if (current) backgroundRefreshInFlightRef.current = false;
+              });
+            });
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
         console.log('Home load error:', err);
+        if (api.isStaleSessionError(err)) return;
         setSyncing(false);
         clearVisibleHomeState();
         setLoading(false);
-        router.replace({ pathname: '/login' } as any);
+        const context = await captureAuthSessionContext(routeToken || undefined);
+        if (await isAuthSessionContextCurrent(context)) {
+          router.replace({ pathname: '/login' } as any);
+        }
         // Don't show alerts for network/timeout errors
         if (err?.status !== 408 && err?.status !== 0 && err?.status !== undefined) {
           const message = err?.data?.message || err?.data || err?.message || 'Failed to load data';
@@ -632,12 +718,14 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [routeToken, router, clearVisibleHomeState, applyVisibleUser, applyCacheFirstHomeSummary]);
+  }, [routeToken, router, clearVisibleHomeState, applyVisibleUser, applyCacheFirstHomeSummary, markHomeBackgroundRefreshed, shouldRunHomeBackgroundRefresh]);
 
   // Load Routine Insights for every logged-in user (non-blocking)
   useEffect(() => {
     if (routeToken) {
       const loadInsights = async () => {
+        const context = await captureAuthSessionContext(routeToken);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         try {
           // Use Promise.allSettled to prevent one failing from blocking others
           const results = await Promise.allSettled([
@@ -646,6 +734,7 @@ export default function Home() {
             api.get('/insights/snooze-analysis', routeToken),
           ]);
           
+          if (!(await isAuthSessionContextCurrent(context))) return;
           if (results[0].status === 'fulfilled' && results[0].value) {
             setWeeklyReport(results[0].value);
           }
@@ -669,39 +758,41 @@ export default function Home() {
       if (!routeToken || loading) return;
 
       const refreshHydrationData = async () => {
+        let ownsRefresh = false;
         try {
+          const context = await captureAuthSessionContext(routeToken);
+          if (!(await isAuthSessionContextCurrent(context))) return;
           await applyCacheFirstHomeSummary(user);
+          if (!await shouldRunHomeBackgroundRefresh() || backgroundRefreshInFlightRef.current) return;
+          backgroundRefreshInFlightRef.current = true;
+          ownsRefresh = true;
           const hydrationRes = await api.get('/hydration', routeToken, 3000).catch(() => null);
+          if (!(await isAuthSessionContextCurrent(context))) return;
           
           if (hydrationRes) {
-            const hydrationGoal = resolveHydrationGoal(hydrationRes, quickStatus.hydrationGoal || 2000);
-            const hydrationTotal = resolveHydrationTotal(hydrationRes);
-            const hydrationPercentage = resolveHydrationPercentage(hydrationRes, hydrationGoal);
-            setHydrationEntries(Array.isArray(hydrationRes.entries) ? hydrationRes.entries : null);
+            const currentHydration = await readHydrationCache<any>();
+            const mergedHydration = buildMergedHydrationPayload(hydrationRes, currentHydration, quickStatus.hydrationGoal || 2000);
+            setHydrationEntries(Array.isArray(mergedHydration.entries) ? mergedHydration.entries : null);
             
             setQuickStatus(prev => ({
               ...prev,
-              hydrationPercentage,
-              hydrationTotal,
-              hydrationGoal
+              hydrationPercentage: mergedHydration.percentage,
+              hydrationTotal: mergedHydration.today_total,
+              hydrationGoal: mergedHydration.goal
             }));
-            writeHydrationCache({
-              ...hydrationRes,
-              goal: hydrationGoal,
-              daily_goal_ml: hydrationGoal,
-              today_total: hydrationTotal,
-              percentage: hydrationPercentage,
-              entries: Array.isArray(hydrationRes.entries) ? hydrationRes.entries : [],
-            }).catch(() => {});
+            await writeHydrationCache(mergedHydration);
+            await markHomeBackgroundRefreshed();
           }
           await applyCacheFirstHomeSummary(user);
         } catch (err) {
           console.log('Data refresh error', err);
+        } finally {
+          if (ownsRefresh) backgroundRefreshInFlightRef.current = false;
         }
       };
       
       refreshHydrationData();
-    }, [applyCacheFirstHomeSummary, routeToken, loading, quickStatus.hydrationGoal, user])
+    }, [applyCacheFirstHomeSummary, markHomeBackgroundRefreshed, routeToken, loading, quickStatus.hydrationGoal, shouldRunHomeBackgroundRefresh, user])
   );
 
   // Use nickname if available, otherwise fall back to first name
@@ -739,13 +830,13 @@ export default function Home() {
           setNoticeModal(null);
           clearVisibleHomeState();
           setLoading(true);
-          try {
-            await api.post('/logout', {}, routeToken as string);
-          } catch (err) {
-            console.log('Logout error:', err);
-          }
-          await clearCachedSession();
-          router.replace({ pathname: '/' } as any);
+          await performLocalLogout({
+            reason: 'home_menu',
+            router,
+            token: routeToken as string | undefined,
+            user,
+            onLocalStateCleared: clearVisibleHomeState,
+          });
         },
       });
       return;
@@ -1030,7 +1121,12 @@ export default function Home() {
     const cachedEntries = Array.isArray(cachedHydration?.entries) ? cachedHydration.entries : [];
     const currentEntries = Array.isArray(hydrationEntries) ? hydrationEntries : [];
     const newEntries = mergeHydrationEntries([...currentEntries, entry], cachedEntries);
-    await persistHomeHydrationSnapshot(newEntries, goal);
+    try {
+      await persistHomeHydrationSnapshot(newEntries, goal);
+    } catch {
+      showInlineNotice('Save failed');
+      return;
+    }
 
     const queuePayload: BeverageLogPayload = {
       local_id: localId,
@@ -1047,12 +1143,11 @@ export default function Home() {
 
     if (!token) {
       setOfflineMode(true);
-      showInlineNotice('Saved offline. Changes will sync when connected.');
+      showInlineNotice('Will sync later');
       return;
     }
 
     try {
-      setSyncing(true);
       const response = await api.post('/hydration', {
         local_id: localId,
         client_uuid: localId,
@@ -1073,7 +1168,7 @@ export default function Home() {
       } : item);
       await persistHomeHydrationSnapshot(syncedEntries, goal);
       setOfflineMode(false);
-      showInlineNotice('250 ml water logged');
+      showInlineNotice('Water logged');
     } catch (err: any) {
       console.log('Home quick beverage log sync error:', {
         status: err?.status,
@@ -1081,9 +1176,7 @@ export default function Home() {
         data: err?.data,
       });
       if (api.isNetworkError(err)) setOfflineMode(true);
-      showInlineNotice(api.isNetworkError(err) ? 'Saved offline. Changes will sync when connected.' : 'Saved locally. Sync pending.');
-    } finally {
-      setSyncing(false);
+      showInlineNotice(api.isNetworkError(err) ? 'Will sync later' : 'Sync pending');
     }
   };
 
@@ -1141,7 +1234,7 @@ export default function Home() {
       {offlineMode ? (
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
-          <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+          <Text style={styles.offlineBannerText}>Offline mode</Text>
         </View>
       ) : null}
       {pendingSyncCount > 0 ? (
@@ -1284,7 +1377,7 @@ export default function Home() {
                     await quickLogWater();
                   } catch (err: any) {
                     console.log('Home quick beverage local save error:', err);
-                    showInlineNotice('Could not save beverage intake locally.');
+                    showInlineNotice('Save failed');
                   }
                 }}
               >

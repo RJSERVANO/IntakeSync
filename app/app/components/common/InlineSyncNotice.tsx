@@ -46,7 +46,7 @@ export default function InlineSyncNotice({
       ]}
     >
       {icon || <Ionicons name={iconName} size={15} color={colors.icon} />}
-      <Text style={[styles.noticeText, { color: colors.text }]} maxFontSizeMultiplier={FONT_SCALE.chip}>{message}</Text>
+      <Text style={[styles.noticeText, { color: colors.text }]} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={2}>{message}</Text>
     </View>
   );
 }
@@ -54,23 +54,25 @@ export default function InlineSyncNotice({
 const styles = StyleSheet.create({
   notice: {
     position: 'absolute',
-    left: 20,
-    right: 20,
+    left: 28,
+    right: 28,
     zIndex: 55,
     borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     flexWrap: 'wrap',
     gap: 6,
     borderWidth: 1,
+    maxHeight: 56,
   },
   noticeText: {
     fontSize: 12,
     fontWeight: '800',
     flexShrink: 1,
     textAlign: 'center',
+    lineHeight: 16,
   },
 });

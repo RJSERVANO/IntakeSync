@@ -1,5 +1,6 @@
 import NetInfo from '@react-native-community/netinfo';
 import { AppState } from 'react-native';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from './authSession';
 import { getCachedSession } from './offlineStorage';
 import { getSyncQueueSummary, processSyncQueue } from './syncQueue';
 
@@ -16,6 +17,8 @@ export async function runOfflineSync(token?: string, force = false) {
   const session = token ? null : await getCachedSession();
   const syncToken = token || session?.token;
   if (!syncToken) return getSyncQueueSummary();
+  const context = await captureAuthSessionContext(syncToken, session?.user ?? null);
+  if (!(await isAuthSessionContextCurrent(context))) return getSyncQueueSummary();
 
   syncing = true;
   lastRunAt = now;

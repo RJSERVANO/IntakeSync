@@ -10,6 +10,8 @@ import {
   writeOfflineCache,
   getCachedSession,
 } from './offlineStorage';
+import { emitSyncCompleted } from './homeEvents';
+import { captureAuthSessionContext, getCurrentAuthSessionVersion, isAuthSessionContextCurrent, isCurrentAuthSessionVersion } from './authSession';
 
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 export type SyncQueueAction =
@@ -98,10 +100,10 @@ function normalizeItem(raw: any): SyncQueueItem | null {
   };
 }
 
-async function readQueue(): Promise<SyncQueueItem[]> {
+async function readQueue(user?: any | null): Promise<SyncQueueItem[]> {
   try {
-    const session = await getCachedSession();
-    const owner = getCacheOwner(session?.user);
+    const session = user ? null : await getCachedSession();
+    const owner = getCacheOwner(user ?? session?.user);
     if (!owner.owner_id && !owner.owner_email) return [];
     const raw = await AsyncStorage.getItem(getUserScopedKey(owner, 'sync_queue'));
     const parsed = raw ? JSON.parse(raw) : [];
@@ -111,16 +113,22 @@ async function readQueue(): Promise<SyncQueueItem[]> {
   }
 }
 
-async function writeQueue(queue: SyncQueueItem[]): Promise<boolean> {
+async function writeQueue(queue: SyncQueueItem[], user?: any | null): Promise<boolean> {
   try {
-    const session = await getCachedSession();
-    const owner = getCacheOwner(session?.user);
+    const session = user ? null : await getCachedSession();
+    const owner = getCacheOwner(user ?? session?.user);
     if (!owner.owner_id && !owner.owner_email) return false;
     await AsyncStorage.setItem(getUserScopedKey(owner, 'sync_queue'), JSON.stringify(queue));
     return true;
   } catch {
     return false;
   }
+}
+
+export async function clearPendingSyncActionsForUser(user?: any | null) {
+  const queue = await readQueue(user);
+  const next = queue.filter((item) => item.status === 'synced');
+  await writeQueue(next, user);
 }
 
 function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQueueItem['method']; payload: any } {
@@ -236,10 +244,10 @@ async function sendItem(item: SyncQueueItem, token: string) {
 }
 
 export async function enqueueSyncAction(action: EnqueueInput) {
-  const queue = await readQueue();
   const now = new Date().toISOString();
   const session = await getCachedSession();
   const owner = getCacheOwner(session?.user);
+  const queue = await readQueue(session?.user);
   const item: SyncQueueItem = {
     id: action.id || queueId(action.action_type, action.local_id),
     local_id: action.local_id,
@@ -265,45 +273,50 @@ export async function enqueueSyncAction(action: EnqueueInput) {
   const next = [...queue];
   if (existingIndex >= 0) next[existingIndex] = { ...next[existingIndex], ...item, created_at: next[existingIndex].created_at };
   else next.push(item);
-  await writeQueue(next);
+  await writeQueue(next, session?.user);
   return item;
 }
 
 export async function getPendingSyncActions() {
-  const queue = await readQueue();
   const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
   return queue.filter((item) => item.status !== 'synced' && itemBelongsToUser(item, session?.user));
 }
 
 export async function markSyncActionSynced(id: string) {
-  const queue = await readQueue();
-  await writeQueue(queue.map((item) => item.id === id || item.local_id === id ? { ...item, status: 'synced', updated_at: new Date().toISOString(), last_error: null } : item));
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
+  await writeQueue(queue.map((item) => item.id === id || item.local_id === id ? { ...item, status: 'synced', updated_at: new Date().toISOString(), last_error: null } : item), session?.user);
 }
 
 export async function markSyncActionFailed(id: string, error: any) {
-  const queue = await readQueue();
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
   const message = error?.data?.message || error?.message || 'Sync failed';
-  await writeQueue(queue.map((item) => item.id === id || item.local_id === id ? { ...item, status: 'failed', retry_count: item.retry_count + 1, attempts: item.retry_count + 1, updated_at: new Date().toISOString(), last_error: message } : item));
+  await writeQueue(queue.map((item) => item.id === id || item.local_id === id ? { ...item, status: 'failed', retry_count: item.retry_count + 1, attempts: item.retry_count + 1, updated_at: new Date().toISOString(), last_error: message } : item), session?.user);
 }
 
 export async function removeSyncedActions() {
-  const queue = await readQueue();
-  await writeQueue(queue.filter((item) => item.status !== 'synced'));
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
+  await writeQueue(queue.filter((item) => item.status !== 'synced'), session?.user);
 }
 
 export async function mergeLatestPendingAction(action_type: SyncQueueAction, local_id: string, payload: any) {
-  const queue = await readQueue();
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
   const index = queue.findIndex((item) => item.action_type === action_type && item.local_id === local_id && item.status !== 'synced');
   if (index < 0) return enqueueSyncAction({ action_type, local_id, payload });
   const next = [...queue];
   next[index] = { ...next[index], payload: { ...next[index].payload, ...payload }, status: 'pending', updated_at: new Date().toISOString(), last_error: null };
-  await writeQueue(next);
+  await writeQueue(next, session?.user);
   return next[index];
 }
 
 export async function removePendingActionByLocalId(local_id: string) {
-  const queue = await readQueue();
-  await writeQueue(queue.filter((item) => item.local_id !== local_id || item.status === 'synced'));
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
+  await writeQueue(queue.filter((item) => item.local_id !== local_id || item.status === 'synced'), session?.user);
 }
 
 function syncMedicationIdentityValues(item: SyncQueueItem) {
@@ -324,7 +337,8 @@ export async function removePendingMedicationActionsForDelete(identities: string
   const identitySet = new Set(identities.filter(Boolean).map(String));
   if (identitySet.size === 0) return { removedCreate: false };
 
-  const queue = await readQueue();
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
   let removedCreate = false;
   const next = queue.filter((item) => {
     if (!['CREATE_MEDICATION', 'UPDATE_MEDICATION'].includes(item.action_type) || item.status === 'synced') return true;
@@ -333,13 +347,13 @@ export async function removePendingMedicationActionsForDelete(identities: string
     return !matches;
   });
 
-  if (next.length !== queue.length) await writeQueue(next);
+  if (next.length !== queue.length) await writeQueue(next, session?.user);
   return { removedCreate };
 }
 
 export async function getSyncQueueSummary() {
-  const queue = await readQueue();
   const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
   const pending = queue.filter((item) => item.status !== 'synced' && itemBelongsToUser(item, session?.user));
   return {
     total: queue.length,
@@ -360,8 +374,14 @@ export async function processSyncQueue(
   if (!token || isProcessing) return { synced: 0, failed: 0 };
   isProcessing = true;
   const session = await getCachedSession();
+  const sessionContext = await captureAuthSessionContext(token, session?.user ?? null);
+  const sessionVersion = getCurrentAuthSessionVersion();
   const currentUser = session?.user;
-  const queue = await readQueue();
+  if (!currentUser || session?.token !== token || !(await isAuthSessionContextCurrent(sessionContext))) {
+    isProcessing = false;
+    return { synced: 0, failed: 0 };
+  }
+  const queue = await readQueue(currentUser);
   const nextQueue = [...queue];
   let synced = 0;
   let failed = 0;
@@ -373,6 +393,9 @@ export async function processSyncQueue(
       if (!itemBelongsToUser(item, currentUser)) {
         if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: item.status === 'syncing' ? 'pending' : item.status };
         continue;
+      }
+      if (!isCurrentAuthSessionVersion(sessionVersion) || !(await isAuthSessionContextCurrent(sessionContext))) {
+        return { synced, failed };
       }
       try {
         if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: 'syncing', updated_at: new Date().toISOString() };
@@ -396,6 +419,9 @@ export async function processSyncQueue(
         synced += 1;
         await onSynced?.(item, response);
       } catch (error: any) {
+        if (api.isStaleSessionError(error) || !(await isAuthSessionContextCurrent(sessionContext))) {
+          return { synced, failed };
+        }
         const status = error?.status;
         const safeDuplicate = status === 409 && ['LOG_BEVERAGE', 'MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item.action_type);
         const safeMissing = status === 404 && ['DELETE_MEDICATION', 'CLEAR_NOTIFICATION', 'MARK_NOTIFICATION_READ', 'COMPLETE_NOTIFICATION', 'SNOOZE_NOTIFICATION'].includes(item.action_type);
@@ -417,8 +443,13 @@ export async function processSyncQueue(
         failed += 1;
       }
     }
-    await writeQueue(nextQueue);
-    await removeSyncedActions();
+    if (!isCurrentAuthSessionVersion(sessionVersion) || !(await isAuthSessionContextCurrent(sessionContext))) {
+      return { synced, failed };
+    }
+    await writeQueue(nextQueue, currentUser);
+    const latestQueue = await readQueue(currentUser);
+    await writeQueue(latestQueue.filter((item) => item.status !== 'synced'), currentUser);
+    if (synced > 0 || failed > 0) emitSyncCompleted({ synced, failed });
     return { synced, failed };
   } finally {
     isProcessing = false;

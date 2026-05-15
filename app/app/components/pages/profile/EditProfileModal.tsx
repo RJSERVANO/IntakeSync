@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Modal, SafeAreaView, ScrollView, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from '../../../api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { calculatePersonalizedHydrationGoal } from '../../../../utils/hydrationHelpers';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
@@ -114,6 +115,8 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         setSaving(false);
         return;
       }
+      const context = await captureAuthSessionContext(token, user);
+      if (!(await isAuthSessionContextCurrent(context))) return;
 
       const weightValue =
         editData.weight === undefined || editData.weight === null || editData.weight === ''
@@ -147,6 +150,7 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
       let updated = { ...(user || {}), ...payload };
       try {
         const resp = await api.put('/me', payload, token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         updated = resp?.user ? { ...(user || {}), ...payload, ...(resp.user || {}) } : updated;
       } catch (err: any) {
         if (api.isNetworkError(err)) {
@@ -156,13 +160,14 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         throw err;
       }
       const cached = await getCachedSession();
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const merged = await mergeLocalAvatarIntoUser({ ...(cached?.user || {}), ...(user || {}), ...updated });
       setEditData(buildEditableUser(merged));
       await updateCachedUser(merged, token);
       await writeProfileCache(merged, merged);
       onSaved(merged);
       onClose();
-      if (!notice) showNotice({ type: 'success', title: 'Profile Updated', message: 'Your profile changes have been saved successfully.' });
+      if (!notice) showNotice({ type: 'success', title: 'Profile updated', message: 'Changes saved.' });
     } catch (err: any) {
       console.error('EditProfileModal saveChanges', err);
       showNotice({ type: 'error', title: 'Update Failed', message: err.data?.message || err.message || 'We could not save your changes. Please try again.' });

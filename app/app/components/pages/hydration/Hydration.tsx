@@ -5,8 +5,9 @@ import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readNotificationsCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
-import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
+import { enqueueBeverageLog, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -46,6 +47,8 @@ type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 const QUICK_WATER_AMOUNTS = [250, 500, 750, 1000];
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
 const HYDRATION_GOAL_REACHED_SHOWN_PREFIX = 'intakesync.hydration.goalReachedShown';
+const LAST_HYDRATION_REFRESH_KEY = '@intakesync_last_hydration_refresh_at';
+const HYDRATION_BACKGROUND_REFRESH_TTL_MS = 45 * 1000;
 
 function createLocalId() {
   return `bev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -80,6 +83,16 @@ function totalForLocalDay(sourceEntries: any[], date = new Date()) {
   return sourceEntries.reduce((sum, entry) => (
     sum + (entry?.timestamp && getLocalDateKey(entry.timestamp) === dateKey ? Number(entry.amount_ml || 0) : 0)
   ), 0);
+}
+
+async function shouldRunHydrationBackgroundRefresh() {
+  const raw = await AsyncStorage.getItem(LAST_HYDRATION_REFRESH_KEY);
+  const lastRefreshAt = raw ? Number(raw) : 0;
+  return !Number.isFinite(lastRefreshAt) || Date.now() - lastRefreshAt > HYDRATION_BACKGROUND_REFRESH_TTL_MS;
+}
+
+async function markHydrationBackgroundRefreshed() {
+  await AsyncStorage.setItem(LAST_HYDRATION_REFRESH_KEY, String(Date.now()));
 }
 
 const DRINK_OPTIONS: {
@@ -256,6 +269,7 @@ export default function Hydration() {
   const previousTokenRef = useRef<string | undefined>(undefined);
   const entriesRef = useRef<any[]>([]);
   const goalRef = useRef(goal);
+  const hydrationRefreshInFlightRef = useRef(false);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -301,7 +315,7 @@ export default function Hydration() {
   const showNotice = (type: ThemedNoticeType, title: string, message: string, primaryText = 'OK') => {
     hapticForNotice(type);
     void primaryText;
-    showInlineNotice(`${title}: ${message}`);
+    showInlineNotice(message.length <= 28 ? message : title);
   };
 
   useEffect(() => {
@@ -526,6 +540,8 @@ export default function Hydration() {
       let cachedEntries: any[] = [];
       try {
         const activeToken = token as string | undefined;
+        const context = await captureAuthSessionContext(activeToken);
+        if (activeToken && !(await isAuthSessionContextCurrent(context))) return;
         const tokenChanged = previousTokenRef.current !== activeToken;
         previousTokenRef.current = activeToken;
 
@@ -568,13 +584,15 @@ export default function Hydration() {
         setCacheReady(true);
 
         if (token) {
-          setSyncing(true);
           await syncPendingBeverages(false);
           if (cancelled) return;
 
-          setSyncing(true);
+          const shouldRefresh = cachedEntries.length === 0 || await shouldRunHydrationBackgroundRefresh();
+          if (!shouldRefresh || hydrationRefreshInFlightRef.current) return;
+          hydrationRefreshInFlightRef.current = true;
+          if (cachedEntries.length === 0) setSyncing(true);
           const res = await api.get('/hydration', token as string, cachedEntries.length > 0 ? 5000 : 10000);
-          if (cancelled) return;
+          if (cancelled || !(await isAuthSessionContextCurrent(context))) return;
           if (res) {
             setOfflineMode(false);
             setUserProfile(res.user_profile); // Store user profile for calculations
@@ -590,7 +608,7 @@ export default function Hydration() {
             const serverEntries = (res.entries ?? []).filter((e: any) => 
               !deletedEntryKeys.has(entryKey(e))
             );
-            const finalEntries = mergeEntries(serverEntries, pendingEntries);
+            const finalEntries = mergeEntries(cachedEntries, mergeEntries(serverEntries, pendingEntries));
             entriesRef.current = finalEntries;
             setEntries(finalEntries);
             await refreshHydrationReminderSummary(finalEntries);
@@ -599,9 +617,12 @@ export default function Hydration() {
               await writeHydrationCache({
                 ...res,
                 goal: finalGoal,
+                today_total: totalForLocalDay(finalEntries),
+                percentage: finalGoal > 0 ? Math.round((totalForLocalDay(finalEntries) / finalGoal) * 100) : 0,
                 entries: finalEntries
               });
               setHasHydrationCache(true);
+              await markHydrationBackgroundRefreshed();
             }
             
             // FIX #1: Check if goal was already reached today (prevent modal flashing on re-render)
@@ -626,15 +647,17 @@ export default function Hydration() {
         }
       } catch (err:any) {
         console.log('Hydration load error', err);
+        if (api.isStaleSessionError(err)) return;
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
-          showInlineNotice('Offline mode - changes will sync when connected.');
+          showInlineNotice('Offline mode');
         }
       } finally {
         if (!cancelled) {
           setCacheReady(true);
           setSyncing(false);
         }
+        hydrationRefreshInFlightRef.current = false;
       }
     }
 
@@ -648,9 +671,15 @@ export default function Hydration() {
 
   async function syncPendingBeverages(showResult = true) {
     if (!token) return;
-    setSyncing(true);
+    const context = await captureAuthSessionContext(token as string);
+    if (!(await isAuthSessionContextCurrent(context))) return;
+    const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+    const shouldShowSync = showResult || pendingBeverages.length > 0;
+    if (pendingBeverages.length === 0 && !showResult) return;
+    if (shouldShowSync) setSyncing(true);
     try {
       const result = await processBeverageQueue(token as string, async (localId, response) => {
+        if (!(await isAuthSessionContextCurrent(context))) return;
         setEntries((current) => {
           const next = current.map((entry) => {
             if (entry.local_id !== localId) return entry;
@@ -668,13 +697,13 @@ export default function Hydration() {
       });
       if (result.synced > 0) {
         setOfflineMode(false);
-        if (showResult) showInlineNotice('Changes synced');
+        if (showResult) showInlineNotice('Sync complete');
       }
     } catch {
       setOfflineMode(true);
-      if (showResult) showInlineNotice('Still offline. Changes are saved on this device.');
+      if (showResult) showInlineNotice('Still offline');
     } finally {
-      setSyncing(false);
+      if (shouldShowSync && await isAuthSessionContextCurrent(context)) setSyncing(false);
     }
   }
 
@@ -682,7 +711,10 @@ export default function Hydration() {
     async function loadHistory() {
       if (!token) return;
       try {
+        const context = await captureAuthSessionContext(token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         const h = await api.get(`/hydration/history?range=${historyRange}`, token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         setHistoryData(h || []);
       } catch (e) { console.log('history load err', e); }
     }
@@ -693,6 +725,8 @@ export default function Hydration() {
     async function loadCalendarData() {
       if (!token) return;
       try {
+        const context = await captureAuthSessionContext(token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         // Load daily data for the current month
         const year = currentMonth.getFullYear();
         const month = currentMonth.getMonth();
@@ -701,6 +735,7 @@ export default function Hydration() {
         
         // Get all entries for the month
         const entries = await api.get(`/hydration/history?range=daily&start=${getLocalDateKey(startDate)}&end=${getLocalDateKey(endDate)}`, token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         setCalendarData(entries || []);
       } catch (e) { 
         console.log('calendar data load err', e);
@@ -721,7 +756,7 @@ export default function Hydration() {
   async function persistLocal(data?: any) {
     const payload = data ?? { goal, entries };
     if (!canUseHydrationCacheRef.current) return;
-    try { await writeHydrationCache(payload); } catch { }
+    await writeHydrationCache(payload);
   }
 
   async function addAmount(
@@ -749,13 +784,21 @@ export default function Hydration() {
       drink_label: metadata?.drink_label?.trim() || undefined,
       sync_status: 'pending',
     };
+    const previousEntries = entries;
     const newEntries = [...entries, entry];
     const oldTotal = totalToday();
     const newTotal = oldTotal + amountMl;
     
     entriesRef.current = newEntries;
     setEntries(newEntries);
-    await persistLocal({ goal, entries: newEntries });
+    try {
+      await persistLocal({ goal, entries: newEntries });
+    } catch {
+      entriesRef.current = previousEntries;
+      setEntries(previousEntries);
+      showInlineNotice('Save failed');
+      return;
+    }
     await refreshHydrationReminderSummary(newEntries);
     
     // Trigger pulse animation
@@ -778,7 +821,7 @@ export default function Hydration() {
     const currentPercentage = (newTotal / goal) * 100;
     const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
     if (justExceeded150 && !overhydrationShownRef.current) {
-      showInlineNotice('High intake logged. Stay mindful.');
+      showInlineNotice('High intake logged');
       overhydrationShownRef.current = true; // Mark as shown this session
       setOverhydrationShownToday(true); // Also mark for backend tracking
     }
@@ -787,8 +830,7 @@ export default function Hydration() {
     if (newTotal < goal) {
       const paceCheck = calculateHydrationPace(newTotal, goal, 'morning');
       if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
-        const behindMessage = `Stay hydrated! Drink ${paceCheck.remaining}ml more today to reach your goal.`;
-        showInlineNotice(behindMessage);
+        showInlineNotice('Almost there');
         
       }
     }
@@ -808,7 +850,6 @@ export default function Hydration() {
 
     if (token) {
       try {
-        setSyncing(true);
         const response = await api.post('/hydration', {
           local_id: localId,
           client_uuid: localId,
@@ -836,13 +877,11 @@ export default function Hydration() {
       } catch (err:any) {
         console.log('Hydration sync error', err);
         setOfflineMode(api.isNetworkError(err));
-        showInlineNotice(api.isNetworkError(err) ? 'Offline mode - changes will sync when connected.' : 'Saved locally. Sync pending.');
-      } finally {
-        setSyncing(false);
+        showInlineNotice(api.isNetworkError(err) ? 'Will sync later' : 'Sync pending');
       }
     } else {
       setOfflineMode(true);
-      showInlineNotice('Offline mode - changes will sync when connected.');
+      showInlineNotice('Will sync later');
     }
     if (source !== 'quick') {
       closeNotice();
@@ -920,15 +959,15 @@ export default function Hydration() {
         console.log('Goal update error:', e);
         if (api.isNetworkError(e)) {
           setOfflineMode(true);
-          showInlineNotice('Goal saved locally. Server sync can retry when connected.');
+          showInlineNotice('Will sync later');
           setGoalUpdateResult({ goal: newGoal, synced: false });
           return;
         }
         setGoalUpdateResult({ goal: newGoal, synced: false });
-        showInlineNotice('Goal saved locally, but server sync failed.');
+        showInlineNotice('Sync pending');
       }
     } else {
-      showInlineNotice('Goal saved locally.');
+      showInlineNotice('Goal saved');
       hapticSuccess();
       setGoalUpdateResult({ goal: newGoal, synced: false });
     }
@@ -1197,7 +1236,7 @@ export default function Hydration() {
       {(offlineMode || syncing) && !inlineNotice ? (
         <InlineSyncNotice
           visible
-          message={offlineMode ? 'Offline mode - changes will sync when connected.' : 'Syncing...'}
+          message={offlineMode ? 'Offline mode' : 'Syncing...'}
           iconName={offlineMode ? 'cloud-offline-outline' : 'sync-outline'}
           top={Math.max(insets.top, 8) + 54}
         />

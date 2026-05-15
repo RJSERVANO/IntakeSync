@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Tex
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
@@ -27,7 +28,11 @@ export default function PrivacySecurity() {
   const [notice, setNotice] = useState<{ type: ThemedNoticeType; title: string; message: string } | null>(null);
 
   useEffect(() => {
-    getCachedSession().then((session) => setCachedToken(session?.token)).catch(() => {});
+    getCachedSession().then(async (session) => {
+      const context = await captureAuthSessionContext(session?.token, session?.user ?? null);
+      if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
+      setCachedToken(session?.token);
+    }).catch(() => {});
   }, []);
 
   const closeModal = () => {
@@ -57,6 +62,8 @@ export default function PrivacySecurity() {
         setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });
         return;
       }
+      const context = await captureAuthSessionContext(authToken);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       await api.post(
         '/me/change-password',
         {
@@ -65,9 +72,10 @@ export default function PrivacySecurity() {
         },
         authToken
       );
+      if (!(await isAuthSessionContextCurrent(context))) return;
 
       closeModal();
-      setNotice({ type: 'success', title: 'Password Updated', message: 'Your password has been changed successfully.' });
+      setNotice({ type: 'success', title: 'Password updated', message: 'Password changed.' });
     } catch (error: any) {
       if (api.isNetworkError(error)) {
         setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });

@@ -73,7 +73,7 @@ export default function ForgotPassword() {
           }
         );
       } else {
-        showNotice('success', 'Verification Code Sent', 'A verification code has been sent to your email.', () => {
+        showNotice('success', 'Code sent', 'Check your email.', () => {
           closeNotice();
           router.push({
             pathname: '/reset-password',

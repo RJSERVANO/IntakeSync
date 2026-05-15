@@ -33,7 +33,7 @@ export default function InlineNotice({
   return (
     <View key={fontScaleRefreshKey} pointerEvents="none" style={[styles.notice, { backgroundColor: NOTICE_COLORS[type] }, top !== undefined && { top }]}>
       <Ionicons name={iconName} size={16} color="#FFFFFF" />
-      <Text style={styles.noticeText} maxFontSizeMultiplier={FONT_SCALE.chip}>{message}</Text>
+      <Text style={styles.noticeText} maxFontSizeMultiplier={FONT_SCALE.chip} numberOfLines={2}>{message}</Text>
     </View>
   );
 }
@@ -41,17 +41,18 @@ export default function InlineNotice({
 const styles = StyleSheet.create({
   notice: {
     position: 'absolute',
-    left: 20,
-    right: 20,
+    left: 28,
+    right: 28,
     zIndex: 60,
     borderRadius: 999,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     flexWrap: 'wrap',
     gap: 6,
+    maxHeight: 58,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 10,
@@ -63,5 +64,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     flexShrink: 1,
     textAlign: 'center',
+    lineHeight: 17,
   },
 });

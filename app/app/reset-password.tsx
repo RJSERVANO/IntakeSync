@@ -85,7 +85,7 @@ export default function ResetPassword() {
       showNotice(
         'success',
         'Success',
-        'Your password has been reset successfully. You can now login with your new password.',
+        'Password reset. You can log in now.',
         () => {
           closeNotice();
           router.replace({ pathname: '/login' } as any);

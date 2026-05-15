@@ -15,6 +15,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
+import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import {
   getCachedSession,
   getCacheOwner,
@@ -269,9 +270,11 @@ export default function Activity() {
       };
     }
 
-    getCachedSession().then((session) => {
+    getCachedSession().then(async (session) => {
       if (!mounted) return;
       if (session?.token) {
+        const context = await captureAuthSessionContext(session.token, session.user ?? null);
+        if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
         setCachedToken(session.token);
         setCurrentUser(session.user ?? null);
         setOfflineMode(true);
@@ -400,7 +403,7 @@ export default function Activity() {
       id: `sync:${item.id || item.local_id}`,
       type: 'general',
       title: 'Pending offline sync',
-      message: `${String(item.action_type).replace(/_/g, ' ').toLowerCase()} will sync when connected.`,
+      message: 'Will sync later.',
       status: item.status === 'failed' ? 'failed' : 'needs_attention',
       created_at: item.updated_at || item.created_at,
       scheduled_at: item.updated_at || item.created_at,
@@ -444,21 +447,27 @@ export default function Activity() {
       }));
   }, [localReminderPrefs]);
 
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (showSync = false) => {
     if (!token) return;
-    setSyncing(true);
+    const context = await captureAuthSessionContext(token);
+    if (!(await isAuthSessionContextCurrent(context))) return;
+    const pendingActions = await getPendingSyncActions();
+    const shouldShowSync = showSync || pendingActions.length > 0;
+    if (shouldShowSync) setSyncing(true);
     try {
       const session = await getCachedSession();
+      if (session?.token !== token || !(await isAuthSessionContextCurrent(context))) return;
       const sessionUser = currentUser || session?.user || null;
       if (sessionUser && !currentUser) setCurrentUser(sessionUser);
       const prefs = await loadReminderPreferences(sessionUser);
       await loadHiddenRecentIds(sessionUser);
-      await processSyncQueue(token);
+      if (pendingActions.length > 0) await processSyncQueue(token);
       const [notificationRes, statsRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
         get('/notifications/stats', token, 5000).catch(() => null),
         get('/medications/upcoming', token, 5000).catch(() => []),
       ]);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const localActivity = await buildLocalActivityRecords(sessionUser);
       const normalized = dedupeNotifications([...normalizeNotifications(notificationRes), ...localActivity]);
       const localReminderItems = await loadLocalReminderItems(prefs);
@@ -470,13 +479,14 @@ export default function Activity() {
       setError(null);
       setOfflineMode(false);
     } catch (err) {
+      if (!(await isAuthSessionContextCurrent(context))) return;
       if (isAuthError(err)) {
-        router.replace('/login');
+        await handleAuthFailureIfCurrent({ context, router });
         return;
       }
       if (isNetworkError(err)) {
         setOfflineMode(true);
-        setError('Offline mode - changes will sync when connected.');
+        setError('Offline mode');
         const cached = await readNotificationsCache<any>(currentUser);
         const session = await getCachedSession();
         const localActivity = await buildLocalActivityRecords(currentUser || session?.user || null);
@@ -495,7 +505,7 @@ export default function Activity() {
       }
       setError(getErrorMessage(err, 'Could not load notifications from the backend.'));
     } finally {
-      setSyncing(false);
+      if (shouldShowSync && await isAuthSessionContextCurrent(context)) setSyncing(false);
     }
   }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
@@ -508,18 +518,20 @@ export default function Activity() {
       let mounted = true;
       const run = async () => {
         const session = await getCachedSession();
+        const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
+        if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
         const sessionUser = currentUser || session?.user || null;
         if (sessionUser && mounted) setCurrentUser(sessionUser);
         const prefs = await loadReminderPreferences(sessionUser);
         await loadHiddenRecentIds(sessionUser);
         const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
-        if (!mounted) return;
+        if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
         const localActivity = await buildLocalActivityRecords(sessionUser);
         const localReminderItems = await loadLocalReminderItems(prefs);
         setNotifications(dedupeNotifications([...(cached?.notifications || []), ...localActivity]));
         setStats(cached?.stats || null);
         setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
-        await loadNotifications();
+        await loadNotifications(false);
         if (mounted) setLoading(false);
       };
       run();
@@ -532,13 +544,14 @@ export default function Activity() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadNotifications();
+    await loadNotifications(true);
     setRefreshing(false);
   }, [loadNotifications]);
 
   useEffect(() => {
-    const refresh = () => {
-      loadNotifications().catch(() => {});
+    const refresh = (event?: { source?: string }) => {
+      if (event?.source === 'cache') return;
+      loadNotifications(false).catch(() => {});
     };
     const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
     const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, refresh);
@@ -561,7 +574,7 @@ export default function Activity() {
       if (isNetworkError(err)) {
         await enqueueSyncAction({ action_type: 'MARK_NOTIFICATION_READ', method: 'PUT', local_id: String(item.id), payload: { notification_id: item.id, opened_at: openedAt } });
         setOfflineMode(true);
-        setInlineNotice('Saved offline. Will sync when connected.');
+        setInlineNotice('Will sync later');
       } else {
         setNoticeModal({ title: 'Could not mark read', message: getErrorMessage(err, 'Please try again.') });
       }
@@ -580,7 +593,7 @@ export default function Activity() {
       if (isNetworkError(err)) {
         await enqueueSyncAction({ action_type: 'COMPLETE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id } });
         setOfflineMode(true);
-        setInlineNotice('Saved offline. Will sync when connected.');
+        setInlineNotice('Will sync later');
       } else {
         setNoticeModal({ title: 'Could not complete', message: getErrorMessage(err, 'Please try again.') });
       }
@@ -599,7 +612,7 @@ export default function Activity() {
       if (isNetworkError(err)) {
         await enqueueSyncAction({ action_type: 'SNOOZE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id, minutes: 10 } });
         setOfflineMode(true);
-        setInlineNotice('Saved offline. Will sync when connected.');
+        setInlineNotice('Will sync later');
       } else {
         setNoticeModal({ title: 'Could not snooze', message: getErrorMessage(err, 'Please try again.') });
       }
@@ -622,7 +635,7 @@ export default function Activity() {
       if (isNetworkError(err)) {
         await enqueueSyncAction({ action_type: 'CLEAR_NOTIFICATION', method: 'DELETE', local_id: String(item.id), payload: { notification_id: item.id } });
         setOfflineMode(true);
-        setInlineNotice('Saved offline. Will sync when connected.');
+        setInlineNotice('Will sync later');
       } else {
         setNoticeModal({ title: 'Could not clear', message: getErrorMessage(err, 'Please try again.') });
       }
@@ -638,7 +651,7 @@ export default function Activity() {
     ));
     setNotifications(nextNotifications);
     await cacheCurrentNotifications(nextNotifications);
-    setInlineNotice('Recent notifications marked read.');
+    setInlineNotice('Marked read');
   }, [cacheCurrentNotifications, hiddenRecentIds, notifications]);
 
   const clearRecent = useCallback(async () => {
@@ -657,7 +670,7 @@ export default function Activity() {
     await persistHiddenRecentIds(currentUser, nextHidden);
     await cacheCurrentNotifications(nextNotifications);
     setShowAllRecent(false);
-    setInlineNotice('Recent notifications hidden. Medication and beverage history was kept.');
+    setInlineNotice('Recent hidden');
   }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, notifications, persistHiddenRecentIds]);
 
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
@@ -836,7 +849,7 @@ export default function Activity() {
         {offlineMode ? (
           <View style={styles.offlineBanner}>
             <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+            <Text style={styles.offlineBannerText}>Offline mode</Text>
           </View>
         ) : null}
 

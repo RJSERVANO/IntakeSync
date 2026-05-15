@@ -5,6 +5,7 @@ import { useSnooze } from '../../../../hooks/useSnooze';
 import { useLocalSearchParams } from 'expo-router';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import ScreenHeader from '../../common/ScreenHeader';
 
 export default function Timeline() {
@@ -17,7 +18,10 @@ export default function Timeline() {
   useEffect(() => {
     const loadTimeline = async () => {
       try {
+        const context = await captureAuthSessionContext(token as string | undefined);
+        if (token && !(await isAuthSessionContextCurrent(context))) return;
         const data = await api.get('/notifications/today-timeline', token as string, 3000);
+        if (token && !(await isAuthSessionContextCurrent(context))) return;
         if (Array.isArray(data)) {
           setTimelineData(data);
         } else {

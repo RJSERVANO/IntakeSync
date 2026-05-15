@@ -1,8 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
-import { emitHomeRefresh } from './homeEvents';
+import {
+  emitHydrationUpdated,
+  emitMedicationHistoryUpdated,
+  emitMedicationUpdated,
+  emitNotificationsUpdated,
+  emitProfileUpdated,
+} from './homeEvents';
 
 export const SESSION_CACHE_KEY = 'intakesync.cached_session';
+export const STARTUP_SPLASH_SEEN_KEY = '@intakesync_has_seen_startup_splash';
 export const HYDRATION_CACHE_KEY = 'hydration';
 export const PROFILE_CACHE_KEY = '@intakesync:profile';
 export const SETTINGS_CACHE_KEY = '@intakesync:settings';
@@ -115,6 +122,18 @@ export async function clearCachedSession(): Promise<void> {
   }
 }
 
+export async function hasSeenStartupSplash(): Promise<boolean> {
+  try {
+    return await AsyncStorage.getItem(STARTUP_SPLASH_SEEN_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export async function markStartupSplashSeen(): Promise<void> {
+  await AsyncStorage.setItem(STARTUP_SPLASH_SEEN_KEY, 'true');
+}
+
 export async function updateCachedUser(user: any, token?: string): Promise<void> {
   try {
     const current = await getCachedSession();
@@ -128,6 +147,7 @@ export async function updateCachedUser(user: any, token?: string): Promise<void>
       lastSuccessfulLoginAt: current?.lastSuccessfulLoginAt || new Date().toISOString(),
     };
     await AsyncStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(next));
+    emitProfileUpdated();
   } catch {
     // Keep profile cache failures non-fatal.
   }
@@ -699,11 +719,11 @@ export async function readOwnedOfflineCache<T = any>(key: string, user?: any | n
 export async function writeOwnedOfflineCache<T = any>(key: string, user: any | null | undefined, data: T): Promise<void> {
   const owner = getCacheOwner(user);
   if (!owner.owner_id && !owner.owner_email) return;
-  await writeOfflineCache(key, {
+  await AsyncStorage.setItem(key, JSON.stringify({
     ...owner,
     data,
     saved_at: new Date().toISOString(),
-  });
+  }));
 }
 
 export async function readMedicationCache<T = any[]>(user?: any | null): Promise<T | null> {
@@ -717,7 +737,7 @@ export async function writeMedicationCache(user: any | null | undefined, data: a
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationCacheKey(ownerKey), user, data);
-  emitHomeRefresh('medication');
+  emitMedicationUpdated();
 }
 
 export async function readMedicationHistoryCache<T = any[]>(user?: any | null): Promise<T | null> {
@@ -731,7 +751,7 @@ export async function writeMedicationHistoryCache(user: any | null | undefined, 
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationHistoryCacheKey(ownerKey), user, data);
-  emitHomeRefresh('history');
+  emitMedicationHistoryUpdated();
 }
 
 export async function readDeletedMedicationTombstones(user?: any | null): Promise<string[]> {
@@ -765,19 +785,15 @@ export async function readHydrationCache<T = any>(): Promise<T | null> {
 }
 
 export async function writeHydrationCache(data: any): Promise<void> {
-  try {
-    const session = await getCachedSession();
-    const user = session?.user ?? null;
-    const owner = getCacheOwner(user);
-    if (!owner.owner_id && !owner.owner_email) return;
-    await writeOwnedOfflineCache(getUserScopedKey(owner, 'hydration_cache'), user, data);
-    emitHomeRefresh('hydration');
-    const goal = Number(data?.goal ?? data?.daily_goal_ml ?? data?.hydration_goal ?? 0);
-    if (Number.isFinite(goal) && goal > 0) {
-      await updateCachedHydrationGoal(goal);
-    }
-  } catch {
-    // Screens can still operate from in-memory state if a cache write fails.
+  const session = await getCachedSession();
+  const user = session?.user ?? null;
+  const owner = getCacheOwner(user);
+  if (!owner.owner_id && !owner.owner_email) return;
+  await writeOwnedOfflineCache(getUserScopedKey(owner, 'hydration_cache'), user, data);
+  emitHydrationUpdated();
+  const goal = Number(data?.goal ?? data?.daily_goal_ml ?? data?.hydration_goal ?? 0);
+  if (Number.isFinite(goal) && goal > 0) {
+    await updateCachedHydrationGoal(goal);
   }
 }
 
@@ -797,6 +813,7 @@ export async function writeProfileCache(data: any, user?: any | null) {
   if (!owner.owner_id && !owner.owner_email) return;
   await writeOwnedOfflineCache(getUserScopedKey(owner, 'profile'), currentUser, data);
   await updateCachedUser(data);
+  emitProfileUpdated();
 }
 
 export async function readSettingsCache<T = any>(user?: any | null) {
@@ -831,4 +848,5 @@ export async function writeNotificationsCache(data: any, user?: any | null) {
   const owner = getCacheOwner(currentUser);
   if (!owner.owner_id && !owner.owner_email) return;
   await writeOwnedOfflineCache(getUserScopedKey(owner, 'notifications'), currentUser, data);
+  emitNotificationsUpdated();
 }

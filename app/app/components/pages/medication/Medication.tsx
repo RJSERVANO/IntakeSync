@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import {
   filterOtcReferenceMedicines,
   getCachedSession,
@@ -620,11 +621,23 @@ export default function Medication() {
   useFocusEffect(
     React.useCallback(() => {
       if (token) {
-        processSyncQueue(token as string, async (item) => {
-          if (item.action_type === 'CREATE_MEDICATION' || item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'DELETE_MEDICATION') {
-            await reloadAllData();
+        (async () => {
+          const context = await captureAuthSessionContext(token as string);
+          if (!(await isAuthSessionContextCurrent(context))) return;
+          const pendingActions = (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION'));
+          if (pendingActions.length === 0) return;
+          setSyncing(true);
+          try {
+            await processSyncQueue(token as string, async (item) => {
+              if (!(await isAuthSessionContextCurrent(context))) return;
+              if (item.action_type === 'CREATE_MEDICATION' || item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'DELETE_MEDICATION') {
+                await reloadAllData();
+              }
+            }).catch(() => {});
+          } finally {
+            if (await isAuthSessionContextCurrent(context)) setSyncing(false);
           }
-        }).catch(() => {});
+        })();
       }
     // Sync reconciliation is token-gated; reloadAllData reads current state when the queued work finishes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -750,6 +763,8 @@ export default function Medication() {
       hydratingMedicationCacheRef.current = true;
       try {
         const session = await getCachedSession();
+        const context = await captureAuthSessionContext((token as string | undefined) || session?.token, session?.user ?? null);
+        if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
         const sessionUser = currentUser || session?.user || null;
         if (!sessionUser && !token) {
           router.replace('/login');
@@ -778,15 +793,16 @@ export default function Medication() {
           if (cachedMeds.length > 0 && sessionUser && cachedMeds.length !== localMeds.length) {
             await writeMedicationCacheIfSafe(sessionUser, cachedMeds, true);
           }
-          showInlineNotice('Offline mode - showing cached medications.');
+          showInlineNotice('Offline mode');
           return;
         }
 
-        setSyncing(true);
+        if (cachedMeds.length === 0) setSyncing(true);
 
         if (token) {
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
+          if (!(await isAuthSessionContextCurrent(context))) return;
           const latestPendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
           const normalizedMeds = mergeServerWithLocalMedications(serverMeds || [], cachedMeds, latestPendingActions);
           if (!mounted) return;
@@ -801,6 +817,7 @@ export default function Medication() {
             // Load upcoming
             api.get('/medications/upcoming', token as string)
           ]);
+          if (!(await isAuthSessionContextCurrent(context))) return;
 
           // Set history from parallel results
           if (historyResults.status === 'fulfilled') {
@@ -855,13 +872,15 @@ export default function Medication() {
         }
       } catch (err) {
         hydratingMedicationCacheRef.current = false;
+        if (api.isStaleSessionError(err)) return;
         if (api.isAuthError(err)) {
-          router.replace('/login');
+          const context = await captureAuthSessionContext(token as string | undefined);
+          await handleAuthFailureIfCurrent({ context, router });
           return;
         }
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
-          showInlineNotice('Offline mode - changes will sync when connected.');
+          showInlineNotice('Offline mode');
         } else {
           console.log('Failed to load meds');
         }
@@ -935,12 +954,16 @@ export default function Medication() {
 
     const checkAndReload = async () => {
       try {
+        const context = await captureAuthSessionContext(token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         // Reload stats which will auto-mark missed medications on backend
         const statsData = await api.get('/medications/stats', token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         setStats(statsData);
 
         // Reload history to get any new missed entries, including deleted medications.
         const allHistory = await loadAllMedicationHistoryFromServer();
+        if (!(await isAuthSessionContextCurrent(context))) return;
         setHistory((current) => dedupeMedicationHistory([...allHistory, ...current]));
       } catch (e) {
         console.log('Failed to reload stats/history:', e);
@@ -1088,7 +1111,7 @@ export default function Medication() {
       } : null,
     };
 
-    const successMessage = editing ? 'Medication updated' : 'Medication added';
+    const successMessage = editing ? 'Medicine updated' : 'Medicine saved';
     let savedSuccessfully = false;
 
     if (editing) {
@@ -1119,7 +1142,7 @@ export default function Medication() {
             await writeMedicationCacheIfSafe(currentUser, nextMeds);
             await scheduleMedicationReminders(nextMed, true);
             setOfflineMode(true);
-            showInlineNotice('Saved offline. Will sync when connected.');
+            showInlineNotice('Will sync later');
             savedSuccessfully = true;
           } else {
             showNotice('warning', 'Saved Locally', 'Medication saved locally but failed to sync with server');
@@ -1129,7 +1152,7 @@ export default function Medication() {
         await mergeLatestPendingAction(editing.server_id ? 'UPDATE_MEDICATION' : 'CREATE_MEDICATION', localId, updatedMed);
         await writeMedicationCacheIfSafe(currentUser, optimisticUpdatedMeds);
         await scheduleMedicationReminders({ ...updatedMed, sync_status: 'pending' }, true);
-        showInlineNotice('Saved offline. Will sync when connected.');
+        showInlineNotice('Will sync later');
         savedSuccessfully = true;
       }
     } else {
@@ -1164,7 +1187,7 @@ export default function Medication() {
             await writeMedicationCacheIfSafe(currentUser, nextMeds);
             await scheduleMedicationReminders(newMed);
             setOfflineMode(true);
-            showInlineNotice('Saved offline. Will sync when connected.');
+            showInlineNotice('Will sync later');
             savedSuccessfully = true;
           } else {
           showNotice('error', 'Action Failed', err?.data?.message || 'Failed to save medication. Please try again.');
@@ -1179,7 +1202,7 @@ export default function Medication() {
         await enqueueSyncAction({ action_type: 'CREATE_MEDICATION', method: 'POST', endpoint: '/medications', local_id: localId, payload: newMed });
         await writeMedicationCacheIfSafe(currentUser, nextMeds);
         await scheduleMedicationReminders(newMed);
-        showInlineNotice('Saved offline. Will sync when connected.');
+        showInlineNotice('Will sync later');
         savedSuccessfully = true;
       }
     }
@@ -1249,10 +1272,13 @@ export default function Medication() {
   async function reloadStatsAndUpcoming() {
     if (!token) return;
     try {
+      const context = await captureAuthSessionContext(token as string);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const [statsData, upcomingData] = await Promise.all([
         api.get('/medications/stats', token as string),
         api.get('/medications/upcoming', token as string)
       ]);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       setStats(statsData || {
         total_medications: 0,
         active_medications: 0,
@@ -1267,8 +1293,11 @@ export default function Medication() {
 
   async function loadAllMedicationHistoryFromServer(serverMeds?: any[]): Promise<HistoryEntry[]> {
     if (!token) return [];
+    const context = await captureAuthSessionContext(token as string);
+    if (!(await isAuthSessionContextCurrent(context))) return [];
     try {
       const allHistory = await api.get('/medications/history/all', token as string);
+      if (!(await isAuthSessionContextCurrent(context))) return [];
       if (Array.isArray(allHistory)) {
         return allHistory.map((entry: any) => normalizeHistoryEntry(entry, String(entry.medication_id || entry.medId || entry.medication?.id || 'deleted')));
       }
@@ -1280,6 +1309,7 @@ export default function Medication() {
     const results = await Promise.all(activeServerMeds.map(async (m) => {
       try {
         const h = await api.get(`/medications/${m.server_id || m.id}/history`, token as string);
+        if (!(await isAuthSessionContextCurrent(context))) return [];
         return (h || []).map((hh: any) => normalizeHistoryEntry(hh, (m.server_id || m.id).toString()));
       } catch {
         return [];
@@ -1291,12 +1321,15 @@ export default function Medication() {
   async function reloadAllData(colorFallbacks: Record<string, string | undefined> = {}) {
     if (!token) return;
     try {
+      const context = await captureAuthSessionContext(token as string);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const [medsData, historyResults, statsData, upcomingData] = await Promise.allSettled([
         api.get('/medications', token as string),
         loadAllMedicationHistoryFromServer(),
         api.get('/medications/stats', token as string),
         api.get('/medications/upcoming', token as string)
       ]);
+      if (!(await isAuthSessionContextCurrent(context))) return;
 
       // Update medications
       if (medsData.status === 'fulfilled') {
@@ -1402,7 +1435,7 @@ export default function Medication() {
         local_id: deleteTarget.local_id || id,
         payload: { ...deleteTarget, id, server_id: deleteTarget.server_id || id },
       });
-      showInlineNotice('Medication deleted offline. Will sync when connected.');
+      showInlineNotice('Will sync later');
     }
 
     if (deleted) {
@@ -1444,7 +1477,7 @@ export default function Medication() {
           payload: { ...deleteMed, id: deleteMed.id, server_id: deleteMed.server_id || deleteMed.id },
         });
         setOfflineMode(true);
-        showInlineNotice('Medication deleted offline. Will sync when connected.');
+        showInlineNotice('Will sync later');
         return true;
       }
 
@@ -1509,12 +1542,12 @@ export default function Medication() {
     setSelectedOtcMedicine(null);
     setDosage('');
     setTimes([]);
-    if (showFeedback) showInlineNotice('Selected medicine cleared.');
+    if (showFeedback) showInlineNotice('Medicine cleared');
   }
 
   function clearReminderTimes() {
     setTimes([]);
-    showInlineNotice('Reminder times cleared.');
+    showInlineNotice('Times cleared');
   }
 
   function selectOtcMedicine(medicine: OtcMedicineSuggestion) {
@@ -1530,7 +1563,7 @@ export default function Medication() {
     setShowMedicineSuggestions(false);
     setMedicineSearchMessage(null);
     if ((startDate || todayDateString()) === todayDateString() && smartTimes.length < expectedDoses) {
-      showInlineNotice('Only future reminder times were added for today.');
+      showInlineNotice('Future times added');
     }
   }
 
@@ -1655,7 +1688,7 @@ export default function Medication() {
     const scheduledTime = getScheduledTimeForMedication(med, timeIso);
 
     if (hasCompletedDose(medId, scheduledTime)) {
-      showInlineNotice('This scheduled dose is already marked taken');
+      showInlineNotice('Already marked taken');
       return;
     }
     setActionBusy(actionKey, true);
@@ -1678,12 +1711,14 @@ export default function Medication() {
       dosage: med.dosage,
     };
 
-    // Update history immediately for better UX
-    setHistory(prev => dedupeMedicationHistory(existingMissedDose
-      ? prev.map((entry) => entry.id === existingMissedDose.id ? newHistoryEntry : entry)
-      : [newHistoryEntry, ...prev]
-    )
+    const previousHistory = history;
+    const optimisticHistory = dedupeMedicationHistory(existingMissedDose
+      ? history.map((entry) => entry.id === existingMissedDose.id ? newHistoryEntry : entry)
+      : [newHistoryEntry, ...history]
     );
+
+    // Update history immediately for better UX, then persist before starting backend sync.
+    setHistory(optimisticHistory);
     const rollbackOptimisticTaken = () => {
       setHistory(prev => dedupeMedicationHistory(existingMissedDose
         ? prev.map((entry) => entry.id === existingMissedDose.id ? existingMissedDose : entry)
@@ -1691,6 +1726,14 @@ export default function Medication() {
       )
       );
     };
+    try {
+      if (currentUser) await writeMedicationHistoryCache(currentUser, optimisticHistory);
+    } catch {
+      setHistory(previousHistory);
+      showInlineNotice('Save failed');
+      setActionBusy(actionKey, false);
+      return;
+    }
     await cancelMedicationDoseNotifications(getNotificationMedicationId(med), scheduledTime);
 
     // Save to server if token exists
@@ -1702,17 +1745,19 @@ export default function Medication() {
         console.log('Server response:', response);
         // Update with server ID if available
         if (response && response.id) {
-          setHistory(prev => dedupeMedicationHistory(prev.map(h =>
+          const syncedHistory = dedupeMedicationHistory(optimisticHistory.map(h =>
             h.id === newHistoryEntry.id
               ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.taken_time || response.created_at || h.loggedAt }, medId)
               : h
-          )));
+          ));
+          setHistory(syncedHistory);
+          if (currentUser) await writeMedicationHistoryCache(currentUser, syncedHistory);
         }
 
         // Also reload stats to update counters
         await reloadStatsAndUpcoming();
         hapticSuccess();
-        showInlineNotice(med.name ? `${med.name} marked as taken` : 'Medication marked as taken');
+        showInlineNotice('Dose marked taken');
       } catch (err: any) {
         console.log('Error marking medication as taken:', err);
         console.log('Error details:', JSON.stringify(err, null, 2));
@@ -1733,12 +1778,12 @@ export default function Medication() {
           });
           setOfflineMode(true);
           hapticSuccess();
-          showInlineNotice('Medication marked as taken offline.');
+          showInlineNotice('Will sync later');
         } else {
         rollbackOptimisticTaken();
 
         if (err?.status === 409) {
-          showInlineNotice(err?.data?.message || 'This scheduled dose has already been logged');
+          showInlineNotice('Dose already logged');
         } else if (err?.status === 404) {
           showNotice('error', 'Action Failed', 'This medication no longer exists on the server. Please refresh the page.');
         } else if (err?.status === 401 || err?.status === 403) {
@@ -1767,7 +1812,7 @@ export default function Medication() {
         payload: { medId, medication_id: medId, server_id: med.server_id || medId, status: 'completed', time: scheduledTime, client_uuid: historyLocalId },
       });
       hapticSuccess();
-      showInlineNotice('Medication marked as taken offline.');
+      showInlineNotice('Will sync later');
     }
   }
 
@@ -1781,7 +1826,7 @@ export default function Medication() {
     });
 
     if (duplicateSnooze) {
-      showInlineNotice(`Reminder is already snoozed by ${mins} minutes`);
+      showInlineNotice('Already snoozed');
       return;
     }
 
@@ -1809,7 +1854,7 @@ export default function Medication() {
         if (response?.id) {
           setHistory((current) => dedupeMedicationHistory(current.map((item) => item.id === entry.id ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.created_at || item.loggedAt }, medId) : item)));
         }
-        showInlineNotice(`Reminder snoozed for ${mins} minutes`);
+        showInlineNotice(`Snoozed ${mins} min`);
         hapticSuccess();
       } catch (err: any) {
         console.log('Snooze history sync failed:', err);
@@ -1822,7 +1867,7 @@ export default function Medication() {
           });
           setOfflineMode(true);
           hapticSuccess();
-          showInlineNotice(`Reminder snoozed offline for ${mins} minutes.`);
+          showInlineNotice('Will sync later');
         } else {
           setHistory((current) => dedupeMedicationHistory(current.filter((item) => item.id !== entry.id)));
           showThemedPopup({
@@ -1844,7 +1889,7 @@ export default function Medication() {
         payload: { medId, medication_id: medId, server_id: med?.server_id || medId, status: 'snoozed', time: entry.time, client_uuid: entry.id },
       });
       hapticSuccess();
-      showInlineNotice(`Reminder snoozed for ${mins} minutes`);
+      showInlineNotice(`Snoozed ${mins} min`);
     }
   }
 
@@ -2384,7 +2429,7 @@ export default function Medication() {
       setExporting(true);
       await api.get(`/medications/export/${format}`, token as string, 20000);
       setExportModalVisible(false);
-      showNotice('success', 'Export Ready', `${format.toUpperCase()} export was generated successfully. This mobile build cannot save downloaded files directly yet, so please use the web download option if you need a local file.`, 'Done');
+      showNotice('success', 'Export ready', `${format.toUpperCase()} export generated. Use web download to save a file.`, 'Done');
     } catch (err: any) {
       console.log('Export error:', err);
       if (err?.status === 408) {
@@ -2486,7 +2531,7 @@ export default function Medication() {
         {offlineMode ? (
           <View style={styles.offlineBanner}>
             <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+            <Text style={styles.offlineBannerText}>Offline mode</Text>
           </View>
         ) : null}
 

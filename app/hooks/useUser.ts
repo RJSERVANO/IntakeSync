@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../app/api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../services/authSession';
 import { getCachedSession, mergeLocalAvatarIntoUser, updateCachedUser } from '../services/offlineStorage';
 
 interface NormalizedUser {
@@ -19,6 +20,8 @@ export default function useUser(token?: string) {
         setUser(cachedUser);
         return;
       }
+      const context = await captureAuthSessionContext(token);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const cached = await getCachedSession();
       if (cached?.user) {
         const cachedUser = await mergeLocalAvatarIntoUser(cached.user);
@@ -26,6 +29,7 @@ export default function useUser(token?: string) {
         setLoading(false);
       }
       const data: any = await api.get('/me', token as string);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       // Return the raw data but also add normalized/camelCase aliases
       const merged: any = {
         ...(data || {}),
@@ -34,12 +38,15 @@ export default function useUser(token?: string) {
         emergencyContact: data.emergency_contact || data.emergencyContact || undefined,
       };
       const withLocalAvatar = await mergeLocalAvatarIntoUser(merged);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       setUser(withLocalAvatar);
       await updateCachedUser(withLocalAvatar, token);
     } catch (err) {
       console.warn('useUser: failed to load user', err);
+      if (api.isStaleSessionError(err)) return;
       if (api.isAuthError(err)) {
-        setUser(null);
+        const context = await captureAuthSessionContext(token);
+        if (await isAuthSessionContextCurrent(context)) setUser(null);
         return;
       }
       const cached = await getCachedSession();

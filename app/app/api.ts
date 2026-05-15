@@ -1,3 +1,11 @@
+import {
+  abortAllPendingRequests,
+  createTrackedAbortController,
+  getCurrentAuthSessionVersion,
+  isAuthSessionContextCurrent,
+  releaseTrackedAbortController,
+} from '../services/authSession';
+
 const configuredBaseUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
 const BASE_URL = configuredBaseUrl ? configuredBaseUrl.replace(/\/+$/, '') : '';
 const API_DEBUG = __DEV__ || process.env.EXPO_PUBLIC_API_DEBUG === 'true';
@@ -27,6 +35,8 @@ export interface ApiError {
   isNetworkError?: boolean;
   isAuthError?: boolean;
   isValidationError?: boolean;
+  isStaleSessionError?: boolean;
+  requestSessionVersion?: string;
 }
 
 function validationMessage(data: any) {
@@ -100,11 +110,28 @@ function attachRequest(error: ApiError, method: string, url: string): ApiError {
   return { ...error, method, url };
 }
 
-function normalizeFetchError(error: any, method: string, url: string): ApiError {
+function makeStaleSessionError(method: string, url: string, requestSessionVersion?: string): ApiError {
+  return attachRequest({
+    status: 0,
+    data: { message: 'Stale session request ignored.' },
+    type: 'unknown',
+    message: 'Stale session request ignored.',
+    isNetworkError: false,
+    isAuthError: false,
+    isValidationError: false,
+    isStaleSessionError: true,
+    requestSessionVersion,
+  }, method, url);
+}
+
+function normalizeFetchError(error: any, method: string, url: string, requestSessionVersion?: string): ApiError {
   if (error?.type) {
-    const normalized = attachRequest(error, method, url);
+    const normalized = attachRequest({ ...error, requestSessionVersion }, method, url);
     logApiError(normalized);
     return normalized;
+  }
+  if (error?.isStaleSessionError) {
+    return error;
   }
   if (error?.name === 'AbortError') {
     const normalized: ApiError = attachRequest({
@@ -115,21 +142,29 @@ function normalizeFetchError(error: any, method: string, url: string): ApiError 
       isNetworkError: true,
       isAuthError: false,
       isValidationError: false,
+      requestSessionVersion,
     }, method, url);
     logApiError(normalized);
     return normalized;
   }
   const normalized: ApiError = attachRequest({
     status: 0,
-    data: { message: error?.message || 'Cannot reach backend API.' },
+    data: { message: error?.message || 'Backend unavailable.' },
     type: 'network',
-    message: 'Cannot reach backend API.',
+    message: 'Backend unavailable.',
     isNetworkError: true,
     isAuthError: false,
     isValidationError: false,
+    requestSessionVersion,
   }, method, url);
   logApiError(normalized);
   return normalized;
+}
+
+async function ensureCurrentSession(method: string, url: string, token?: string, requestSessionVersion?: string) {
+  if (token && requestSessionVersion && !(await isAuthSessionContextCurrent({ sessionVersion: requestSessionVersion, token }))) {
+    throw makeStaleSessionError(method, url, requestSessionVersion);
+  }
 }
 
 async function parseResponse(res: Response) {
@@ -162,11 +197,13 @@ function joinPath(path: string) {
 export async function post(path: string, body: any, token?: string, timeout: number = 10000) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const controller = new AbortController();
+  const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
+  const controller = createTrackedAbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const url = joinPath(path);
   logRequest('POST', url);
   try {
+    await ensureCurrentSession('POST', url, token, requestSessionVersion);
     const res = await fetch(url, {
       method: 'POST',
       headers,
@@ -176,25 +213,33 @@ export async function post(path: string, body: any, token?: string, timeout: num
     clearTimeout(timeoutId);
     logStatus('POST', url, res);
     const data = await parseResponse(res);
-    if (!res.ok) throw makeApiError(res.status, data, defaultMessageForStatus(res.status));
+    await ensureCurrentSession('POST', url, token, requestSessionVersion);
+    if (!res.ok) {
+      const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
+      throw { ...error, requestSessionVersion };
+    }
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    throw normalizeFetchError(error, 'POST', url);
+    throw normalizeFetchError(error, 'POST', url, requestSessionVersion);
+  } finally {
+    releaseTrackedAbortController(controller);
   }
 }
 
 export async function get(path: string, token?: string, timeout: number = 10000) {
   const headers: any = { Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
   
   // Add timeout to prevent infinite hanging
-  const controller = new AbortController();
+  const controller = createTrackedAbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const url = joinPath(path);
   logRequest('GET', url);
   
   try {
+    await ensureCurrentSession('GET', url, token, requestSessionVersion);
     const res = await fetch(url, {
       headers,
       signal: controller.signal,
@@ -202,22 +247,30 @@ export async function get(path: string, token?: string, timeout: number = 10000)
     clearTimeout(timeoutId);
     logStatus('GET', url, res);
     const data = await parseResponse(res);
-    if (!res.ok) throw makeApiError(res.status, data, defaultMessageForStatus(res.status));
+    await ensureCurrentSession('GET', url, token, requestSessionVersion);
+    if (!res.ok) {
+      const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
+      throw { ...error, requestSessionVersion };
+    }
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    throw normalizeFetchError(error, 'GET', url);
+    throw normalizeFetchError(error, 'GET', url, requestSessionVersion);
+  } finally {
+    releaseTrackedAbortController(controller);
   }
 }
 
 export async function put(path: string, body: any, token?: string, timeout: number = 10000) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const controller = new AbortController();
+  const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
+  const controller = createTrackedAbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const url = joinPath(path);
   logRequest('PUT', url);
   try {
+    await ensureCurrentSession('PUT', url, token, requestSessionVersion);
     const res = await fetch(url, {
       method: 'PUT',
       headers,
@@ -227,31 +280,45 @@ export async function put(path: string, body: any, token?: string, timeout: numb
     clearTimeout(timeoutId);
     logStatus('PUT', url, res);
     const data = await parseResponse(res);
-    if (!res.ok) throw makeApiError(res.status, data, defaultMessageForStatus(res.status));
+    await ensureCurrentSession('PUT', url, token, requestSessionVersion);
+    if (!res.ok) {
+      const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
+      throw { ...error, requestSessionVersion };
+    }
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    throw normalizeFetchError(error, 'PUT', url);
+    throw normalizeFetchError(error, 'PUT', url, requestSessionVersion);
+  } finally {
+    releaseTrackedAbortController(controller);
   }
 }
 
 export async function del(path: string, token?: string, timeout: number = 10000) {
   const headers: any = { Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const controller = new AbortController();
+  const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
+  const controller = createTrackedAbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   const url = joinPath(path);
   logRequest('DELETE', url);
   try {
+    await ensureCurrentSession('DELETE', url, token, requestSessionVersion);
     const res = await fetch(url, { method: 'DELETE', headers, signal: controller.signal });
     clearTimeout(timeoutId);
     logStatus('DELETE', url, res);
     const data = await parseResponse(res);
-    if (!res.ok) throw makeApiError(res.status, data, defaultMessageForStatus(res.status));
+    await ensureCurrentSession('DELETE', url, token, requestSessionVersion);
+    if (!res.ok) {
+      const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
+      throw { ...error, requestSessionVersion };
+    }
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    throw normalizeFetchError(error, 'DELETE', url);
+    throw normalizeFetchError(error, 'DELETE', url, requestSessionVersion);
+  } finally {
+    releaseTrackedAbortController(controller);
   }
 }
 
@@ -283,6 +350,7 @@ export function isNetworkError(error: any) {
 }
 
 export function isAuthError(error: any) {
+  if (error?.isStaleSessionError) return false;
   return error?.isAuthError || error?.type === 'auth' || error?.status === 401;
 }
 
@@ -290,4 +358,8 @@ export function isValidationError(error: any) {
   return error?.isValidationError || error?.type === 'validation' || error?.status === 422;
 }
 
-export default { post, get, put, del, isNetworkError, isAuthError, isValidationError, getErrorTitle, getErrorMessage };
+export function isStaleSessionError(error: any) {
+  return Boolean(error?.isStaleSessionError);
+}
+
+export default { post, get, put, del, isNetworkError, isAuthError, isValidationError, isStaleSessionError, getErrorTitle, getErrorMessage, abortAllPendingRequests };

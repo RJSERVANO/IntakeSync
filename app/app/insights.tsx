@@ -4,6 +4,7 @@ import { ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacit
 import { useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../services/authSession';
 import ScreenHeader from './components/common/ScreenHeader';
 import InlineSyncNotice from './components/common/InlineSyncNotice';
 import {
@@ -29,7 +30,7 @@ import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
 type MedicationStatus = 'completed' | 'skipped' | 'missed' | 'snoozed' | 'pending';
-type DayStatus = 'good' | 'warning' | 'attention' | 'empty';
+type DayStatus = 'good' | 'warning' | 'attention' | 'none';
 
 type MedicationItem = {
   id: string | number;
@@ -146,10 +147,17 @@ type DailyInsightContext = {
 
 const MISSED_DOSE_GRACE_MS = 30 * 60 * 1000;
 const SCORE_COLORS = {
-  empty: '#64748B',
+  none: '#94A3B8',
   attention: '#EF4444',
   warning: '#F59E0B',
   good: '#10B981',
+};
+
+const DAY_STATUS_META: Record<DayStatus, { label: string; color: string; bg: string; border: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  good: { label: 'Good', color: SCORE_COLORS.good, bg: '#ECFDF5', border: '#BBF7D0', icon: 'checkmark-circle-outline' },
+  warning: { label: 'Warning', color: SCORE_COLORS.warning, bg: '#FFFBEB', border: '#FDE68A', icon: 'alert-circle-outline' },
+  attention: { label: 'Needs attention', color: SCORE_COLORS.attention, bg: '#FEF2F2', border: '#FECACA', icon: 'warning-outline' },
+  none: { label: 'No data', color: SCORE_COLORS.none, bg: '#F8FAFC', border: '#E2E8F0', icon: 'ellipse-outline' },
 };
 
 const clampScore = (score: number) => Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
@@ -326,24 +334,24 @@ const levelPenalty = (level: BeverageLevel) => {
   return 0;
 };
 
-const getStatusForScore = (score: number | null): DayStatus => {
-  if (score === null) return 'empty';
-  if (score <= 39) return 'attention';
-  if (score <= 69) return 'warning';
-  return 'good';
+const classifyRoutineDay = (score: number | null, hasData: boolean): DayStatus => {
+  if (!hasData) return 'none';
+  if (score === null) return 'attention';
+  if (score >= 80) return 'good';
+  if (score >= 60) return 'warning';
+  return 'attention';
 };
 
-const getScoreMessage = (score: number | null) => {
-  if (score === null) return 'No score yet';
-  if (score <= 39) return 'Needs attention';
-  if (score <= 69) return 'Some progress';
-  if (score <= 89) return 'Good routine progress';
-  return 'Strong routine consistency';
+const getScoreMessage = (score: number | null, hasData = score !== null) => {
+  const status = classifyRoutineDay(score, hasData);
+  if (status === 'none') return 'No data yet';
+  if (status === 'attention') return 'Needs attention';
+  if (status === 'warning') return 'Warning';
+  return 'Good';
 };
 
-const getScoreColor = (score: number | null) => {
-  if (score === null) return SCORE_COLORS.empty;
-  return SCORE_COLORS[getStatusForScore(score)];
+const getScoreColor = (score: number | null, hasData = score !== null) => {
+  return DAY_STATUS_META[classifyRoutineDay(score, hasData)].color;
 };
 
 const normalizeHistoryEntry = (entry: any, medId?: string | number): MedicationEvent => ({
@@ -420,6 +428,15 @@ const buildCalendarDays = (monthDate: Date) => {
 
 const buildReason = (day: DailyInsight) => {
   if (!day.hasData) return 'No routine data logged for this day.';
+  const statusLabel = DAY_STATUS_META[classifyRoutineDay(day.score, day.hasData)].label;
+  const contextNotes: string[] = [];
+  if (!day.beverage.hasData && day.medication.hasData) {
+    contextNotes.push('Score based on medication records only');
+    contextNotes.push('no beverage entries logged for this day');
+  } else if (day.beverage.hasData && !day.medication.hasData) {
+    contextNotes.push('Score based on beverage entries only');
+    contextNotes.push('no medication check-ins logged for this day');
+  }
   const reasons: string[] = [];
   if (day.beverage.hasData) {
     if (day.beverage.percent < 50) reasons.push(`beverage intake reached only ${day.beverage.percent}% of the hydration goal`);
@@ -429,8 +446,10 @@ const buildReason = (day: DailyInsight) => {
   }
   if (day.medication.missed > 0) reasons.push(`${day.medication.missed} medication dose${day.medication.missed === 1 ? '' : 's'} missed`);
   if (day.medication.skipped > 0) reasons.push(`${day.medication.skipped} medication dose${day.medication.skipped === 1 ? '' : 's'} skipped`);
-  if (reasons.length === 0) return 'Score is strong because logged beverage progress and medication check-ins were consistent.';
-  return `Score reduced because ${reasons.join(' and ')}.`;
+  if (reasons.length === 0) {
+    return `${statusLabel}: Based on your logged entries, routine check-ins were consistent.${contextNotes.length ? ` ${contextNotes.join('; ')}.` : ''} Not medical advice.`;
+  }
+  return `${statusLabel}: Based on your logged entries, score reduced because ${reasons.join(' and ')}.${contextNotes.length ? ` ${contextNotes.join('; ')}.` : ''} Not medical advice.`;
 };
 
 const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): DailyInsight => {
@@ -462,17 +481,21 @@ const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): Dai
   const missed = medicationSummary.missed;
   const skipped = medicationSummary.skipped;
   const adherence = medicationSummary.relevantToday ? medicationSummary.percent : null;
-  const medicationScore = adherence === null ? null : Math.max(0, adherence - missed * 8 - skipped * 5);
+  const loggedMedicationEvents = medicationEvents.filter((entry) => (
+    getDateKey(getMedicationDoseTime(entry)) === dateKey &&
+    ['completed', 'missed', 'skipped', 'snoozed'].includes(String(entry.status || '').toLowerCase())
+  ));
+  const medicationScore = adherence === null || loggedMedicationEvents.length === 0 ? null : Math.max(0, adherence - missed * 8 - skipped * 5);
   const availableScores = [beverageScore, medicationScore].filter((score): score is number => score !== null);
   const score = availableScores.length ? clampScore(availableScores.reduce((sum, value) => sum + value, 0) / availableScores.length) : null;
-  const hasData = logs.length > 0 || scheduled > 0;
+  const hasData = logs.length > 0 || loggedMedicationEvents.length > 0;
 
   const day: DailyInsight = {
     day: date.toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 1),
     date: dateKey,
     title: date.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }),
     score,
-    status: getStatusForScore(score),
+    status: classifyRoutineDay(score, hasData),
     summary: hasData
       ? [
           logs.length > 0 ? `Beverage ${formatNumber(totalMl)} / ${formatNumber(goal)} ml` : null,
@@ -494,14 +517,14 @@ const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): Dai
       logs,
     },
     medication: {
-      hasData: scheduled > 0,
+      hasData: loggedMedicationEvents.length > 0,
       scheduled,
       completed,
       missed,
       skipped,
       adherence,
       score: medicationScore,
-      events: finalDayEvents,
+      events: loggedMedicationEvents.length > 0 ? finalDayEvents : [],
     },
   };
   day.reason = buildReason(day);
@@ -509,19 +532,7 @@ const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): Dai
 };
 
 const getDayStatusMeta = (day: DailyInsight) => {
-  if (!day.hasData || day.score === null) {
-    return { label: 'No data', color: '#94A3B8', bg: '#F8FAFC', border: '#E2E8F0', icon: 'ellipse-outline' as const };
-  }
-  if (day.score >= 85 && day.medication.missed === 0 && day.medication.skipped === 0) {
-    return { label: 'Excellent', color: '#10B981', bg: '#ECFDF5', border: '#BBF7D0', icon: 'checkmark-circle' as const };
-  }
-  if (day.score >= 70 && day.medication.missed === 0 && day.medication.skipped === 0) {
-    return { label: 'Good', color: '#10B981', bg: '#ECFDF5', border: '#BBF7D0', icon: 'checkmark-circle-outline' as const };
-  }
-  if (day.score <= 39 || day.medication.missed > 0 || day.medication.skipped > 0 || (day.beverage.hasData && day.beverage.percent < 50)) {
-    return { label: 'Needs attention', color: '#EF4444', bg: '#FEF2F2', border: '#FECACA', icon: 'warning-outline' as const };
-  }
-  return { label: 'Warning', color: '#F59E0B', bg: '#FFFBEB', border: '#FDE68A', icon: 'alert-circle-outline' as const };
+  return DAY_STATUS_META[classifyRoutineDay(day.score, day.hasData)];
 };
 
 const getMedicationSummary = (day: DailyInsight) => {
@@ -577,10 +588,11 @@ const deriveInsights = ({
   const beverageScore = beverageDays.length
     ? clampScore((beverageDays.reduce((sum, day) => sum + (day.beverage.score || 0), 0) / beverageDays.length) - (7 - beverageDays.length) * 3)
     : null;
-  const scheduledDoses = weeklyData.reduce((sum, day) => sum + day.medication.scheduled, 0);
-  const completedDoses = weeklyData.reduce((sum, day) => sum + day.medication.completed, 0);
-  const missedDoses = weeklyData.reduce((sum, day) => sum + day.medication.missed, 0);
-  const skippedDoses = weeklyData.reduce((sum, day) => sum + day.medication.skipped, 0);
+  const medicationDays = weeklyData.filter((day) => day.medication.hasData);
+  const scheduledDoses = medicationDays.reduce((sum, day) => sum + day.medication.scheduled, 0);
+  const completedDoses = medicationDays.reduce((sum, day) => sum + day.medication.completed, 0);
+  const missedDoses = medicationDays.reduce((sum, day) => sum + day.medication.missed, 0);
+  const skippedDoses = medicationDays.reduce((sum, day) => sum + day.medication.skipped, 0);
   const medicationAdherence = scheduledDoses > 0 ? clampScore((completedDoses / scheduledDoses) * 100) : null;
   const medicationScore = medicationAdherence === null ? null : Math.max(0, clampScore(medicationAdherence - missedDoses * 4 - skippedDoses * 3));
   const scoreParts = [beverageScore, medicationScore].filter((score): score is number => score !== null);
@@ -742,6 +754,18 @@ export default function InsightsScreen() {
   const loadLocalInsights = useCallback(async () => {
     const session = await getCachedSession();
     const activeToken = String(token || session?.token || '');
+    const context = await captureAuthSessionContext(activeToken || undefined, session?.user ?? null);
+    if (activeToken && !(await isAuthSessionContextCurrent(context))) {
+      return {
+        session,
+        user: null,
+        hydrationCache: null,
+        medicationCache: null,
+        medicationHistoryCache: null,
+        deletedMedicationKeys: new Set<string>(),
+        data: deriveInsights({ selectedMonthDate, sourceLabel: 'No cache yet' }),
+      };
+    }
     const sessionMatchesToken = !token || session?.token === activeToken || session?.token === token;
     const user = sessionMatchesToken ? session?.user : null;
     const [hydrationCache, medicationCache, medicationHistoryCache, deletedMedicationKeyList] = await Promise.all([
@@ -766,6 +790,8 @@ export default function InsightsScreen() {
   const refreshOnline = useCallback(async (local: Awaited<ReturnType<typeof loadLocalInsights>>) => {
     const activeToken = String(token || local.session?.token || '');
     if (!activeToken) return;
+    const context = await captureAuthSessionContext(activeToken, local.user ?? null);
+    if (!(await isAuthSessionContextCurrent(context))) return;
     setSyncing(true);
     setOfflineNotice(null);
     try {
@@ -774,6 +800,7 @@ export default function InsightsScreen() {
         api.get('/medications', activeToken, 5000),
       ]);
       const backendHydration = hydrationResult.status === 'fulfilled' ? hydrationResult.value : null;
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const backendMeds: MedicationItem[] = medsResult.status === 'fulfilled' && Array.isArray(medsResult.value) ? medsResult.value : [];
       const mergedMeds = mergeMedicationRowsForInsights({
         backendMedications: backendMeds,
@@ -782,17 +809,18 @@ export default function InsightsScreen() {
       });
       const refreshFailures = [hydrationResult, medsResult].filter((result) => result.status === 'rejected');
       if (refreshFailures.some((result: any) => api.isNetworkError(result.reason))) {
-        setOfflineNotice('Offline mode - showing routine insights saved on this device.');
+        setOfflineNotice('Offline mode');
       }
       let backendHistory: MedicationEvent[] = [];
       try {
         const allHistory = await api.get('/medications/history/all', activeToken, 5000);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         backendHistory = Array.isArray(allHistory)
           ? allHistory.map((entry: any) => normalizeHistoryEntry(entry, entry?.medication_id || entry?.medication?.id))
           : [];
       } catch (historyError) {
         if (api.isNetworkError(historyError)) {
-          setOfflineNotice('Offline mode - showing routine insights saved on this device.');
+          setOfflineNotice('Offline mode');
         }
         const historyResults = await Promise.allSettled(
           backendMeds.map(async (med) => {
@@ -802,6 +830,7 @@ export default function InsightsScreen() {
         );
         backendHistory = historyResults.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
       }
+      if (!(await isAuthSessionContextCurrent(context))) return;
       if (local.user && (backendMeds.length > 0 || mergedMeds.length > 0)) await writeMedicationCache(local.user, mergedMeds);
       if (local.user) await writeMedicationHistoryCache(local.user, dedupeMedicationEvents([...backendHistory, ...(local.medicationHistoryCache || [])]));
       if (backendHydration) {
@@ -826,9 +855,10 @@ export default function InsightsScreen() {
         sourceLabel: backendHydration || backendMeds.length || backendHistory.length ? 'Refreshed online' : local.data.sourceLabel,
       }));
     } catch (err) {
-      if (api.isNetworkError(err)) setOfflineNotice('Offline mode - showing routine insights saved on this device.');
+      if (!(await isAuthSessionContextCurrent(context))) return;
+      if (api.isNetworkError(err)) setOfflineNotice('Offline mode');
     } finally {
-      setSyncing(false);
+      if (await isAuthSessionContextCurrent(context)) setSyncing(false);
     }
   }, [selectedMonthDate, token]);
 
@@ -863,7 +893,7 @@ export default function InsightsScreen() {
   }, [loadLocalInsights]);
 
   const insights = insightsData;
-  const scoreColor = getScoreColor(insights?.healthScore ?? null);
+  const scoreColor = getScoreColor(insights?.healthScore ?? null, insights?.hasData ?? false);
   const routineTips = useMemo(() => insights?.actionTips || [], [insights]);
   const monthTitle = selectedMonthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
@@ -890,7 +920,7 @@ export default function InsightsScreen() {
   if (!insights) return null;
 
   const hasBeverageData = insights.hydrationAvg !== null;
-  const hasMedicationData = insights.scheduledDoses > 0;
+  const hasMedicationData = insights.medicationEvents.length > 0;
 
   return (
     <SafeAreaView edges={[]} style={styles.container}>
@@ -919,7 +949,7 @@ export default function InsightsScreen() {
           </View>
           <View style={styles.heroCopy}>
             <Text style={styles.heroKicker}>Routine Score</Text>
-            <Text style={styles.heroTitle}>{getScoreMessage(insights.healthScore)}</Text>
+            <Text style={styles.heroTitle}>{getScoreMessage(insights.healthScore, insights.hasData)}</Text>
             <Text style={styles.heroSubtitle}>
               {insights.healthScore === null
                 ? 'No routine insights yet. Log beverages and medication activity to build a self-monitoring summary.'
@@ -1140,7 +1170,7 @@ export default function InsightsScreen() {
         )}
       </DetailModal>
 
-      <DetailModal visible={!!selectedDay} onClose={() => setSelectedDay(null)} title={selectedDay?.title || 'Daily Summary'} color={selectedDay ? getScoreColor(selectedDay.score) : '#2563EB'} icon="calendar-outline">
+      <DetailModal visible={!!selectedDay} onClose={() => setSelectedDay(null)} title={selectedDay?.title || 'Daily Summary'} color={selectedDay ? getScoreColor(selectedDay.score, selectedDay.hasData) : '#2563EB'} icon="calendar-outline">
         {selectedDay && (
           <>
             {!selectedDay.hasData ? (
@@ -1149,7 +1179,11 @@ export default function InsightsScreen() {
               <>
                 <View style={styles.modalListRow}>
                   <Ionicons name="water-outline" size={16} color="#2563EB" />
-                  <Text style={styles.modalListText}>Beverage intake: {formatNumber(selectedDay.beverage.totalMl)} / {formatNumber(selectedDay.beverage.goalMl)} ml - {selectedDay.beverage.percent}%</Text>
+                  <Text style={styles.modalListText}>
+                    {selectedDay.beverage.hasData
+                      ? `Beverage intake: ${formatNumber(selectedDay.beverage.totalMl)} / ${formatNumber(selectedDay.beverage.goalMl)} ml - ${selectedDay.beverage.percent}%`
+                      : 'Beverage intake: no entries logged'}
+                  </Text>
                 </View>
                 <View style={styles.modalListRow}>
                   <Ionicons name="nutrition-outline" size={16} color="#DB2777" />
@@ -1161,7 +1195,11 @@ export default function InsightsScreen() {
                 </View>
                 <View style={styles.modalListRow}>
                   <Ionicons name="medkit-outline" size={16} color="#EF4444" />
-                  <Text style={styles.modalListText}>Medication: {selectedDay.medication.completed} taken, {selectedDay.medication.missed} missed, {selectedDay.medication.skipped} skipped of {selectedDay.medication.scheduled} scheduled</Text>
+                  <Text style={styles.modalListText}>
+                    {selectedDay.medication.hasData
+                      ? `Medication: ${selectedDay.medication.completed} taken, ${selectedDay.medication.missed} missed, ${selectedDay.medication.skipped} skipped of ${selectedDay.medication.scheduled} scheduled`
+                      : 'Medication: no check-ins logged'}
+                  </Text>
                 </View>
                 <Text style={styles.modalSectionLabel}>Score reason</Text>
                 <Text style={styles.modalListText}>{selectedDay.reason}</Text>

@@ -9,6 +9,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from '../app/api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from './authSession';
 
 // ============================================================================
 // Types & Interfaces
@@ -305,11 +306,14 @@ class NotificationSettingsService {
 
       // Sync with backend if token available
       if (token) {
+        const context = await captureAuthSessionContext(token);
+        if (!(await isAuthSessionContextCurrent(context))) return;
         await api.put(
           `/notifications/preferences/${category}`,
           { enabled },
           token
         );
+        if (!(await isAuthSessionContextCurrent(context))) return;
       }
 
       console.log(`✅ ${category} updated: ${enabled ? 'ON' : 'OFF'}`);
@@ -366,6 +370,8 @@ class NotificationSettingsService {
    */
   async syncWithBackend(token: string): Promise<void> {
     try {
+      const context = await captureAuthSessionContext(token);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const settingsToSync = {
         master_toggle: this.currentSettings.masterToggle,
         sound_enabled: this.currentSettings.soundEnabled,
@@ -375,6 +381,7 @@ class NotificationSettingsService {
       };
 
       await api.put('/user/notification-settings', settingsToSync, token);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       console.log('✅ Settings synced with backend');
     } catch (error) {
       console.error('Error syncing with backend:', error);

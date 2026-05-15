@@ -8,6 +8,7 @@ import InlineSyncNotice from '../../common/InlineSyncNotice';
 import ScreenHeader from '../../common/ScreenHeader';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { getCachedSession } from '../../../../services/offlineStorage';
 import { getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
 
@@ -28,8 +29,9 @@ export default function Settings() {
     let mounted = true;
     (async () => {
       const session = await getCachedSession();
+      const context = await captureAuthSessionContext(session?.token, session?.user ?? null);
       const pending = await getPendingSyncActions();
-      if (!mounted) return;
+      if (!mounted || (session?.token && !(await isAuthSessionContextCurrent(context)))) return;
       setToken(session?.token);
       setPendingCount(pending.length);
     })().catch((error) => {
@@ -53,6 +55,8 @@ export default function Settings() {
     try {
       const session = await getCachedSession();
       const activeToken = session?.token || token;
+      const context = await captureAuthSessionContext(activeToken, session?.user ?? null);
+      if (activeToken && !(await isAuthSessionContextCurrent(context))) return;
       setToken(activeToken);
       if (!activeToken) {
         await refreshPendingCount();
@@ -64,6 +68,7 @@ export default function Settings() {
         return;
       }
       const result = await processSyncQueue(activeToken);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       await refreshPendingCount();
       if (result.failed > 0) {
         setNotice({

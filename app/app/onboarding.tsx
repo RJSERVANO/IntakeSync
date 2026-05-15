@@ -4,6 +4,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Notifications from 'expo-notifications';
 import * as api from './api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../services/authSession';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
 import { bootstrapNotificationSchedules, notificationService } from '../services/notificationService';
 import { notificationSettings } from '../services/notificationSettings';
@@ -81,7 +82,9 @@ export default function Onboarding() {
 
     async function hydrateOnboardingSession() {
       const session = await getCachedSession();
+      const context = await captureAuthSessionContext(activeToken || session?.token, session?.user ?? null);
       if (!mounted) return;
+      if ((activeToken || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
 
       if (!activeToken && session?.token) {
         setActiveToken(session.token);
@@ -114,7 +117,10 @@ export default function Onboarding() {
     const loadSavedData = async () => {
       try {
         if (activeToken) {
+          const context = await captureAuthSessionContext(activeToken);
+          if (!(await isAuthSessionContextCurrent(context))) return;
           const saved = await api.get('/onboarding', activeToken);
+          if (!(await isAuthSessionContextCurrent(context))) return;
           if (saved && typeof saved === 'object') {
             // Extract the data object if nested
             const dataToLoad = saved.data || saved;
@@ -186,7 +192,7 @@ export default function Onboarding() {
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setInlineNotice({
       type,
-      message: `${title}: ${typeof message === 'string' ? message : JSON.stringify(message)}`,
+      message: typeof message === 'string' && message.length <= 28 ? message : title,
     });
     noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2600);
   };
@@ -309,7 +315,7 @@ export default function Onboarding() {
         await notificationService.ensureAndroidChannels();
         await saveEnabledNotificationPreferences();
         await bootstrapNotificationSchedules();
-        showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
+        showNotice('success', 'Reminders enabled', 'Notifications are on.');
         await saveOnboardingNotificationPreference(true);
         hapticLight();
         setCurrentStep(currentStep + 1);
@@ -320,11 +326,11 @@ export default function Onboarding() {
       if (permission.canAskAgain === false) {
         showBlockedNotificationGuidance();
       } else {
-        showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. Tap Enable Reminders to try again, or skip for now.');
+        showNotice('warning', 'Notifications off', 'Try again or skip for now.');
       }
     } catch (err) {
       console.log('Notification permission request failed:', err);
-      showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. Tap Enable Reminders to try again, or skip for now.');
+      showNotice('warning', 'Notifications off', 'Try again or skip for now.');
       updateData('notification_permissions_accepted', false);
       await saveOnboardingNotificationPreference(false);
     } finally {

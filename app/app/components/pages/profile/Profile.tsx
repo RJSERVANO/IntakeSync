@@ -6,8 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import useUser from '../../../../hooks/useUser';
 import AvatarSelector, { SelectedAvatar, getAvatarSource } from '../../AvatarSelector';
-import * as api from '../../../api';
-import { clearCachedSession, getCachedSession, getUserRemoteAvatarUri, getUserSelectedAvatar, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
+import { getCachedSession, getUserRemoteAvatarUri, getUserSelectedAvatar, mergeLocalAvatarIntoUser, readProfileCache, writeProfileCache } from '../../../../services/offlineStorage';
+import { performLocalLogout } from '../../../../services/logoutSession';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { formatBackendBirthDateForInput } from '../../../../utils/profileValidation';
@@ -125,9 +126,13 @@ export default function Profile() {
   ];
 
   const refreshFromCache = React.useCallback(async (showSync = false) => {
+    const context = await captureAuthSessionContext(token);
+    if (token && !(await isAuthSessionContextCurrent(context))) return;
     const session = await getCachedSession();
+    if (token && session?.token !== token) return;
     const sessionUser = await mergeLocalAvatarIntoUser(session?.user ?? null);
     const cachedProfile = await readProfileCache<any>(sessionUser);
+    if (token && !(await isAuthSessionContextCurrent(context))) return;
     const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
     setCachedToken(session?.token);
     setVisibleUser(cachedVisible);
@@ -139,17 +144,18 @@ export default function Profile() {
     let mounted = true;
     (async () => {
       const session = await getCachedSession();
+      const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
+      if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
       const sessionUser = await mergeLocalAvatarIntoUser(session?.user ?? null);
       const cachedProfile = await readProfileCache<any>(sessionUser);
       if (!mounted) return;
       const cachedVisible = await mergeLocalAvatarIntoUser(cachedProfile || sessionUser || { name: 'User', email: '', nickname: 'User' });
-      if (!mounted) return;
+      if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
       setVisibleUser(cachedVisible);
       setSelectedAvatar(getUserSelectedAvatar(cachedVisible));
-      setSyncing(Boolean(token));
       if (user) {
         const freshUser = await mergeLocalAvatarIntoUser(user);
-        if (!mounted) return;
+        if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
         setVisibleUser(freshUser);
         setSelectedAvatar(getUserSelectedAvatar(freshUser));
         await writeProfileCache(freshUser, freshUser);
@@ -167,7 +173,7 @@ export default function Profile() {
   useFocusEffect(
     React.useCallback(() => {
       let active = true;
-      refreshFromCache(true)
+      refreshFromCache(false)
         .then(async () => {
           if (!active || !token || !user) return;
           const freshUser = await mergeLocalAvatarIntoUser(user);
@@ -193,14 +199,22 @@ export default function Profile() {
   const confirmSignOut = async () => {
     try {
       setSigningOut(true);
-      await api.post('/logout', {}, token as string);
+      await performLocalLogout({
+        reason: 'profile',
+        router,
+        token,
+        user: user ?? visibleUser ?? null,
+        onLocalStateCleared: () => {
+          setVisibleUser(null);
+          setSelectedAvatar(null);
+          setCachedToken(undefined);
+        },
+      });
     } catch (err) {
       console.log('Logout error:', err);
     } finally {
-      await clearCachedSession();
       setSigningOut(false);
       setSignOutVisible(false);
-      router.replace({ pathname: '/' } as any);
     }
   };
 
@@ -229,7 +243,7 @@ export default function Profile() {
         {offlineMode ? (
           <View style={styles.offlineBanner}>
             <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode - changes will sync when connected.</Text>
+            <Text style={styles.offlineBannerText}>Offline mode</Text>
           </View>
         ) : null}
 

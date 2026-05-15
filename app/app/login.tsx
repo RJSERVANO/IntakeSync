@@ -11,8 +11,8 @@ import {
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
-import { clearCachedSession, getCachedSession, hasValidCachedSession } from '../services/offlineStorage';
-import { persistAuthResponse, routeAfterAuth } from '../services/authSession';
+import { clearCachedSession, getCachedSession, hasCompletedOnboarding, hasValidCachedSession } from '../services/offlineStorage';
+import { captureAuthSessionContext, isAuthSessionContextCurrent, persistAuthResponse, routeAfterAuth } from '../services/authSession';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authStyles } from '../components/auth/authStyles';
@@ -55,7 +55,10 @@ export default function Login() {
     }
 
     if (api.isAuthError(err)) {
-      await clearCachedSession();
+      const cached = await getCachedSession();
+      if (!hasValidCachedSession(cached)) {
+        await clearCachedSession();
+      }
       showNotice('error', api.getErrorTitle(err, 'Invalid Credentials'), api.getErrorMessage(err, 'The email or password is incorrect.'));
       return;
     }
@@ -117,6 +120,29 @@ export default function Login() {
       }),
     ]).start();
   }, [cardOpacity, cardTranslate, headerOpacity]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function redirectIfAlreadySignedIn() {
+      const cached = await getCachedSession();
+      if (!mounted || !hasValidCachedSession(cached)) return;
+      const context = await captureAuthSessionContext(cached.token, cached.user);
+      if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
+      routeAfterAuth(router, {
+        token: cached.token,
+        user: cached.user,
+        onboardingCompleted: await hasCompletedOnboarding(cached.user),
+        sessionVersion: '',
+      });
+    }
+
+    void redirectIfAlreadySignedIn();
+
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
 
   async function onLogin() {
     if (!email || !password) {

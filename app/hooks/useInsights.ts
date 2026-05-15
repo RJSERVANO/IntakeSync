@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import api from '../app/api';
+import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../services/authSession';
 
 export type Insight = {
   id: number;
@@ -24,11 +25,15 @@ export function useInsights(initialType?: string, token?: string) {
     setLoading(true);
     setError(null);
     try {
+      const context = await captureAuthSessionContext(token);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       const q = t ?? type;
       const url = q ? `/insights?type=${encodeURIComponent(q)}` : '/insights';
       const res = await api.get(url, token, 5000);
+      if (!(await isAuthSessionContextCurrent(context))) return;
       setData(res?.data ?? res ?? []);
     } catch (e: any) {
+      if (api.isStaleSessionError(e)) return;
       setError(e?.message ?? 'Failed to fetch insights');
       setData([]);
     } finally {
@@ -45,9 +50,13 @@ export function useInsights(initialType?: string, token?: string) {
     setLoading(true);
     setError(null);
     try {
+      const context = await captureAuthSessionContext(token);
+      if (!(await isAuthSessionContextCurrent(context))) throw new Error('Stale session request ignored.');
       const res = await api.post('/insights', insight, token);
+      if (!(await isAuthSessionContextCurrent(context))) throw new Error('Stale session request ignored.');
       return res?.data ?? res as Insight;
     } catch (e: any) {
+      if (api.isStaleSessionError(e)) throw e;
       setError(e?.message ?? 'Failed to create insight');
       throw e;
     } finally {
