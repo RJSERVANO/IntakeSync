@@ -9,17 +9,26 @@ import InlineSyncNotice from './components/common/InlineSyncNotice';
 import {
   getCachedSession,
   readHydrationCache,
+  readDeletedMedicationTombstones,
   readMedicationCache,
   readMedicationHistoryCache,
   writeHydrationCache,
   writeMedicationCache,
   writeMedicationHistoryCache,
 } from '../services/offlineStorage';
+import { subscribeHomeRefresh } from '../services/homeEvents';
+import {
+  deriveMedicationSummaryForDate,
+  getMedicationIdentityValues,
+  sameMedication,
+  type MedicationSummaryHistoryEntry,
+  type MedicationSummaryMedication,
+} from '../utils/medicationSummary';
 import { FONT_SCALE } from '../utils/fontScaling';
 import { useFontScaleVersion } from './accessibility/FontScaleProvider';
 
 type BeverageLevel = 'none' | 'low' | 'medium' | 'high';
-type MedicationStatus = 'completed' | 'skipped' | 'missed' | 'snoozed';
+type MedicationStatus = 'completed' | 'skipped' | 'missed' | 'snoozed' | 'pending';
 type DayStatus = 'good' | 'warning' | 'attention' | 'empty';
 
 type MedicationItem = {
@@ -40,6 +49,8 @@ type MedicationItem = {
   local_created_at?: string;
   schedule_created_at?: string;
   client_created_at?: string;
+  client_uuid?: string | number | null;
+  sync_status?: 'pending' | 'synced' | 'failed' | 'syncing';
 };
 
 type MedicationEvent = {
@@ -130,7 +141,6 @@ type DailyInsightContext = {
   goal: number;
   meds: MedicationItem[];
   medicationEvents: MedicationEvent[];
-  historyByDose: Map<string, MedicationEvent>;
   now: Date;
 };
 
@@ -229,6 +239,71 @@ const dedupeBeverageLogs = (entries: any[]) => {
     byKey.set(key, { ...byKey.get(key), ...entry });
   });
   return Array.from(byKey.values()).sort((a, b) => (new Date(getEntryTime(b)).getTime() || 0) - (new Date(getEntryTime(a)).getTime() || 0));
+};
+
+const normalizeMedicationForInsights = (med: MedicationItem): MedicationItem => ({
+  ...med,
+  id: med.id?.toString?.() || med.local_id?.toString?.() || med.server_id?.toString?.() || med.client_uuid?.toString?.() || String(med.id),
+});
+
+const isPendingLocalMedication = (med: MedicationItem) => (
+  med.sync_status === 'pending' ||
+  med.sync_status === 'failed' ||
+  (!med.server_id && typeof med.id === 'string' && med.id.startsWith('med_'))
+);
+
+const medicationMatchesDeletedKey = (med: MedicationItem, deletedKeys?: Set<string>) => {
+  if (!deletedKeys?.size) return false;
+  return getMedicationIdentityValues(med).some((identity) => deletedKeys.has(identity));
+};
+
+const findMedicationMergeKey = (
+  med: MedicationItem,
+  identityToKey: Map<string, string>,
+  merged: Map<string, MedicationItem>,
+) => {
+  const identities = getMedicationIdentityValues(med);
+  const identityKey = identities.map((identity) => identityToKey.get(identity)).find(Boolean);
+  if (identityKey) return identityKey;
+
+  const similar = Array.from(merged.entries()).find(([, existing]) => sameMedication(existing, med));
+  if (similar) return similar[0];
+
+  return `med:${identities[0] || med.id || med.local_id || med.client_uuid || merged.size}`;
+};
+
+const mergeMedicationRowsForInsights = ({
+  backendMedications,
+  localMedications,
+  deletedMedicationKeys,
+}: {
+  backendMedications?: MedicationItem[] | null;
+  localMedications?: MedicationItem[] | null;
+  deletedMedicationKeys?: Set<string>;
+}) => {
+  const merged = new Map<string, MedicationItem>();
+  const identityToKey = new Map<string, string>();
+
+  const putMedication = (rawMed: MedicationItem, preferIncoming: boolean) => {
+    if (!rawMed || rawMed.deleted_at) return;
+    const med = normalizeMedicationForInsights(rawMed);
+    if (medicationMatchesDeletedKey(med, deletedMedicationKeys)) return;
+
+    const key = findMedicationMergeKey(med, identityToKey, merged);
+    const existing = merged.get(key);
+    const next = existing
+      ? preferIncoming
+        ? { ...existing, ...med, times: med.times?.length ? med.times : existing.times }
+        : { ...med, ...existing, times: existing.times?.length ? existing.times : med.times }
+      : med;
+    merged.set(key, next);
+    getMedicationIdentityValues(next).forEach((identity) => identityToKey.set(identity, key));
+  };
+
+  (backendMedications || []).forEach((med) => putMedication(med, true));
+  (localMedications || []).forEach((med) => putMedication(med, isPendingLocalMedication(med)));
+
+  return Array.from(merged.values());
 };
 
 const levelRank = (level?: string): BeverageLevel => {
@@ -359,7 +434,7 @@ const buildReason = (day: DailyInsight) => {
 };
 
 const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): DailyInsight => {
-  const { beverageLogs, goal, meds, medicationEvents, historyByDose, now } = context;
+  const { beverageLogs, goal, meds, medicationEvents, now } = context;
   const dateKey = getDateKey(date);
   const logs = beverageLogs.filter((entry) => getDateKey(getEntryTime(entry)) === dateKey);
   const totalMl = logs.reduce((sum, entry) => sum + Number(entry?.amount_ml || entry?.logged_ml || 0), 0);
@@ -368,34 +443,25 @@ const buildDailyInsightForDate = (date: Date, context: DailyInsightContext): Dai
   const caffeineLevel = highestLevel(logs, 'caffeine_level');
   const beverageScore = logs.length > 0 ? Math.max(0, percent - levelPenalty(sugarLevel) - levelPenalty(caffeineLevel)) : null;
 
-  const dayEvents: MedicationEvent[] = [];
-  meds.forEach((med) => {
-    getMedicationDoseOccurrencesForDate(med, date).forEach((occurrence) => {
-      const occurrenceIso = occurrence.toISOString();
-      const key = getDoseMinuteKey({ medId: med.id, time: occurrenceIso });
-      const existing = historyByDose.get(key);
-      const isDue = occurrence.getTime() + MISSED_DOSE_GRACE_MS < now.getTime();
-      if (existing) {
-        dayEvents.push(existing);
-      } else if (isDue) {
-        dayEvents.push({ id: key, medId: med.id, time: occurrenceIso, status: 'missed' });
-      } else if (getDateKey(now) === dateKey) {
-        dayEvents.push({ id: key, medId: med.id, time: occurrenceIso, status: 'snoozed' });
-      }
-    });
+  const medicationSummary = deriveMedicationSummaryForDate({
+    meds: meds as MedicationSummaryMedication[],
+    rawHistory: medicationEvents as MedicationSummaryHistoryEntry[],
+    date,
+    now,
   });
-  medicationEvents
-    .filter((entry) => getDateKey(getMedicationDoseTime(entry)) === dateKey)
-    .forEach((entry) => {
-      if (!dayEvents.some((item) => getDoseMinuteKey(item) === getDoseMinuteKey(entry))) dayEvents.push(entry);
-    });
-
-  const finalDayEvents = dedupeMedicationEvents(dayEvents);
-  const scheduled = finalDayEvents.filter((entry) => String(entry.status).toLowerCase() !== 'snoozed').length;
-  const completed = finalDayEvents.filter((entry) => String(entry.status).toLowerCase() === 'completed').length;
-  const missed = finalDayEvents.filter((entry) => String(entry.status).toLowerCase() === 'missed').length;
-  const skipped = finalDayEvents.filter((entry) => String(entry.status).toLowerCase() === 'skipped').length;
-  const adherence = scheduled > 0 ? clampScore((completed / scheduled) * 100) : null;
+  const finalDayEvents: MedicationEvent[] = medicationSummary.doses.map((dose) => ({
+    id: dose.key,
+    medId: dose.medId,
+    time: dose.time,
+    status: dose.status,
+    medication_name_snapshot: dose.medicationName,
+    dosage_snapshot: dose.dosage,
+  }));
+  const scheduled = medicationSummary.total;
+  const completed = medicationSummary.taken;
+  const missed = medicationSummary.missed;
+  const skipped = medicationSummary.skipped;
+  const adherence = medicationSummary.relevantToday ? medicationSummary.percent : null;
   const medicationScore = adherence === null ? null : Math.max(0, adherence - missed * 8 - skipped * 5);
   const availableScores = [beverageScore, medicationScore].filter((score): score is number => score !== null);
   const score = availableScores.length ? clampScore(availableScores.reduce((sum, value) => sum + value, 0) / availableScores.length) : null;
@@ -474,6 +540,7 @@ const deriveInsights = ({
   backendHydration,
   backendMedications,
   backendMedicationHistory,
+  deletedMedicationKeys,
   selectedMonthDate,
   sourceLabel,
 }: {
@@ -483,6 +550,7 @@ const deriveInsights = ({
   backendHydration?: any;
   backendMedications?: MedicationItem[] | null;
   backendMedicationHistory?: MedicationEvent[] | null;
+  deletedMedicationKeys?: Set<string>;
   selectedMonthDate?: Date;
   sourceLabel: string;
 }): InsightsData => {
@@ -493,14 +561,14 @@ const deriveInsights = ({
   const beverageLogs = dedupeBeverageLogs([...serverEntries, ...cachedEntries, ...pendingEntries]);
   const goal = Math.max(1, Number(hydration?.goal || hydration?.daily_goal_ml || hydration?.hydration_goal || hydration?.daily_hydration_goal || 2000));
 
-  const meds = (backendMedications?.length ? backendMedications : medicationCache || []).map((med) => ({
-    ...med,
-    id: med.id?.toString?.() || med.local_id?.toString?.() || String(med.id),
-  }));
+  const meds = mergeMedicationRowsForInsights({
+    backendMedications,
+    localMedications: medicationCache,
+    deletedMedicationKeys,
+  });
   const medicationEvents = dedupeMedicationEvents([...(backendMedicationHistory || []), ...(medicationHistoryCache || [])].map((entry) => normalizeHistoryEntry(entry)));
-  const historyByDose = new Map(medicationEvents.map((entry) => [getDoseMinuteKey(entry), entry]));
   const now = new Date();
-  const dailyContext: DailyInsightContext = { beverageLogs, goal, meds, medicationEvents, historyByDose, now };
+  const dailyContext: DailyInsightContext = { beverageLogs, goal, meds, medicationEvents, now };
   const weeklyData = buildWeekDays().map((date) => buildDailyInsightForDate(date, dailyContext));
   const monthDate = selectedMonthDate || now;
   const monthlyData = buildCalendarDays(monthDate).map((date) => buildDailyInsightForDate(date, dailyContext));
@@ -527,7 +595,7 @@ const deriveInsights = ({
   if (missedDoses > 0 || skippedDoses > 0) {
     actionTips.push({
       label: 'Medication',
-      text: `Review medication reminder times. You missed ${missedDoses} dose${missedDoses === 1 ? '' : 's'}${skippedDoses ? ` and skipped ${skippedDoses}` : ''} this week.`,
+      text: `Based on your logged entries, review your medication routine for ${missedDoses} missed dose${missedDoses === 1 ? '' : 's'}${skippedDoses ? ` and ${skippedDoses} skipped` : ''} this week.`,
       color: '#EF4444',
       icon: 'time-outline',
       severity: 1,
@@ -537,7 +605,7 @@ const deriveInsights = ({
     const averagePercent = beverageDays.length ? Math.round(beverageDays.reduce((sum, day) => sum + day.beverage.percent, 0) / beverageDays.length) : 0;
     actionTips.push({
       label: 'Beverage',
-      text: `Increase water intake earlier in the day. You averaged ${averagePercent}% of your hydration goal on logged days.`,
+      text: `Based on your logged entries, consider reviewing your beverage routine. Logged days averaged ${averagePercent}% of your hydration goal.`,
       color: '#2563EB',
       icon: 'water-outline',
       severity: 2,
@@ -546,7 +614,7 @@ const deriveInsights = ({
   if (highCaffeineDays > 0) {
     actionTips.push({
       label: 'Caffeine',
-      text: `Monitor caffeine intake. High caffeine was logged on ${highCaffeineDays} day${highCaffeineDays === 1 ? '' : 's'}.`,
+      text: `Based on your logged entries, caffeine was marked high on ${highCaffeineDays} day${highCaffeineDays === 1 ? '' : 's'}.`,
       color: '#B45309',
       icon: 'cafe-outline',
       severity: 3,
@@ -555,7 +623,7 @@ const deriveInsights = ({
   if (highSugarDays > 0) {
     actionTips.push({
       label: 'Sugar',
-      text: `Reduce high-sugar drinks. Your beverage logs show high sugar intake on ${highSugarDays} day${highSugarDays === 1 ? '' : 's'}.`,
+      text: `Based on your logged entries, sugar was marked high on ${highSugarDays} day${highSugarDays === 1 ? '' : 's'}. Consider reviewing your beverage routine.`,
       color: '#DB2777',
       icon: 'nutrition-outline',
       severity: 4,
@@ -564,7 +632,7 @@ const deriveInsights = ({
   if (beverageDays.length > 0 && beverageDays.length < 4) {
     actionTips.push({
       label: 'Consistency',
-      text: `Log beverages more consistently. This week has beverage logs on ${beverageDays.length} of 7 days.`,
+      text: `You may want to log beverages more consistently. This week has beverage logs on ${beverageDays.length} of 7 days.`,
       color: '#64748B',
       icon: 'calendar-outline',
       severity: 5,
@@ -573,7 +641,7 @@ const deriveInsights = ({
   if (actionTips.length === 0 && medicationScore !== null && medicationScore >= 85) {
     actionTips.push({
       label: 'Medication',
-      text: 'Medication adherence is consistent. Keep marking doses as taken.',
+      text: 'Your medication check-ins look consistent based on logged entries.',
       color: '#10B981',
       icon: 'checkmark-circle-outline',
       severity: 6,
@@ -582,7 +650,7 @@ const deriveInsights = ({
   if (actionTips.length === 0 && healthScore !== null) {
     actionTips.push({
       label: 'Consistency',
-      text: 'Your routine looks consistent this week. Keep logging beverages and medication check-ins.',
+      text: 'Your logged routine looks consistent this week. This is a self-monitoring summary and not medical advice.',
       color: '#10B981',
       icon: 'checkmark-circle-outline',
       severity: 7,
@@ -591,7 +659,7 @@ const deriveInsights = ({
   if (actionTips.length === 0) {
     actionTips.push({
       label: 'Consistency',
-      text: 'Log beverages and medication check-ins for a few days to unlock personalized insights.',
+      text: 'Log beverages and medication check-ins for a few days to build a self-monitoring summary.',
       color: '#2563EB',
       icon: 'sparkles-outline',
       severity: 8,
@@ -676,20 +744,23 @@ export default function InsightsScreen() {
     const activeToken = String(token || session?.token || '');
     const sessionMatchesToken = !token || session?.token === activeToken || session?.token === token;
     const user = sessionMatchesToken ? session?.user : null;
-    const [hydrationCache, medicationCache, medicationHistoryCache] = await Promise.all([
+    const [hydrationCache, medicationCache, medicationHistoryCache, deletedMedicationKeyList] = await Promise.all([
       sessionMatchesToken ? readHydrationCache<any>() : Promise.resolve(null),
       user ? readMedicationCache<MedicationItem[]>(user) : Promise.resolve(null),
       user ? readMedicationHistoryCache<MedicationEvent[]>(user) : Promise.resolve(null),
+      user ? readDeletedMedicationTombstones(user) : Promise.resolve([]),
     ]);
+    const deletedMedicationKeys = new Set(deletedMedicationKeyList || []);
     const data = deriveInsights({
       hydrationCache,
       medicationCache,
       medicationHistoryCache,
+      deletedMedicationKeys,
       selectedMonthDate,
       sourceLabel: hydrationCache || medicationCache?.length || medicationHistoryCache?.length ? 'Cached on this device' : 'No cache yet',
     });
     setInsightsData(data);
-    return { session, user, hydrationCache, medicationCache, medicationHistoryCache, data };
+    return { session, user, hydrationCache, medicationCache, medicationHistoryCache, deletedMedicationKeys, data };
   }, [selectedMonthDate, token]);
 
   const refreshOnline = useCallback(async (local: Awaited<ReturnType<typeof loadLocalInsights>>) => {
@@ -704,6 +775,11 @@ export default function InsightsScreen() {
       ]);
       const backendHydration = hydrationResult.status === 'fulfilled' ? hydrationResult.value : null;
       const backendMeds: MedicationItem[] = medsResult.status === 'fulfilled' && Array.isArray(medsResult.value) ? medsResult.value : [];
+      const mergedMeds = mergeMedicationRowsForInsights({
+        backendMedications: backendMeds,
+        localMedications: local.medicationCache,
+        deletedMedicationKeys: local.deletedMedicationKeys,
+      });
       const refreshFailures = [hydrationResult, medsResult].filter((result) => result.status === 'rejected');
       if (refreshFailures.some((result: any) => api.isNetworkError(result.reason))) {
         setOfflineNotice('Offline mode - showing routine insights saved on this device.');
@@ -726,7 +802,7 @@ export default function InsightsScreen() {
         );
         backendHistory = historyResults.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
       }
-      if (local.user && backendMeds.length > 0) await writeMedicationCache(local.user, backendMeds);
+      if (local.user && (backendMeds.length > 0 || mergedMeds.length > 0)) await writeMedicationCache(local.user, mergedMeds);
       if (local.user) await writeMedicationHistoryCache(local.user, dedupeMedicationEvents([...backendHistory, ...(local.medicationHistoryCache || [])]));
       if (backendHydration) {
         const pendingEntries = Array.isArray(local.hydrationCache?.entries)
@@ -743,8 +819,9 @@ export default function InsightsScreen() {
         medicationCache: local.medicationCache,
         medicationHistoryCache: local.medicationHistoryCache,
         backendHydration,
-        backendMedications: backendMeds,
+        backendMedications: mergedMeds,
         backendMedicationHistory: backendHistory,
+        deletedMedicationKeys: local.deletedMedicationKeys,
         selectedMonthDate,
         sourceLabel: backendHydration || backendMeds.length || backendHistory.length ? 'Refreshed online' : local.data.sourceLabel,
       }));
@@ -775,6 +852,15 @@ export default function InsightsScreen() {
       cancelled = true;
     };
   }, [loadLocalInsights, refreshOnline, selectedMonthDate]);
+
+  useEffect(() => {
+    const subscription = subscribeHomeRefresh((event) => {
+      if (!event?.reason || ['hydration', 'medication', 'history', 'home'].includes(event.reason)) {
+        void loadLocalInsights();
+      }
+    });
+    return () => subscription.remove();
+  }, [loadLocalInsights]);
 
   const insights = insightsData;
   const scoreColor = getScoreColor(insights?.healthScore ?? null);
@@ -836,7 +922,7 @@ export default function InsightsScreen() {
             <Text style={styles.heroTitle}>{getScoreMessage(insights.healthScore)}</Text>
             <Text style={styles.heroSubtitle}>
               {insights.healthScore === null
-                ? 'No routine insights yet. Log beverages and medication activity to build your routine summary.'
+                ? 'No routine insights yet. Log beverages and medication activity to build a self-monitoring summary.'
                 : `${insights.partialLabel}. ${insights.sourceLabel}.`}
             </Text>
           </View>
@@ -883,7 +969,7 @@ export default function InsightsScreen() {
             <View style={[styles.tipIconCircle, { backgroundColor: `${routineTips[0]?.color || '#2563EB'}18` }]}>
               <Ionicons name={(routineTips[0]?.icon || 'list-circle-outline') as any} size={20} color={routineTips[0]?.color || '#2563EB'} />
             </View>
-            <Text style={[styles.patternTitle, { color: routineTips[0]?.color || '#2563EB' }]}>Action Plan</Text>
+            <Text style={[styles.patternTitle, { color: routineTips[0]?.color || '#2563EB' }]}>Routine Notes</Text>
           </View>
           <View style={styles.tipsList}>
             {routineTips.map((tip) => (
@@ -995,7 +1081,7 @@ export default function InsightsScreen() {
       </ScrollView>
 
       <DetailModal visible={detailModal === 'score'} onClose={() => setDetailModal(null)} title="Routine Score" color={scoreColor} icon="analytics-outline">
-        <Text style={styles.modalRecommendation}>Routine Score combines Beverage and Medication when both are available. If only one exists, the score is normalized from that component and marked as partial.</Text>
+        <Text style={styles.modalRecommendation}>Routine Score combines Beverage and Medication when both are available. If only one exists, the score is normalized from that component and marked as partial. This is a self-monitoring summary and not medical advice.</Text>
         <View style={styles.modalStatGrid}>
           <View style={styles.modalStatBox}>
             <Text style={styles.modalStatValue} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{insights.beverageScore === null ? '-' : insights.beverageScore}</Text>

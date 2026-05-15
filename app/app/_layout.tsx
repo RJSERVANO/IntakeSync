@@ -26,7 +26,7 @@ ScalableTextInput.defaultProps = {
 // Suppress Expo Go push notification warning in UI
 LogBox.ignoreLogs([
   /expo-notifications: android push notifications.*removed from expo go/i,
-  /expo go.*push notifications.*sdk 53/i,
+  /expo go.*push notifications.*sdk 5\d/i,
   /expo go.*remote notifications/i,
 ]);
 

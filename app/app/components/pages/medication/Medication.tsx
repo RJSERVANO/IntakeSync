@@ -26,6 +26,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
+import { buildHistoricalMedicationSummary, deriveMedicationStats, type HistoricalMedicationSummary } from '../../../../utils/medicationSummary';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { hapticError, hapticForNotice, hapticSuccess, hapticWarning } from '../../../../utils/haptics';
 
@@ -203,6 +204,19 @@ function defaultClockMinutesForDoseCount(count: number, intervalHours?: number) 
   return [6 * 60, 12 * 60, 18 * 60, 22 * 60];
 }
 
+function getScheduleAnchor(startTime: Date, scheduleStartDate?: string) {
+  const rounded = getNextMedicationTimeSlot(startTime);
+  const startDay = new Date(startTime);
+  startDay.setHours(0, 0, 0, 0);
+  const roundedDay = new Date(rounded);
+  roundedDay.setHours(0, 0, 0, 0);
+  const dayDelta = Math.round((roundedDay.getTime() - startDay.getTime()) / (24 * 60 * 60 * 1000));
+  const anchor = parseDateStringLocal(scheduleStartDate || todayDateString());
+  anchor.setDate(anchor.getDate() + dayDelta);
+  anchor.setHours(rounded.getHours(), rounded.getMinutes(), 0, 0);
+  return anchor;
+}
+
 function generateSuggestedTimes({
   startTime,
   scheduleStartDate,
@@ -222,6 +236,20 @@ function generateSuggestedTimes({
   const scheduleDate = parseDateStringLocal(scheduleStartDate || todayDateString());
   const seen = new Set<string>();
   const times: string[] = [];
+
+  if (interval > 0) {
+    const anchor = getScheduleAnchor(startTime, scheduleStartDate);
+    for (let index = 0; index < maxDoses; index += 1) {
+      const candidate = new Date(anchor.getTime() + index * interval * 60 * 60 * 1000);
+      const key = `${candidate.getHours()}:${candidate.getMinutes()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        times.push(candidate.toISOString());
+      }
+    }
+    if (times.length > 0) return times;
+  }
+
   const clockMinutes = defaultClockMinutesForDoseCount(maxDoses, interval || undefined);
 
   for (const totalMinutes of clockMinutes) {
@@ -446,50 +474,17 @@ function dedupeMedicationHistory(entries: HistoryEntry[]) {
   return Array.from(byDose.values()).sort((a, b) => getHistorySortTime(b) - getHistorySortTime(a));
 }
 
-function isSameCalendarDate(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function deriveMedicationStats({
-  meds,
-  rawHistory,
-  backendStats,
-  now,
-}: {
-  meds: MedicationItem[];
-  rawHistory: HistoryEntry[];
-  backendStats?: any;
-  deletedTombstones?: Set<string>;
-  now: Date;
-}) {
-  const dedupedHistory = dedupeMedicationHistory(rawHistory);
-  const historicalMedicationIds = new Set(
-    dedupedHistory
-      .map((entry) => entry.medId?.toString())
-      .filter((value): value is string => !!value)
-  );
-  const localHistoricalTotal = Math.max(meds.length, historicalMedicationIds.size);
-  const backendTotal = Number(backendStats?.total_medications);
-
-  return {
-    ...(backendStats || {}),
-    total_medications: Number.isFinite(backendTotal)
-      ? Math.max(backendTotal, localHistoricalTotal)
-      : localHistoricalTotal,
-    active_medications: meds.filter((med) => {
-      if (med.deleted_at || med.active === false) return false;
-      if (!med.end_date) return true;
-      const end = parseDateStringLocal(med.end_date);
-      end.setHours(23, 59, 59, 999);
-      return end.getTime() >= now.getTime();
-    }).length,
-    completed_today: dedupedHistory.filter((entry) => (
-      entry.status === 'completed' && isSameCalendarDate(new Date(entry.time), now)
-    )).length,
-    missed_today: dedupedHistory.filter((entry) => (
-      (entry.status === 'missed' || entry.status === 'skipped') && isSameCalendarDate(new Date(entry.time), now)
-    )).length,
-  };
+function markHistoryForDeletedMedication(entries: HistoryEntry[], med: MedicationItem) {
+  const deletedIdentities = new Set(getMedicationIdentityValues(med));
+  return entries.map((entry) => {
+    if (!deletedIdentities.has(entry.medId.toString())) return entry;
+    return {
+      ...entry,
+      medicationName: entry.medicationName || med.name,
+      dosage: entry.dosage || med.dosage,
+      medicationDeleted: true,
+    };
+  });
 }
 
 export default function Medication() {
@@ -1371,7 +1366,7 @@ export default function Medication() {
     await Promise.all(getMedicationNotificationIds(deleteTarget).map((notificationId) => cancelMedicationNotifications(notificationId)));
 
     const newMeds = previous.filter((m) => !sameMedication(m, deleteTarget) && !medicationMatchesDeletedKeys(m, tombstones));
-    const newHistory = previousHistory;
+    const newHistory = markHistoryForDeletedMedication(previousHistory, deleteTarget);
     const newUpcoming = filterDeletedUpcomingItems(previousUpcoming, tombstones);
     setMeds(newMeds);
     setUpcoming(newUpcoming);
@@ -2282,36 +2277,58 @@ export default function Medication() {
     return true;
   }
 
-  function isMedicationScheduledToday(med: MedicationItem) {
-    return getMedicationDoseOccurrencesForDate(med, new Date(nowTick)).length > 0;
+  function getHistoricalStatsItems() {
+    return buildHistoricalMedicationSummary({
+      meds,
+      rawHistory: history,
+      backendTotal: Number(stats?.total_medications),
+      now: new Date(nowTick),
+    });
   }
 
-  function getStatsModalItems() {
+  function getStatsModalItems(): HistoricalMedicationSummary[] {
     if (!statsModalType) return [];
-    if (statsModalType === 'total') return meds;
-    if (statsModalType === 'active') return meds.filter(isMedicationActiveForStats);
-    if (statsModalType === 'today') return meds.filter(isMedicationScheduledToday);
-    const missedIds = new Set(
-      getValidHistoryEntries()
-        .filter((entry) => (entry.status === 'skipped' || entry.status === 'missed') && isSameCalendarDay(new Date(entry.time), new Date(nowTick)))
-        .map((entry) => entry.medId.toString())
-    );
-    return meds.filter((med) => missedIds.has(med.id.toString()));
+    const historicalItems = getHistoricalStatsItems();
+    if (statsModalType === 'total') return historicalItems;
+    if (statsModalType === 'active') return historicalItems.filter((med) => !med.isHistoricalOnly && isMedicationActiveForStats(med as MedicationItem));
+    if (statsModalType === 'today') return historicalItems.filter((med) => med.completedToday > 0);
+    return historicalItems.filter((med) => med.missedToday > 0);
   }
 
   function getStatsModalCopy() {
     switch (statsModalType) {
       case 'total':
-        return { title: 'All Medications', subtitle: 'Every medication schedule saved in your list.' };
+        return { title: 'All Medications', subtitle: 'Current medications plus deleted medications with saved history.' };
       case 'active':
         return { title: 'Active Medications', subtitle: 'Current medications in your list that have not expired.' };
       case 'today':
-        return { title: "Today's Schedule", subtitle: 'Medications scheduled for today, not only doses already taken.' };
+        return { title: 'Taken Today', subtitle: 'Completed dose records saved for today, including deleted medications.' };
       case 'missed':
-        return { title: 'Missed Today', subtitle: 'Scheduled medication doses not marked taken after their time passed.' };
+        return { title: 'Missed Today', subtitle: 'Missed or skipped dose records saved for today, including deleted medications.' };
       default:
         return { title: '', subtitle: '' };
     }
+  }
+
+  function getStatsDetailMeta(med: HistoricalMedicationSummary) {
+    if (statsModalType === 'today') {
+      return `${med.completedToday} taken today${med.dosage ? ` - ${med.dosage}` : ''}`;
+    }
+    if (statsModalType === 'missed') {
+      return `${med.missedToday} missed/skipped today${med.dosage ? ` - ${med.dosage}` : ''}`;
+    }
+    if (med.isHistoricalOnly || med.isDeleted) {
+      const historyLabel = med.historyCount > 0 ? `${med.historyCount} saved history record${med.historyCount === 1 ? '' : 's'}` : 'Historical medication';
+      return `${med.dosage || 'No dosage'} - ${historyLabel}`;
+    }
+    return `${med.dosage || 'No dosage'} - ${(med.times || []).length} reminder time${(med.times || []).length === 1 ? '' : 's'}`;
+  }
+
+  function getStatsDetailBadge(med: HistoricalMedicationSummary) {
+    if (statsModalType === 'today') return `${med.completedToday} taken`;
+    if (statsModalType === 'missed') return `${med.missedToday} missed`;
+    if (med.isHistoricalOnly || med.isDeleted) return 'History';
+    return 'Active';
   }
 
   function getNextLocalReminder(med: MedicationItem) {
@@ -3455,7 +3472,10 @@ export default function Medication() {
                     </View>
                     <View style={styles.statsDetailContent}>
                       <Text style={styles.statsDetailName}>{med.name}</Text>
-                      <Text style={styles.statsDetailMeta}>{med.dosage || 'No dosage'} - {(med.times || []).length} reminder time{(med.times || []).length === 1 ? '' : 's'}</Text>
+                      <Text style={styles.statsDetailMeta}>{getStatsDetailMeta(med)}</Text>
+                    </View>
+                    <View style={[styles.statsDetailBadge, (med.isHistoricalOnly || med.isDeleted) && styles.statsDetailBadgeHistory]}>
+                      <Text style={[styles.statsDetailBadgeText, (med.isHistoricalOnly || med.isDeleted) && styles.statsDetailBadgeHistoryText]}>{getStatsDetailBadge(med)}</Text>
                     </View>
                   </View>
                 ))
@@ -3981,9 +4001,13 @@ const styles = StyleSheet.create({
   statsDetailList: { maxHeight: 280 },
   statsDetailItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
   statsDetailIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  statsDetailContent: { flex: 1 },
+  statsDetailContent: { flex: 1, minWidth: 0 },
   statsDetailName: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
   statsDetailMeta: { fontSize: 11, color: '#64748B', fontWeight: '700', marginTop: 2 },
+  statsDetailBadge: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginLeft: 8 },
+  statsDetailBadgeText: { color: '#1E3A8A', fontSize: 10, fontWeight: '900' },
+  statsDetailBadgeHistory: { backgroundColor: '#F8FAFC', borderColor: '#CBD5E1' },
+  statsDetailBadgeHistoryText: { color: '#475569' },
   statsEmptyState: { alignItems: 'center', paddingVertical: 24 },
   statsEmptyText: { marginTop: 8, color: '#64748B', fontSize: 12, fontWeight: '800' },
 

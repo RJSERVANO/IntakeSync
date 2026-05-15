@@ -4,15 +4,45 @@
     "appVersionSource": "local"
   },
   "build": {
-    "apk": {
+    "development": {
+      "developmentClient": true,
       "distribution": "internal",
       "credentialsSource": "local",
-      "environment": "preview",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api",
+        "EXPO_PUBLIC_API_URL": "https://yellow-yak-708036.hostingersite.com/api",
         "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
-        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "958453424419-sjm8s27p18d09ttium59mmt5ug76n59g.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "958453424419-lv2jo5iem8s4ebogq5oi743snffmpfo1.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_USE_PROXY": "false",
+        "EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME": "@reinand_servano/IntakeSync"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "credentialsSource": "local",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://yellow-yak-708036.hostingersite.com/api",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "958453424419-lv2jo5iem8s4ebogq5oi743snffmpfo1.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_USE_PROXY": "false",
+        "EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME": "@reinand_servano/IntakeSync"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "local-apk": {
+      "distribution": "internal",
+      "credentialsSource": "local",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://yellow-yak-708036.hostingersite.com/api",
+        "EXPO_PUBLIC_GOOGLE_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "958453424419-j05862vbc36aahm4f5gvald1vnj6cvvp.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "958453424419-lv2jo5iem8s4ebogq5oi743snffmpfo1.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_USE_PROXY": "false",
         "EXPO_PUBLIC_EXPO_PROJECT_FULL_NAME": "@reinand_servano/IntakeSync"
       },
@@ -21,6 +51,7 @@
       }
     },
     "production": {
+      "credentialsSource": "local",
       "android": {
         "buildType": "app-bundle"
       }

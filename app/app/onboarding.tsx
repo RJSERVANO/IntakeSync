@@ -2,12 +2,21 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, BackHandler, Alert, Linking } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Notifications from 'expo-notifications';
 import * as api from './api';
 import { calculatePersonalizedHydrationGoal } from '../utils/hydrationHelpers';
-import { notificationService } from '../services/notificationService';
+import { bootstrapNotificationSchedules, notificationService } from '../services/notificationService';
 import { notificationSettings } from '../services/notificationSettings';
 import { enqueueSyncAction, mergeLatestPendingAction } from '../services/syncQueue';
-import { getCachedSession, markOnboardingComplete, readSettingsCache, updateCachedUser, writeSettingsCache } from '../services/offlineStorage';
+import {
+  getCachedSession,
+  markOnboardingComplete,
+  readOnboardingProgress,
+  readSettingsCache,
+  updateCachedUser,
+  writeOnboardingProgress,
+  writeSettingsCache,
+} from '../services/offlineStorage';
 import InlineNotice from './components/common/InlineNotice';
 import { FONT_SCALE } from '../utils/fontScaling';
 import { useFontScaleVersion } from './accessibility/FontScaleProvider';
@@ -16,6 +25,11 @@ import { hapticForNotice, hapticLight } from '../utils/haptics';
 const { height } = Dimensions.get('window');
 
 type NoticeType = 'success' | 'info' | 'warning' | 'error';
+type NotificationPermissionState = {
+  granted: boolean;
+  status?: string;
+  canAskAgain?: boolean;
+};
 
 interface OnboardingData {
   nickname?: string;
@@ -32,10 +46,13 @@ export default function Onboarding() {
   useFontScaleVersion();
   const router = useRouter();
   const params = useLocalSearchParams();
-  const token = params.token as string;
+  const routeToken = Array.isArray(params.token) ? params.token[0] : params.token;
 
   const [currentStep, setCurrentStep] = useState(0);
+  const [activeToken, setActiveToken] = useState(routeToken || '');
+  const [cachedUser, setCachedUser] = useState<any>(null);
   const [data, setData] = useState<OnboardingData>({});
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermissionState | null>(null);
   const [weightInput, setWeightInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [inlineNotice, setInlineNotice] = useState<{
@@ -57,13 +74,47 @@ export default function Onboarding() {
 
   const selectedWeightUnit = data.weight_unit === 'lbs' ? 'lbs' : 'kg';
   const estimatedHydrationGoal = calculatePersonalizedHydrationGoal(data);
+  const currentStepName = steps[currentStep];
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function hydrateOnboardingSession() {
+      const session = await getCachedSession();
+      if (!mounted) return;
+
+      if (!activeToken && session?.token) {
+        setActiveToken(session.token);
+      }
+
+      if (session?.user) {
+        setCachedUser(session.user);
+        const savedStep = await readOnboardingProgress(session.user);
+        if (mounted && savedStep !== null && savedStep < steps.length) {
+          setCurrentStep(savedStep);
+        }
+      }
+    }
+
+    hydrateOnboardingSession().catch(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeToken, steps.length]);
+
+  useEffect(() => {
+    if (cachedUser) {
+      void writeOnboardingProgress(cachedUser, currentStep);
+    }
+  }, [cachedUser, currentStep]);
 
   // Load saved data on mount
   useEffect(() => {
     const loadSavedData = async () => {
       try {
-        if (token) {
-          const saved = await api.get('/onboarding', token);
+        if (activeToken) {
+          const saved = await api.get('/onboarding', activeToken);
           if (saved && typeof saved === 'object') {
             // Extract the data object if nested
             const dataToLoad = saved.data || saved;
@@ -81,7 +132,7 @@ export default function Onboarding() {
       }
     };
     loadSavedData();
-  }, [token]);
+  }, [activeToken]);
 
   useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -95,6 +146,30 @@ export default function Onboarding() {
 
     return () => subscription.remove();
   }, [currentStep]);
+
+  const normalizeNotificationPermission = (response: Notifications.NotificationPermissionsStatus): NotificationPermissionState => ({
+    granted: response.granted || response.status === 'granted',
+    status: response.status,
+    canAskAgain: response.canAskAgain,
+  });
+
+  useEffect(() => {
+    if (currentStepName !== 'notifications') return;
+
+    let mounted = true;
+    Notifications.getPermissionsAsync()
+      .then((response) => {
+        if (mounted) setNotificationPermission(normalizeNotificationPermission(response));
+      })
+      .catch(async () => {
+        const fallback = await notificationService.getPermissionStatus();
+        if (mounted) setNotificationPermission(fallback);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [currentStepName]);
 
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
@@ -190,7 +265,7 @@ export default function Onboarding() {
       const saveSteps = ['nickname', 'weight', 'climate', 'exercise', 'notifications'];
       if (saveSteps.includes(steps[currentStep])) {
         try {
-          await api.put('/onboarding/update', buildOnboardingPayload(), token);
+          await api.put('/onboarding/update', buildOnboardingPayload(), activeToken);
         } catch (err) {
           console.log('Error saving onboarding data:', err);
           if (api.isNetworkError(err)) {
@@ -220,30 +295,38 @@ export default function Onboarding() {
   const requestNotificationPermission = async () => {
     try {
       setLoading(true);
-      const granted = await notificationService.requestPermissions();
-      const nextData = { ...data, notification_permissions_accepted: granted };
-      setData(nextData);
-      if (granted) {
-        await saveEnabledNotificationPreferences();
-        showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
-      } else {
-        const permission = await notificationService.getPermissionStatus();
-        if (permission.canAskAgain === false) {
-          showBlockedNotificationGuidance();
-        } else {
-          showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. You can continue and turn them on later in Notification Settings.');
-        }
+      const existing = normalizeNotificationPermission(await Notifications.getPermissionsAsync());
+      let permission = existing;
+
+      if (!existing.granted && existing.canAskAgain !== false) {
+        permission = normalizeNotificationPermission(await Notifications.requestPermissionsAsync());
       }
-      await saveOnboardingNotificationPreference(granted);
-      hapticLight();
-      setCurrentStep(currentStep + 1);
+
+      setNotificationPermission(permission);
+      updateData('notification_permissions_accepted', permission.granted);
+
+      if (permission.granted) {
+        await notificationService.ensureAndroidChannels();
+        await saveEnabledNotificationPreferences();
+        await bootstrapNotificationSchedules();
+        showNotice('success', 'Reminders enabled', 'Hydration and medication reminders can now appear on this device.');
+        await saveOnboardingNotificationPreference(true);
+        hapticLight();
+        setCurrentStep(currentStep + 1);
+        return;
+      }
+
+      await saveOnboardingNotificationPreference(false);
+      if (permission.canAskAgain === false) {
+        showBlockedNotificationGuidance();
+      } else {
+        showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. Tap Enable Reminders to try again, or skip for now.');
+      }
     } catch (err) {
       console.log('Notification permission request failed:', err);
-      showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. You can continue and turn them on later in Notification Settings.');
+      showNotice('warning', 'Notifications Not Enabled', 'Notifications were not enabled. Tap Enable Reminders to try again, or skip for now.');
       updateData('notification_permissions_accepted', false);
       await saveOnboardingNotificationPreference(false);
-      hapticLight();
-      setCurrentStep(currentStep + 1);
     } finally {
       setLoading(false);
     }
@@ -254,7 +337,7 @@ export default function Onboarding() {
       await api.put('/onboarding/update', {
         ...buildOnboardingPayload(),
         notification_permissions_accepted: accepted,
-      }, token);
+      }, activeToken);
     } catch (err) {
       console.log('Error saving notification onboarding preference:', err);
       if (api.isNetworkError(err)) {
@@ -281,6 +364,8 @@ export default function Onboarding() {
     await writeSettingsCache({ ...(existing || {}), notificationPreferences }, user);
     await notificationSettings.initialize();
     await notificationSettings.setMasterToggle(true);
+    await notificationSettings.setSoundEnabled(true);
+    await notificationSettings.setVibrationEnabled(true);
     await notificationSettings.updateCategoryWithBackend('medications', true);
     await notificationSettings.updateCategoryWithBackend('hydration', true);
   };
@@ -307,7 +392,7 @@ export default function Onboarding() {
       await api.put('/onboarding/update', {
         ...buildOnboardingPayload(),
         notification_permissions_accepted: false,
-      }, token);
+      }, activeToken);
     } catch (err) {
       console.log('Error saving reminder preference:', err);
       if (api.isNetworkError(err)) {
@@ -325,11 +410,11 @@ export default function Onboarding() {
   const openMedicationSetup = async () => {
     try {
       setLoading(true);
-      await api.put('/onboarding/update', buildOnboardingPayload(), token);
+      await api.put('/onboarding/update', buildOnboardingPayload(), activeToken);
       setCurrentStep(steps.length - 1);
       router.push({
         pathname: '/components/pages/medication/Medication',
-        params: { token, fromOnboarding: '1' },
+        params: { token: activeToken, fromOnboarding: '1' },
       } as any);
     } catch (err: any) {
       console.log('Error opening medication setup:', err);
@@ -346,7 +431,7 @@ export default function Onboarding() {
       // Save any remaining data first
       if (Object.keys(data).length > 0) {
         try {
-          await api.put('/onboarding/update', buildOnboardingPayload(), token);
+          await api.put('/onboarding/update', buildOnboardingPayload(), activeToken);
         } catch (updateErr) {
           console.log('Error updating onboarding data:', updateErr);
           // Continue even if update fails
@@ -356,7 +441,7 @@ export default function Onboarding() {
         await api.post(
           '/onboarding/complete',
           { daily_hydration_goal: calculatePersonalizedHydrationGoal(getPayloadData()) },
-          token
+          activeToken
         );
       } catch (completeErr: any) {
         if (!api.isNetworkError(completeErr)) throw completeErr;
@@ -375,9 +460,9 @@ export default function Onboarding() {
       const cached = await getCachedSession();
       const payload = buildOnboardingPayload();
       const completedUser = { ...(cached?.user || {}), ...payload, onboarding_completed: true };
-      await updateCachedUser(completedUser, cached?.token || token);
+      await updateCachedUser(completedUser, cached?.token || activeToken);
       await markOnboardingComplete(completedUser);
-      router.replace({ pathname: '/home', params: { token } } as any);
+      router.replace({ pathname: '/home', params: { token: activeToken } } as any);
     } catch (err: any) {
       console.log('Error completing onboarding:', err);
       const message = err?.data?.message || err?.data || err?.message || 'Failed to complete onboarding';
@@ -609,7 +694,7 @@ export default function Onboarding() {
               <Ionicons name="settings-outline" size={18} color="#2563EB" />
               <Text style={styles.notificationSupportText}>You can update this later in Notification Settings.</Text>
             </View>
-            {data.notification_permissions_accepted === true && (
+            {notificationPermission?.granted === true && (
               <View style={styles.notificationSuccessBox}>
                 <Ionicons name="checkmark-circle" size={20} color="#10B981" />
                 <Text style={styles.notificationSuccessText}>Reminders enabled</Text>

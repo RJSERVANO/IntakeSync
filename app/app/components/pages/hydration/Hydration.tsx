@@ -5,14 +5,14 @@ import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
+import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readNotificationsCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
 import { enqueueBeverageLog, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { cancelHydrationNotifications, rescheduleHydrationNotifications } from '../../../../services/notificationService';
+import { cancelHydrationNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, notificationService, rescheduleHydrationNotifications } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
   calculatePersonalizedHydrationGoal,
@@ -22,6 +22,11 @@ import { usePulseAnimation } from '../../../../hooks/useHydrationAnimations';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { hapticForNotice, hapticSuccess, hapticWarning } from '../../../../utils/haptics';
+import {
+  deriveHydrationReminderSummary,
+  HYDRATION_REMINDER_RESPONSE_WINDOW_MINUTES,
+  type HydrationReminderSummary,
+} from '../../../../utils/hydrationReminderSummary';
 
 interface UserDetails {
   weight?: number;
@@ -212,6 +217,16 @@ export default function Hydration() {
   const [historyRange] = useState<'daily'|'weekly'|'monthly'>('daily');
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [missedCount, setMissedCount] = useState<number>(0);
+  const [hydrationReminderSummary, setHydrationReminderSummary] = useState<HydrationReminderSummary>({
+    missedCount: 0,
+    missedTimes: [],
+    respondedTimes: [],
+    scheduledTodayCount: 0,
+    nextHydrationReminder: null,
+    hasReminderEvidence: false,
+  });
+  const [showMissedReminderModal, setShowMissedReminderModal] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [calendarData, setCalendarData] = useState<any[]>([]);
@@ -265,6 +280,16 @@ export default function Hydration() {
   }, [entries]);
 
   useEffect(() => {
+    void refreshHydrationReminderSummary(entriesRef.current);
+    const timer = setInterval(() => {
+      void refreshHydrationReminderSummary(entriesRef.current);
+    }, 60 * 1000);
+    return () => clearInterval(timer);
+  // Keeps the missed reminder card current while the screen is open.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     goalRef.current = goal;
   }, [goal]);
 
@@ -291,6 +316,54 @@ export default function Hydration() {
       currentTotal: total,
       goal: nextGoal,
     });
+    await refreshHydrationReminderSummary(entriesRef.current);
+  }
+
+  async function refreshHydrationReminderSummary(sourceEntries = entriesRef.current) {
+    try {
+      const permission = await notificationService.getPermissionStatus();
+      setNotificationsEnabled(permission.granted);
+      const session = await getCachedSession();
+      const [history, refs, cachedNotifications] = await Promise.all([
+        getHydrationReminderHistory(),
+        getScheduledNotificationRefs(),
+        readNotificationsCache<any>(session?.user ?? null),
+      ]);
+      const scheduledRefs = refs
+        .filter((ref) => ref.type === 'hydration')
+        .map((ref) => ({
+          type: 'hydration',
+          scheduleKey: ref.scheduleKey || ref.doseKey,
+          doseKey: ref.doseKey,
+          scheduledAt: ref.scheduledAt,
+          notificationId: ref.notificationId,
+        }));
+      const notificationRecords = (Array.isArray(cachedNotifications?.notifications) ? cachedNotifications.notifications : [])
+        .filter((item: any) => item?.type === 'hydration' && item?.metadata?.source === 'scheduled_reminder')
+        .map((item: any) => ({
+          type: 'hydration',
+          scheduleKey: item?.metadata?.schedule_key,
+          scheduledAt: item?.scheduled_at || item?.scheduled_time || item?.created_at,
+        }));
+      const summary = deriveHydrationReminderSummary({
+        hydrationEntries: sourceEntries,
+        scheduledNotifications: [...history, ...scheduledRefs],
+        notificationRecords,
+        date: new Date(),
+      });
+      setHydrationReminderSummary(summary);
+      setMissedCount(summary.missedCount);
+    } catch {
+      setHydrationReminderSummary({
+        missedCount: 0,
+        missedTimes: [],
+        respondedTimes: [],
+        scheduledTodayCount: 0,
+        nextHydrationReminder: null,
+        hasReminderEvidence: false,
+      });
+      setMissedCount(0);
+    }
   }
 
   // FIX #3: Listen for notification taps to show confirmation modal
@@ -482,9 +555,10 @@ export default function Hydration() {
             !deletedEntryKeys.has(entryKey(e))
           );
           cachedEntries = filteredEntries;
+          entriesRef.current = filteredEntries;
           setEntries(filteredEntries);
           setUserProfile(parsed.user_profile ?? null);
-          setMissedCount((parsed.missed || []).length || 0);
+          await refreshHydrationReminderSummary(filteredEntries);
           setHasHydrationCache(true);
           const cachedTodayTotal = totalForLocalDay(filteredEntries);
           setGoalReachedToday(cachedTodayTotal >= parsedGoal);
@@ -517,8 +591,9 @@ export default function Hydration() {
               !deletedEntryKeys.has(entryKey(e))
             );
             const finalEntries = mergeEntries(serverEntries, pendingEntries);
+            entriesRef.current = finalEntries;
             setEntries(finalEntries);
-            setMissedCount((res.missed || []).length || 0);
+            await refreshHydrationReminderSummary(finalEntries);
             
             if (canUseHydrationCacheRef.current) {
               await writeHydrationCache({
@@ -585,7 +660,9 @@ export default function Hydration() {
               sync_status: 'synced',
             };
           });
+          entriesRef.current = next;
           void persistLocal({ goal, entries: next });
+          void refreshHydrationReminderSummary(next);
           return next;
         });
       });
@@ -676,8 +753,10 @@ export default function Hydration() {
     const oldTotal = totalToday();
     const newTotal = oldTotal + amountMl;
     
+    entriesRef.current = newEntries;
     setEntries(newEntries);
     await persistLocal({ goal, entries: newEntries });
+    await refreshHydrationReminderSummary(newEntries);
     
     // Trigger pulse animation
     pulseButton();
@@ -748,8 +827,10 @@ export default function Hydration() {
           id: response?.id ?? response?.entry?.id ?? item.id,
           sync_status: 'synced',
         } : item);
+        entriesRef.current = syncedEntries;
         setEntries(syncedEntries);
         await persistLocal({ goal, entries: syncedEntries });
+        await refreshHydrationReminderSummary(syncedEntries);
         await syncPendingBeverages(false);
         setOfflineMode(false);
       } catch (err:any) {
@@ -878,7 +959,9 @@ export default function Hydration() {
     newEntries.splice(index, 1);
 
     // Update local state immediately for instant UI update
+    entriesRef.current = newEntries;
     setEntries(newEntries);
+    await refreshHydrationReminderSummary(newEntries);
 
     // Persist to AsyncStorage to prevent restoration on refresh
     if (canUseHydrationCacheRef.current) {
@@ -913,6 +996,8 @@ export default function Hydration() {
             !deletedEntryKeys.has(entryKey(e)) && entryKey(e) !== targetKey
           );
           setEntries(filteredEntries);
+          entriesRef.current = filteredEntries;
+          await refreshHydrationReminderSummary(filteredEntries);
           // Update AsyncStorage with server data
           if (canUseHydrationCacheRef.current) {
             await writeHydrationCache({
@@ -1145,14 +1230,20 @@ export default function Hydration() {
             </View>
             <Text style={styles.motivationalText}>{getMotivationalMessage()}</Text>
           </View>
-          <View style={styles.missedPassiveCard}>
+          <TouchableOpacity
+            style={styles.missedPassiveCard}
+            activeOpacity={0.82}
+            onPress={() => setShowMissedReminderModal(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Open missed hydration reminders"
+          >
             <View style={styles.missedPassiveIcon}>
               <Ionicons name="time-outline" size={15} color="#C2410C" />
             </View>
             <Text style={styles.missedMiniLabel}>Missed Reminders</Text>
             <Text style={styles.missedMiniNumber} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{missedCount}</Text>
-            <Text style={styles.missedMiniHelper}>Reminders you skipped today</Text>
-          </View>
+            <Text style={styles.missedMiniHelper}>Reminders without a drink log</Text>
+          </TouchableOpacity>
         </View>
 
         {(() => {
@@ -1463,6 +1554,73 @@ export default function Hydration() {
         </View>
 
       </ScrollView>
+
+      <Modal
+        visible={showMissedReminderModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowMissedReminderModal(false)}
+      >
+        <View style={styles.missedModalOverlay}>
+          <TouchableOpacity style={styles.missedModalBackdrop} activeOpacity={1} onPress={() => setShowMissedReminderModal(false)} />
+          <View style={[styles.missedReminderSheet, { paddingBottom: Math.max(insets.bottom + 18, 28) }]}>
+            <View style={styles.goalSheetHandle} />
+            <View style={styles.missedReminderHeader}>
+              <View style={styles.missedReminderHeaderIcon}>
+                <Ionicons name="time-outline" size={20} color="#C2410C" />
+              </View>
+              <View style={styles.missedReminderHeaderText}>
+                <Text style={styles.missedReminderTitle}>Missed Hydration Reminders</Text>
+                <Text style={styles.missedReminderSubtitle}>
+                  {hydrationReminderSummary.missedCount} unresponded today
+                </Text>
+              </View>
+            </View>
+
+            {!notificationsEnabled ? (
+              <View style={styles.missedInfoBox}>
+                <Ionicons name="notifications-off-outline" size={18} color="#B45309" />
+                <Text style={styles.missedInfoText}>Notifications are disabled. Enable reminders in Notification Settings.</Text>
+              </View>
+            ) : hydrationReminderSummary.missedTimes.length > 0 ? (
+              <View style={styles.missedTimeList}>
+                {hydrationReminderSummary.missedTimes.map((time) => (
+                  <View key={time} style={styles.missedTimeRow}>
+                    <Ionicons name="alert-circle-outline" size={17} color="#C2410C" />
+                    <Text style={styles.missedTimeText}>{time}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.missedInfoBox}>
+                <Ionicons name="checkmark-circle-outline" size={18} color="#059669" />
+                <Text style={styles.missedInfoText}>
+                  {hydrationReminderSummary.hasReminderEvidence
+                    ? hydrationReminderSummary.nextHydrationReminder
+                      ? `No missed hydration reminders today. Next reminder: ${hydrationReminderSummary.nextHydrationReminder}.`
+                      : 'No missed hydration reminders today.'
+                    : 'No hydration reminders have been recorded for today.'}
+                </Text>
+              </View>
+            )}
+
+            {hydrationReminderSummary.respondedTimes.length > 0 ? (
+              <View style={styles.respondedBox}>
+                <Text style={styles.respondedTitle}>Responded</Text>
+                <Text style={styles.respondedText}>{hydrationReminderSummary.respondedTimes.join(', ')}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.missedExplanation}>
+              A reminder is counted as missed when no beverage entry was logged within {HYDRATION_REMINDER_RESPONSE_WINDOW_MINUTES} minutes after the reminder.
+            </Text>
+
+            <TouchableOpacity style={styles.missedCloseButton} activeOpacity={0.84} onPress={() => setShowMissedReminderModal(false)}>
+              <Text style={styles.missedCloseText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <BottomNavigation currentRoute="hydration" />
 
@@ -1942,6 +2100,25 @@ const styles = StyleSheet.create({
   missedMiniLabel: { fontSize: 10, color: '#334155', fontWeight: '700', textAlign: 'center' },
   missedMiniHelper: { fontSize: 9, color: '#64748B', fontWeight: '600', textAlign: 'center', marginTop: 2, lineHeight: 12 },
   missedMiniNumber: { fontSize: 18, color: '#C2410C', fontWeight: '900', marginTop: 2 },
+  missedModalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  missedModalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15, 23, 42, 0.45)' },
+  missedReminderSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 10, paddingHorizontal: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -6 }, shadowOpacity: 0.16, shadowRadius: 18, elevation: 16 },
+  missedReminderHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
+  missedReminderHeaderIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#FFF7ED', borderWidth: 1, borderColor: '#FED7AA', alignItems: 'center', justifyContent: 'center' },
+  missedReminderHeaderText: { flex: 1, minWidth: 0 },
+  missedReminderTitle: { color: '#0F172A', fontSize: 20, fontWeight: '900' },
+  missedReminderSubtitle: { color: '#64748B', fontSize: 12, fontWeight: '800', marginTop: 2 },
+  missedInfoBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 14, padding: 12, marginBottom: 12 },
+  missedInfoText: { flex: 1, color: '#334155', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  missedTimeList: { gap: 8, marginBottom: 12 },
+  missedTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: '#FFF7ED', borderWidth: 1, borderColor: '#FED7AA', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12 },
+  missedTimeText: { color: '#0F172A', fontSize: 14, fontWeight: '900' },
+  respondedBox: { backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#A7F3D0', borderRadius: 14, padding: 12, marginBottom: 12 },
+  respondedTitle: { color: '#047857', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginBottom: 4 },
+  respondedText: { color: '#065F46', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  missedExplanation: { color: '#64748B', fontSize: 12, lineHeight: 17, fontWeight: '700', marginBottom: 14 },
+  missedCloseButton: { minHeight: 48, borderRadius: 14, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  missedCloseText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
   goalSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
   goalSheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15, 23, 42, 0.45)' },
   goalSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 10, paddingHorizontal: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -6 }, shadowOpacity: 0.16, shadowRadius: 18, elevation: 16 },

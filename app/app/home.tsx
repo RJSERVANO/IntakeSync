@@ -10,6 +10,7 @@ import {
   filterOtcReferenceMedicines,
   getCacheOwner,
   getCachedSession,
+  readDeletedMedicationTombstones,
   getUserRemoteAvatarUri,
   getUserSelectedAvatar,
   getUserScopedKey,
@@ -17,14 +18,19 @@ import {
   mergeLocalAvatarIntoUser,
   readHydrationCache,
   readMedicationCache,
+  readMedicationHistoryCache,
   readOwnedOfflineCache,
   searchCachedOtcMedicinesWithMeta,
   updateCachedUser,
   writeHydrationCache,
+  writeMedicationCache,
+  writeMedicationHistoryCache,
   writeOwnedOfflineCache,
   writeOtcSearchCache,
 } from '../services/offlineStorage';
 import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
+import { subscribeHomeRefresh } from '../services/homeEvents';
+import { deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
@@ -122,6 +128,18 @@ const DEFAULT_QUICK_STATUS: QuickStatus = {
   medicationsTotal: 0,
 };
 
+const EMPTY_MEDICATION_SUMMARY: TodayMedicationSummary = {
+  taken: 0,
+  total: 0,
+  missed: 0,
+  skipped: 0,
+  remaining: 0,
+  percent: 0,
+  relevantToday: false,
+  doses: [],
+  nextMedication: null,
+};
+
 const resolveHydrationGoal = (hydrationData: any, fallback = 2000) => {
   const goal = Number(
     hydrationData?.daily_goal_ml ??
@@ -156,6 +174,7 @@ export default function Home() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [quickStatus, setQuickStatus] = useState<QuickStatus>(DEFAULT_QUICK_STATUS);
+  const [medicationSummary, setMedicationSummary] = useState<TodayMedicationSummary>(EMPTY_MEDICATION_SUMMARY);
   const [hydrationEntries, setHydrationEntries] = useState<any[] | null>(null);
   const [selectedAvatar, setSelectedAvatar] = useState<SelectedAvatar | null>(null);
   const [headerElevated, setHeaderElevated] = useState(false);
@@ -185,6 +204,7 @@ export default function Home() {
   } | null>(null);
   const goalCompletionShownRef = useRef(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshFromCacheInFlightRef = useRef(false);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const remoteAvatarUri = getUserRemoteAvatarUri(user);
   const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
@@ -200,6 +220,7 @@ export default function Home() {
     setUser(null);
     setTimeline([]);
     setQuickStatus(DEFAULT_QUICK_STATUS);
+    setMedicationSummary(EMPTY_MEDICATION_SUMMARY);
     setHydrationEntries(null);
     setSelectedAvatar(null);
     setWeeklyReport(null);
@@ -246,9 +267,61 @@ export default function Home() {
     loadHeaderUserFromCache();
   }, [loadHeaderUserFromCache]);
 
+  const applyCacheFirstHomeSummary = useCallback(async (visibleUser?: any | null) => {
+    if (refreshFromCacheInFlightRef.current) return;
+    refreshFromCacheInFlightRef.current = true;
+    try {
+      const session = await getCachedSession();
+      const sessionUser = visibleUser || session?.user || null;
+      if (!sessionUser || !hasValidCachedSession(session)) return;
+      if (routeToken && session.token !== routeToken) return;
+
+      const [hydrationCache, cachedMedsRaw, medicationHistoryRaw, deletedKeysRaw, homeCache] = await Promise.all([
+        readHydrationCache<any>(),
+        readMedicationCache<any[]>(sessionUser),
+        readMedicationHistoryCache<any[]>(sessionUser),
+        readDeletedMedicationTombstones(sessionUser),
+        readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser),
+      ]);
+
+      const deletedKeys = new Set(deletedKeysRaw || []);
+      const cachedMeds = (cachedMedsRaw || []).filter((med) => (
+        !med?.deleted_at && !getMedicationIdentityValues(med).some((identity) => deletedKeys.has(identity))
+      ));
+      const todayMedication = deriveTodayMedicationSummary({
+        meds: cachedMeds,
+        rawHistory: medicationHistoryRaw || [],
+        now: new Date(),
+      });
+
+      const hydrationGoal = resolveHydrationGoal(hydrationCache, homeCache?.data?.quickStatus?.hydrationGoal || DEFAULT_QUICK_STATUS.hydrationGoal);
+      const hydrationTotal = hydrationCache ? resolveHydrationTotal(hydrationCache) : Number(homeCache?.data?.quickStatus?.hydrationTotal || 0);
+      const hydrationPercentage = hydrationCache
+        ? resolveHydrationPercentage(hydrationCache, hydrationGoal)
+        : Number(homeCache?.data?.quickStatus?.hydrationPercentage || 0);
+
+      setMedicationSummary(todayMedication);
+      setHydrationEntries(Array.isArray(hydrationCache?.entries) ? hydrationCache.entries : null);
+      if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
+      setUpcomingMedications(todayMedication.nextMedication ? [todayMedication.nextMedication] : []);
+      setQuickStatus((prev) => ({
+        ...prev,
+        hydrationGoal,
+        hydrationTotal,
+        hydrationPercentage,
+        medicationsTaken: todayMedication.taken,
+        medicationsTotal: todayMedication.total,
+        medicationsLeft: todayMedication.remaining,
+      }));
+    } finally {
+      refreshFromCacheInFlightRef.current = false;
+    }
+  }, [routeToken]);
+
   useFocusEffect(
     useCallback(() => {
       loadHeaderUserFromCache();
+      void applyCacheFirstHomeSummary(user);
       const syncToken = routeToken;
       (async () => {
         if (syncToken) {
@@ -261,8 +334,15 @@ export default function Home() {
         const summary = await getSyncQueueSummary();
         setPendingSyncCount(summary.pending);
       })();
-    }, [loadHeaderUserFromCache, routeToken])
+    }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, routeToken, user])
   );
+
+  useEffect(() => {
+    const subscription = subscribeHomeRefresh(() => {
+      void applyCacheFirstHomeSummary(user);
+    });
+    return () => subscription.remove();
+  }, [applyCacheFirstHomeSummary, user]);
 
   // Debounce medicine search
   useEffect(() => {
@@ -360,7 +440,6 @@ export default function Home() {
     async function load() {
       try {
         const activeToken = routeToken?.trim() || '';
-        console.log('Home: token=', activeToken);
         if (!activeToken) {
           const cached = await getCachedSession();
           if (hasValidCachedSession(cached)) {
@@ -369,14 +448,7 @@ export default function Home() {
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cachedUser), 'home_summary'), cachedUser);
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
-            const cachedMeds = await readMedicationCache<any[]>(cachedUser);
-            if (cachedMeds) {
-              setQuickStatus((prev) => ({
-                ...prev,
-                medicationsLeft: cachedMeds.filter((med) => med?.reminder !== false).length,
-                medicationsTotal: cachedMeds.length,
-              }));
-            }
+            await applyCacheFirstHomeSummary(cachedUser);
             setOfflineMode(true);
             setLoading(false);
             return;
@@ -397,7 +469,6 @@ export default function Home() {
           if (sessionUser) {
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser);
             const hydrationCache = await readHydrationCache<any>();
-            const cachedMeds = await readMedicationCache<any[]>(sessionUser);
             if (cancelled) return;
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
@@ -410,14 +481,8 @@ export default function Home() {
                 hydrationPercentage: resolveHydrationPercentage(hydrationCache, hydrationGoal),
               }));
             }
-            if (cachedMeds) {
-              setQuickStatus((prev) => ({
-                ...prev,
-                medicationsLeft: cachedMeds.filter((med) => med?.reminder !== false).length,
-                medicationsTotal: cachedMeds.length,
-              }));
-            }
             await applyVisibleUser(sessionUser);
+            await applyCacheFirstHomeSummary(sessionUser);
             setLoading(false);
             setSyncing(true);
           }
@@ -425,7 +490,6 @@ export default function Home() {
             api.get('/me', activeToken, 3000), // 3 second timeout - very short
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
           ]) as any;
-          console.log('Home: /me response:', me);
           if (!hasValidCachedSession({ token: activeToken, user: me })) {
             await clearCachedSession();
             clearVisibleHomeState();
@@ -472,53 +536,60 @@ export default function Home() {
             api.get('/hydration', activeToken, 3000).catch(() => null),
             api.get('/medications/upcoming', activeToken, 3000).catch(() => null),
             api.get('/medications/stats', activeToken, 3000).catch(() => null),
+            api.get('/medications', activeToken, 3000).catch(() => null),
+            api.get('/medications/history/all', activeToken, 3000).catch(() => null),
           ]).then((results) => {
             const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
-            const stats = results[2].status === 'fulfilled' ? results[2].value : null;
+            const medicationsData = results[3].status === 'fulfilled' ? results[3].value : null;
+            const historyData = results[4].status === 'fulfilled' ? results[4].value : null;
             
             const hydrationGoal = resolveHydrationGoal(hydrationData);
             const hydrationTotal = resolveHydrationTotal(hydrationData);
             const hydrationPercentage = hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0;
             const hydrationEntries = Array.isArray(hydrationData?.entries) ? hydrationData.entries : null;
-            const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
-            const medicationsTaken = stats?.completed_today || 0;
-            const medicationsTotal = stats?.total_reminders_today || 0;
             setHydrationEntries(hydrationEntries);
-            setUpcomingMedications(Array.isArray(upcoming) ? upcoming : []);
+            setUpcomingMedications((current) => current.length ? current : (Array.isArray(upcoming) ? upcoming : []));
+            if (backgroundUser && Array.isArray(medicationsData)) {
+              writeMedicationCache(backgroundUser, medicationsData).catch(() => {});
+            }
+            if (backgroundUser && Array.isArray(historyData)) {
+              writeMedicationHistoryCache(backgroundUser, historyData).catch(() => {});
+            }
             
-            setQuickStatus({
-              medicationsLeft,
+            setQuickStatus((prev) => ({
+              ...prev,
               hydrationPercentage,
               hydrationTotal,
               hydrationGoal,
-              medicationsTaken,
-              medicationsTotal
-            });
+            }));
+            writeHydrationCache({
+              ...hydrationData,
+              goal: hydrationGoal,
+              daily_goal_ml: hydrationGoal,
+              today_total: hydrationTotal,
+              percentage: hydrationPercentage,
+              entries: hydrationEntries || [],
+            }).catch(() => {});
+            void applyCacheFirstHomeSummary(backgroundUser);
             const owner = getCacheOwner(backgroundUser);
             if (owner.owner_id || owner.owner_email) {
               writeOwnedOfflineCache(getUserScopedKey(owner, 'home_summary'), backgroundUser, {
                 quickStatus: {
-                  medicationsLeft,
                   hydrationPercentage,
                   hydrationTotal,
                   hydrationGoal,
-                  medicationsTaken,
-                  medicationsTotal,
                 },
                 upcomingMedications: Array.isArray(upcoming) ? upcoming : [],
               }).catch(() => {});
             }
           }).catch(() => {
-            // Set defaults if all fail
-            setQuickStatus({ 
-              medicationsLeft: 0, 
+            setQuickStatus((prev) => ({
+              ...prev,
               hydrationPercentage: 0,
               hydrationTotal: 0,
               hydrationGoal: 2000,
-              medicationsTaken: 0,
-              medicationsTotal: 0
-            });
+            }));
           });
           
           // Load timeline separately to avoid blocking on errors
@@ -561,7 +632,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [routeToken, router, clearVisibleHomeState, applyVisibleUser]);
+  }, [routeToken, router, clearVisibleHomeState, applyVisibleUser, applyCacheFirstHomeSummary]);
 
   // Load Routine Insights for every logged-in user (non-blocking)
   useEffect(() => {
@@ -599,10 +670,8 @@ export default function Home() {
 
       const refreshHydrationData = async () => {
         try {
-          const [hydrationRes, statsRes] = await Promise.all([
-            api.get('/hydration', routeToken, 3000).catch(() => null),
-            api.get('/medications/stats', routeToken, 3000).catch(() => null),
-          ]);
+          await applyCacheFirstHomeSummary(user);
+          const hydrationRes = await api.get('/hydration', routeToken, 3000).catch(() => null);
           
           if (hydrationRes) {
             const hydrationGoal = resolveHydrationGoal(hydrationRes, quickStatus.hydrationGoal || 2000);
@@ -616,73 +685,24 @@ export default function Home() {
               hydrationTotal,
               hydrationGoal
             }));
+            writeHydrationCache({
+              ...hydrationRes,
+              goal: hydrationGoal,
+              daily_goal_ml: hydrationGoal,
+              today_total: hydrationTotal,
+              percentage: hydrationPercentage,
+              entries: Array.isArray(hydrationRes.entries) ? hydrationRes.entries : [],
+            }).catch(() => {});
           }
-          
-          if (statsRes) {
-            const medicationsTaken = statsRes.completed_today || 0;
-            const medicationsTotal = statsRes.total_reminders_today || 0;
-            
-            setQuickStatus(prev => ({
-              ...prev,
-              medicationsTaken,
-              medicationsTotal
-            }));
-          }
+          await applyCacheFirstHomeSummary(user);
         } catch (err) {
           console.log('Data refresh error', err);
         }
       };
       
       refreshHydrationData();
-    }, [routeToken, loading, quickStatus.hydrationGoal])
+    }, [applyCacheFirstHomeSummary, routeToken, loading, quickStatus.hydrationGoal, user])
   );
-
-  // Real-time hydration polling - refresh every 10 seconds
-  useEffect(() => {
-    if (!routeToken || loading) return;
-
-    const fetchHydrationStatus = async () => {
-      try {
-        const results = await Promise.allSettled([
-          api.get('/hydration', routeToken, 3000).catch(() => null),
-          api.get('/medications/upcoming', routeToken, 3000).catch(() => null),
-          api.get('/medications/stats', routeToken, 3000).catch(() => null),
-        ]);
-        
-        const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
-        const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
-        const stats = results[2].status === 'fulfilled' ? results[2].value : null;
-        
-        const hydrationGoal = resolveHydrationGoal(hydrationData);
-        const hydrationTotal = resolveHydrationTotal(hydrationData);
-        const hydrationPercentage = hydrationData ? resolveHydrationPercentage(hydrationData, hydrationGoal) : 0;
-        const hydrationEntries = Array.isArray(hydrationData?.entries) ? hydrationData.entries : null;
-        const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
-        const medicationsTaken = stats?.completed_today || 0;
-        const medicationsTotal = stats?.total_reminders_today || 0;
-        setHydrationEntries(hydrationEntries);
-        setUpcomingMedications(Array.isArray(upcoming) ? upcoming : []);
-        
-        setQuickStatus(prev => ({
-          medicationsLeft,
-          hydrationPercentage,
-          hydrationTotal,
-          hydrationGoal: hydrationData ? hydrationGoal : prev.hydrationGoal || 2000,
-          medicationsTaken,
-          medicationsTotal
-        }));
-        
-        console.log('Real-time update: Hydration', hydrationPercentage + '%', 'Medications:', medicationsTaken + '/' + medicationsTotal);
-      } catch (error) {
-        console.log('Error refreshing quick status:', error);
-      }
-    };
-
-    // Poll every 10 seconds for real-time updates
-    const pollInterval = setInterval(fetchHydrationStatus, 10000);
-
-    return () => clearInterval(pollInterval);
-  }, [routeToken, loading]);
 
   // Use nickname if available, otherwise fall back to first name
   const displayName = user?.nickname || user?.name?.split(' ')[0] || 'User';
@@ -725,7 +745,7 @@ export default function Home() {
             console.log('Logout error:', err);
           }
           await clearCachedSession();
-          router.replace({ pathname: '/login' } as any);
+          router.replace({ pathname: '/' } as any);
         },
       });
       return;
@@ -781,15 +801,15 @@ export default function Home() {
 
   const caffeineAwareness = getAwareness('caffeine_level');
   const sugarAwareness = getAwareness('sugar_level');
-  const medicationPercent = quickStatus.medicationsTotal > 0
-    ? Math.round((quickStatus.medicationsTaken / quickStatus.medicationsTotal) * 100)
+  const medicationPercent = medicationSummary.relevantToday
+    ? medicationSummary.percent
     : 0;
   const recentUpdates = timeline.slice(0, 2);
   const missedCount = timeline.filter((item) => item.status === 'missed').length;
   const notificationCount = notificationStats
     ? Math.max(0, Number(notificationStats.unread ?? 0) + Number(notificationStats.alerts ?? notificationStats.needs_attention ?? 0))
     : timeline.filter((item) => item.status === 'missed' || item.status === 'pending').length;
-  const nextMedication = upcomingMedications[0] || null;
+  const nextMedication = medicationSummary.nextMedication || upcomingMedications[0] || null;
 
   const getMedicationName = (medication: any) => (
     medication?.medication_name ||
@@ -799,44 +819,49 @@ export default function Home() {
     'medication'
   );
 
-  const getMedicationTime = (medication: any) => (
-    medication?.time ||
-    medication?.scheduled_time ||
-    medication?.reminder_time ||
-    medication?.due_time ||
-    medication?.next_dose_time ||
-    ''
-  );
+  const getMedicationTime = (medication: any) => {
+    const raw =
+      medication?.time ||
+      medication?.scheduled_time ||
+      medication?.reminder_time ||
+      medication?.due_time ||
+      medication?.next_dose_time ||
+      '';
+    if (!raw) return '';
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime())
+      ? String(raw)
+      : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  };
 
   const neededMl = Math.max(0, (quickStatus.hydrationGoal || 0) - (quickStatus.hydrationTotal || 0));
+  const nextMedicationName = nextMedication ? getMedicationName(nextMedication) : '';
+  const nextMedicationTime = nextMedication ? getMedicationTime(nextMedication) : '';
   const nextAction = (() => {
     if (nextMedication) {
-      const time = getMedicationTime(nextMedication);
-      return `Next medication${time ? ` at ${time}` : ' soon'}`;
+      return `${nextMedicationName}${nextMedicationTime ? ` at ${nextMedicationTime}` : ' is due soon'}`;
     }
+    if (medicationSummary.relevantToday && medicationSummary.remaining === 0) return 'No medication due soon';
     if (quickStatus.hydrationPercentage < 50 && neededMl >= 250) return 'Drink 250 ml now to stay on track';
-    if (neededMl > 0) return `You are behind by +${neededMl} ml`;
-    return 'You are on track today';
+    if (neededMl > 0) return 'Log your next drink';
+    return 'Stay on track today';
   })();
 
-  const beverageScore = Math.min(100, Math.max(0, quickStatus.hydrationPercentage));
+  const hydrationScore = Math.min(100, Math.max(0, quickStatus.hydrationPercentage));
   const medicationScore = medicationPercent;
   const hasHydrationData =
     quickStatus.hydrationTotal > 0 ||
     (Array.isArray(todayHydrationEntries) && todayHydrationEntries.length > 0);
-  const hasMedicationData = quickStatus.medicationsTotal > 0;
+  const hasMedicationData = medicationSummary.relevantToday;
   const hasTodayScoreData = hasHydrationData || hasMedicationData;
-  const scoreParts: number[] = [];
-  if (hasHydrationData) scoreParts.push(beverageScore);
-  if (hasMedicationData) scoreParts.push(medicationScore);
-  let beveragePenalty = 0;
-  if (caffeineAwareness?.level === 'medium') beveragePenalty += 5;
-  if (caffeineAwareness?.level === 'high') beveragePenalty += 10;
-  if (sugarAwareness?.level === 'medium') beveragePenalty += 5;
-  if (sugarAwareness?.level === 'high') beveragePenalty += 10;
-  const todayScore = scoreParts.length
-    ? Math.max(0, Math.round((scoreParts.reduce((sum, value) => sum + value, 0) / scoreParts.length) - beveragePenalty))
-    : null;
+  // Today Score intentionally averages hydration with medication adherence whenever
+  // there are scheduled doses or durable medication history today. Pending doses count
+  // in the medication total, so they lower the score until completed.
+  const todayScore = hasMedicationData
+    ? Math.round((hydrationScore + medicationScore) / 2)
+    : hasHydrationData
+      ? hydrationScore
+      : null;
   const todayScoreTextColor = todayScore === null
     ? '#64748B'
     : todayScore >= 90 ? '#10B981' : todayScore >= 70 ? '#2563EB' : todayScore >= 40 ? '#F97316' : '#EF4444';
@@ -846,7 +871,7 @@ export default function Home() {
     : 'Hydration: No logs';
   const medicationBreakdown = hasMedicationData
     ? `Meds: ${medicationPercent >= 80 ? 'Good' : 'Needs attention'}`
-    : 'Meds: No reminders';
+    : 'Meds: No doses';
   const sugarBreakdown = sugarAwareness ? `Sugar: ${levelLabel(sugarAwareness.level)}` : null;
   const todayScoreBreakdown = [hydrationBreakdown, medicationBreakdown, sugarBreakdown].filter(Boolean).join(' | ');
   const beveragePaceHint = quickStatus.hydrationPercentage >= 90 ? 'On track' : quickStatus.hydrationPercentage >= 50 ? 'Good pace' : 'You are behind today';
@@ -1208,7 +1233,10 @@ export default function Home() {
                 <View style={[styles.smartIcon, { backgroundColor: 'rgba(37, 99, 235, 0.1)' }]}>
                   <Ionicons name="flash" size={22} color="#2563EB" />
                 </View>
-                <Text style={styles.smartCardLabel}>Next Action</Text>
+                <View style={styles.smartHeaderCopy}>
+                  <Text style={styles.smartCardLabel}>Next Action</Text>
+                  {nextMedication ? <Text style={styles.smartCardHint}>Medication</Text> : null}
+                </View>
               </View>
               <Text style={styles.nextActionText} numberOfLines={3}>{nextAction}</Text>
             </View>
@@ -1314,7 +1342,7 @@ export default function Home() {
             </View>
             {nextMedication && (
               <Text style={styles.nextMedicationText} numberOfLines={1}>
-                Next: {getMedicationName(nextMedication)}{getMedicationTime(nextMedication) ? ` at ${getMedicationTime(nextMedication)}` : ''}
+                Next: {nextMedicationName}{nextMedicationTime ? ` at ${nextMedicationTime}` : ''}
               </Text>
             )}
             <View style={styles.progressBarContainer}>
@@ -1328,7 +1356,7 @@ export default function Home() {
             </View>
             {quickStatus.medicationsLeft > 0 && (
               <Text style={styles.nextMedicationText}>
-                {quickStatus.medicationsLeft === 1 ? '1 medication remaining' : `${quickStatus.medicationsLeft} medications remaining`}
+                {quickStatus.medicationsLeft === 1 ? '1 dose remaining' : `${quickStatus.medicationsLeft} doses remaining`}
               </Text>
             )}
             {quickStatus.medicationsTotal === 0 && (
@@ -2031,7 +2059,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
   nextActionCard: {
     borderColor: '#BFDBFE',
@@ -2047,7 +2075,11 @@ const styles = StyleSheet.create({
   smartCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 10,
+  },
+  smartHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   smartIcon: {
     width: 30,
@@ -2062,11 +2094,19 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#64748B',
   },
+  smartCardHint: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#2563EB',
+  },
   nextActionText: {
+    flexShrink: 1,
     fontSize: 14,
     fontWeight: '800',
     color: '#1E3A8A',
     lineHeight: 20,
+    textAlign: 'left',
   },
   scoreValue: {
     fontSize: 30,

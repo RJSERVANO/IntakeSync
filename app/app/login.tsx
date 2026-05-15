@@ -11,7 +11,8 @@ import {
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
-import { clearCachedSession, getCachedSession, hasCompletedOnboarding, hasValidCachedSession, markOnboardingComplete, saveCachedSession } from '../services/offlineStorage';
+import { clearCachedSession, getCachedSession, hasValidCachedSession } from '../services/offlineStorage';
+import { persistAuthResponse, routeAfterAuth } from '../services/authSession';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authStyles } from '../components/auth/authStyles';
@@ -49,26 +50,50 @@ export default function Login() {
         router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
         return;
       }
-      showNotice('warning', 'Backend Unreachable', 'Internet or backend access is required for first-time login.');
+      showNotice('warning', api.getErrorTitle(err, 'Backend Unreachable'), api.getErrorMessage(err, 'Internet or backend access is required for first-time login.'));
       return;
     }
 
     if (api.isAuthError(err)) {
       await clearCachedSession();
-      showNotice('error', 'Invalid Credentials', err?.message || 'The email or password is incorrect.');
+      showNotice('error', api.getErrorTitle(err, 'Invalid Credentials'), api.getErrorMessage(err, 'The email or password is incorrect.'));
       return;
     }
 
-    const message = err?.data?.message || err?.data || err?.message || fallbackMessage;
-    if (err?.type === 'validation' || err?.status === 422) {
-      showNotice('warning', 'Validation Error', message);
+    const message = api.getErrorMessage(err, fallbackMessage);
+    if (api.isValidationError(err)) {
+      showNotice('warning', api.getErrorTitle(err, 'Validation Error'), message);
       return;
     }
-    if (err?.type === 'server' || (err?.status && err.status >= 500)) {
-      showNotice('error', 'Server Error', message);
+    if (err?.type === 'not_found' || err?.status === 404 || err?.type === 'server' || (err?.status && err.status >= 500)) {
+      showNotice('error', api.getErrorTitle(err, 'Login Failed'), message);
       return;
     }
-    showNotice('error', 'Login Failed', message);
+    showNotice('error', api.getErrorTitle(err, 'Login Failed'), message);
+  }
+
+  async function showGoogleLoginError(err: any) {
+    if (err?.type === 'google_cancelled') {
+      showNotice('info', 'Google Sign-In', 'Google sign-in was cancelled.');
+      return;
+    }
+    if (err?.type === 'google_no_id_token') {
+      showNotice('warning', 'Google Sign-In', 'Google did not return an ID token. Please try again.');
+      return;
+    }
+    if (err?.type === 'google_backend_rejected') {
+      showNotice('error', 'Google Sign-In', err.message || 'Google login was rejected by the server.');
+      return;
+    }
+    if (err?.type === 'google_server_error') {
+      showNotice('error', 'Google Sign-In', 'Server error during Google login.');
+      return;
+    }
+    if (err?.type === 'google_backend_request_failed') {
+      showNotice('error', 'Google Sign-In', 'Google login request failed. Please try again.');
+      return;
+    }
+    await showLoginError(err, 'Google sign-in failed');
   }
 
   useEffect(() => {
@@ -101,18 +126,8 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.post('/login', { email, password });
-      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
-      await saveCachedSession({ token: res.token, user: sessionUser });
-      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
-      if (!onboardingCompleted) {
-        router.replace({
-          pathname: '/onboarding',
-          params: { token: res.token, name: sessionUser?.name || '' },
-        } as any);
-      } else {
-        await markOnboardingComplete(sessionUser);
-        router.replace({ pathname: '/home', params: { token: res.token } } as any);
-      }
+      const session = await persistAuthResponse(res);
+      routeAfterAuth(router, session);
     } catch (err: any) {
       console.log('login error', err);
       await showLoginError(err, 'Login failed');
@@ -122,27 +137,15 @@ export default function Login() {
   }
 
   async function onGoogle() {
+    if (loading) return;
     try {
       setLoading(true);
       const res = await signInWithGoogle();
-      if (!res) {
-        return;
-      }
-      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
-      await saveCachedSession({ token: res.token, user: sessionUser });
-      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
-      if (!onboardingCompleted) {
-        router.replace({
-          pathname: '/onboarding',
-          params: { token: res.token, name: sessionUser?.name || '' },
-        } as any);
-      } else {
-        await markOnboardingComplete(sessionUser);
-        router.replace({ pathname: '/home', params: { token: res.token } } as any);
-      }
+      const session = await persistAuthResponse(res);
+      routeAfterAuth(router, session);
     } catch (err: any) {
       console.log('google signin error', err);
-      await showLoginError(err, 'Google sign-in failed');
+      await showGoogleLoginError(err);
     } finally {
       setLoading(false);
     }
@@ -218,7 +221,7 @@ export default function Login() {
         <View style={authStyles.dividerLine} />
       </View>
 
-      <TouchableOpacity style={authStyles.socialButton} onPress={onGoogle}>
+      <TouchableOpacity style={authStyles.socialButton} onPress={onGoogle} disabled={loading}>
         <View style={authStyles.socialIconWrap}>
           <Ionicons name="logo-google" size={18} color="#DB4437" />
         </View>

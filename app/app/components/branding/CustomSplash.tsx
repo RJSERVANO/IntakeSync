@@ -20,6 +20,7 @@ import { FONT_SCALE } from '../../../utils/fontScaling';
 type Props = {
   onFinish?: () => void;
   minimumMs?: number;
+  mode?: 'full' | 'logo';
 };
 
 const onboardingScreens = [
@@ -46,7 +47,7 @@ const onboardingScreens = [
   },
 ];
 
-export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) {
+export default function SplashOnboarding({ onFinish, minimumMs = 2200, mode = 'full' }: Props) {
   useFontScaleVersion();
   const insets = useSafeAreaInsets();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -85,6 +86,12 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
       setActiveDotIndex(prev => (prev + 1) % 5); // 5 dots total, cycle through
     }, 400);
 
+    if (mode === 'logo') {
+      return () => {
+        clearInterval(dotInterval);
+      };
+    }
+
     const finishTimeout = setTimeout(() => {
       Animated.timing(fadeAnim, {
         toValue: 0,
@@ -97,7 +104,7 @@ export default function SplashOnboarding({ onFinish, minimumMs = 2200 }: Props) 
       clearInterval(dotInterval);
       clearTimeout(finishTimeout);
     };
-  }, [fadeAnim, minimumMs]);
+  }, [fadeAnim, minimumMs, mode]);
   // Auto-scroll onboarding screens every 5s
   useEffect(() => {
     if (splashFinished && flatListRef.current) {

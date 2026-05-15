@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -127,8 +128,16 @@ class AuthController extends Controller
 
         $verification = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
         if (!$verification['ok']) {
+            Log::warning('Google sign-in token verification failed', [
+                'reason' => $verification['error'] ?? 'unknown',
+                'audience' => $verification['audience'] ?? null,
+                'allowed_client_count' => count($clientIds),
+            ]);
+
             return response()->json([
-                'message' => 'Google sign-in could not be verified. Please try again.',
+                'message' => $verification['error'] === 'invalid audience'
+                    ? 'Google sign-in token audience is not allowed for this backend.'
+                    : 'Google sign-in could not be verified. Please try again.',
                 'debug' => app()->environment('production') ? null : $verification['error'],
             ], 401);
         }
@@ -215,7 +224,11 @@ class AuthController extends Controller
         $emailVerified = $payload['email_verified'] ?? false;
 
         if (!in_array(($payload['aud'] ?? null), $clientIds, true)) {
-            return ['ok' => false, 'error' => 'invalid audience'];
+            return [
+                'ok' => false,
+                'error' => 'invalid audience',
+                'audience' => $payload['aud'] ?? null,
+            ];
         }
 
         if (!in_array($issuer, ['accounts.google.com', 'https://accounts.google.com'], true)) {
@@ -323,12 +336,16 @@ class AuthController extends Controller
         // In production, you would send this via email
         // Mail::to($user->email)->send(new ResetPasswordMail($code));
 
-        return response()->json([
+        $response = [
             'message' => 'Verification code sent to your email.',
             'status' => 'success',
-            // ⚠️ DEV MODE: Remove this line in production!
-            'debug_otp' => $code
-        ]);
+        ];
+
+        if (config('app.debug')) {
+            $response['debug_otp'] = $code;
+        }
+
+        return response()->json($response);
     }
 
     public function resetPassword(Request $request)

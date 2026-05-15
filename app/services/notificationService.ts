@@ -1,5 +1,5 @@
 /**
- * Local Notifications Only (Expo SDK 53, Expo Go)
+ * Local Notifications Only (Expo SDK 54, Expo Go/development builds)
  *
  * This service configures and schedules LOCAL notifications only.
  * - No remote push tokens, no FCM/APNs, no server calls.
@@ -13,13 +13,15 @@
 import type * as ExpoNotifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { DeviceEventEmitter, Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, writeMedicationCache } from './offlineStorage';
+import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from './homeEvents';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
+export const GENERAL_NOTIFICATION_CHANNEL_ID = 'intakesync_alerts_v1';
 const HYDRATION_SOUND = 'hydration_reminder.wav';
 const MEDICATION_SOUND = 'medication_reminder.wav';
 const MEDICATION_REMINDER_OFFSETS = [15, 5, 0];
@@ -65,13 +67,30 @@ function getNotifications(): typeof ExpoNotifications | null {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     notificationsModule = require('expo-notifications');
     notificationsModule?.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
+      handleNotification: async (notification) => {
+        const data = (notification.request.content.data || {}) as NotificationData;
+        let shouldPlaySound = true;
+        try {
+          await notificationSettings.initialize();
+          const settings = notificationSettings.getSettings();
+          const categoryEnabled =
+            data.type === 'hydration'
+              ? settings.categories.hydration
+              : data.type === 'medication'
+                ? settings.categories.medications
+                : true;
+          shouldPlaySound = settings.masterToggle && settings.soundEnabled && categoryEnabled;
+        } catch {
+          shouldPlaySound = true;
+        }
+        return {
+          shouldShowAlert: true,
+          shouldPlaySound,
+          shouldSetBadge: false,
+          shouldShowBanner: true,
+          shouldShowList: true,
+        };
+      },
     });
     return notificationsModule;
   } catch (error) {
@@ -115,6 +134,20 @@ export interface ScheduledNotificationRef {
   scheduledAt: string;
   createdAt?: string;
 }
+
+export type HydrationReminderHistoryEvent = {
+  owner_id?: string | number | null;
+  owner_email?: string | null;
+  notificationId?: string;
+  type: 'hydration';
+  scheduleKey: string;
+  doseKey?: string;
+  amount?: number;
+  suggestedAmount?: number;
+  scheduledAt: string;
+  createdAt: string;
+  canceledAt?: string | null;
+};
 
 type NotificationRequestLike = ExpoNotifications.NotificationRequest;
 
@@ -171,6 +204,14 @@ class NotificationService {
         enableVibrate: true,
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
+
+      await Notifications.setNotificationChannelAsync(GENERAL_NOTIFICATION_CHANNEL_ID, {
+        name: 'General Alerts',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250],
+        enableVibrate: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
     } catch (channelError) {
       console.log('Error setting notification channels (non-critical):', channelError);
     }
@@ -204,7 +245,7 @@ class NotificationService {
   private getChannelIdForType(type?: NotificationData['type']): string | undefined {
     if (type === 'hydration') return HYDRATION_CHANNEL_ID;
     if (type === 'medication') return MEDICATION_CHANNEL_ID;
-    return undefined;
+    return GENERAL_NOTIFICATION_CHANNEL_ID;
   }
 
   async getPermissionStatus(): Promise<{ granted: boolean; status?: string; canAskAgain?: boolean }> {
@@ -400,6 +441,19 @@ class NotificationService {
         return;
       }
 
+      const doseOccurrences = getMedicationDoseOccurrences(times, options);
+      const desiredKeys = new Set<string>();
+      const now = Date.now();
+      for (const doseTime of doseOccurrences) {
+        for (const offsetMinutes of MEDICATION_REMINDER_OFFSETS) {
+          const triggerDate = new Date(doseTime.getTime() - offsetMinutes * 60 * 1000);
+          if (triggerDate.getTime() > now + MIN_SCHEDULE_BUFFER_MS) {
+            desiredKeys.add(getMedicationScheduleKey(owner, medicationId, doseTime, offsetMinutes));
+          }
+        }
+      }
+      await cancelObsoleteMedicationNotifications(owner, medicationId, desiredKeys);
+
       const hasPermission = await this.requestPermissions();
       if (!hasPermission) return;
 
@@ -411,9 +465,8 @@ class NotificationService {
           .filter((ref) => ref.type === 'medication' && scheduledIds.has(ref.notificationId))
           .map((ref) => refSlot(ref))
       );
-      const now = Date.now();
 
-      for (const doseTime of getMedicationDoseOccurrences(times, options)) {
+      for (const doseTime of doseOccurrences) {
         for (const offsetMinutes of MEDICATION_REMINDER_OFFSETS) {
           const triggerDate = new Date(doseTime.getTime() - offsetMinutes * 60 * 1000);
           if (triggerDate.getTime() <= now + MIN_SCHEDULE_BUFFER_MS) continue;
@@ -470,6 +523,7 @@ class NotificationService {
         }
       }
       await validateScheduledNotificationRefs(owner);
+      DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'medication', medicationId, at: Date.now() });
     } catch (error) {
       console.error('Error scheduling medication notifications:', error);
     } finally {
@@ -610,6 +664,7 @@ class NotificationService {
         await Promise.all(medicationRefs.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
       }
       await writeScheduledNotificationRefs(refs.filter((ref) => !(ref.type === 'medication' && ref.medicationId === medicationId)), owner);
+      DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'medication', medicationId, at: Date.now() });
     } catch (error) {
       console.error('Error canceling medication notifications:', error);
     }
@@ -628,6 +683,11 @@ class NotificationService {
 
       await Notifications.cancelAllScheduledNotificationsAsync();
       this.scheduledNotifications.clear();
+      const owner = await resolveNotificationOwner();
+      if (owner) {
+        const refs = await getScheduledNotificationRefs(owner);
+        await markHydrationReminderHistoryCanceled(owner, new Set(refs.filter((ref) => ref.type === 'hydration').map((ref) => refSlot(ref))));
+      }
       await writeScheduledNotificationRefs([]);
     } catch (error) {
       console.error('Error canceling all notifications:', error);
@@ -665,7 +725,7 @@ class NotificationService {
 
     // Handle notification received while app is in foreground
     const receivedListener = Notifications.addNotificationReceivedListener((notification) => {
-      console.log('Notification received:', notification);
+      DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'foreground' });
       if (onNotificationReceived) {
         onNotificationReceived(notification);
       }
@@ -673,7 +733,7 @@ class NotificationService {
 
     // Handle notification tapped/opened
     const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
-      console.log('Notification tapped:', response);
+      DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'tap' });
       if (onNotificationTapped) {
         onNotificationTapped(response);
       }
@@ -720,12 +780,22 @@ function notificationRefsKey(owner: CacheOwner) {
   return getUserScopedKey(owner, 'scheduled_notification_refs');
 }
 
+function hydrationReminderHistoryKey(owner: CacheOwner) {
+  return getUserScopedKey(owner, 'hydration_reminder_history');
+}
+
 function refSlot(ref: ScheduledNotificationRef) {
   return ref.scheduleKey || ref.doseKey || ref.scheduledAt;
 }
 
 function getOwnerSchedulePart(owner: CacheOwner) {
   return String(owner.owner_id ?? owner.id ?? owner.owner_email ?? owner.email ?? 'unknown');
+}
+
+function scheduleKeyBelongsToOwner(scheduleKey: string | undefined, owner: CacheOwner) {
+  if (!scheduleKey) return false;
+  const ownerPart = getOwnerSchedulePart(owner);
+  return scheduleKey.includes(`:${ownerPart}:`);
 }
 
 function normalizeMedicationIdentity(value: string | number | null | undefined) {
@@ -779,6 +849,24 @@ function getSemanticScheduledRequestKey(request: NotificationRequestLike) {
     return `semantic:hydration:${request.content?.title || ''}:${data.scheduledAt || ''}:${JSON.stringify(request.trigger || {})}`;
   }
   return '';
+}
+
+function getRequestScheduledTime(request: NotificationRequestLike) {
+  const data = getScheduledRequestData(request);
+  if (typeof data.scheduledAt === 'string') {
+    const scheduledAt = new Date(data.scheduledAt).getTime();
+    if (Number.isFinite(scheduledAt)) return scheduledAt;
+  }
+  const trigger: any = request.trigger || {};
+  const rawValue = trigger.value ?? trigger.date ?? trigger.timestamp;
+  if (typeof rawValue === 'number') {
+    return rawValue < 10000000000 ? Date.now() + rawValue * 1000 : rawValue;
+  }
+  if (typeof rawValue === 'string') {
+    const parsed = new Date(rawValue).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
 }
 
 function buildRefFromScheduledRequest(request: NotificationRequestLike, owner: CacheOwner): ScheduledNotificationRef | null {
@@ -890,7 +978,12 @@ function getMedicationDoseOccurrences(
 function getUpcomingHydrationSlots(intervalMinutes = HYDRATION_REMINDER_INTERVAL_MINUTES) {
   const now = new Date();
   const slots: Date[] = [];
-  const first = new Date(now.getTime() + intervalMinutes * 60 * 1000);
+  const intervalMs = Math.max(1, intervalMinutes) * 60 * 1000;
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const elapsed = now.getTime() - dayStart.getTime();
+  const nextBoundaryElapsed = Math.ceil((elapsed + MIN_SCHEDULE_BUFFER_MS) / intervalMs) * intervalMs;
+  const first = new Date(dayStart.getTime() + nextBoundaryElapsed);
   first.setSeconds(0, 0);
   const end = new Date(now);
   end.setHours(23, 59, 59, 999);
@@ -900,6 +993,82 @@ function getUpcomingHydrationSlots(intervalMinutes = HYDRATION_REMINDER_INTERVAL
     }
   }
   return slots;
+}
+
+async function cancelObsoleteHydrationNotifications(owner: CacheOwner, desiredScheduleKeys: Set<string>) {
+  const Notifications = getNotifications();
+  const refs = await getScheduledNotificationRefs(owner);
+  const now = Date.now();
+  const idsToCancel = new Set<string>();
+  const scheduleKeysToCancel = new Set<string>();
+
+  refs.forEach((ref) => {
+    if (ref.type !== 'hydration') return;
+    const key = refSlot(ref);
+    const scheduledTime = getRefScheduledTime(ref);
+    if (scheduledTime > now && !desiredScheduleKeys.has(key)) {
+      idsToCancel.add(ref.notificationId);
+      scheduleKeysToCancel.add(key);
+    }
+  });
+
+  if (Notifications) {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    scheduled.forEach((request) => {
+      const data = getScheduledRequestData(request);
+      if (data.type !== 'hydration') return;
+      const key = getScheduledRequestKey(request);
+      const scheduledAt = getRequestScheduledTime(request);
+      const isCurrentOwnerKey = key ? scheduleKeyBelongsToOwner(key, owner) : false;
+      const isLegacyHydration = !key || /^hydration:\d{4}-\d{2}-\d{2}:/.test(key);
+      if ((isCurrentOwnerKey || isLegacyHydration) && (scheduledAt === 0 || scheduledAt > now) && !desiredScheduleKeys.has(key)) {
+        idsToCancel.add(request.identifier);
+        if (key) scheduleKeysToCancel.add(key);
+      }
+    });
+    await Promise.all(Array.from(idsToCancel).map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  }
+
+  const nextRefs = refs.filter((ref) => !idsToCancel.has(ref.notificationId) && (ref.type !== 'hydration' || desiredScheduleKeys.has(refSlot(ref)) || getRefScheduledTime(ref) <= now));
+  if (nextRefs.length !== refs.length) await writeScheduledNotificationRefs(nextRefs, owner);
+  await markHydrationReminderHistoryCanceled(owner, scheduleKeysToCancel);
+}
+
+async function cancelObsoleteMedicationNotifications(owner: CacheOwner, medicationId: string, desiredScheduleKeys: Set<string>) {
+  const Notifications = getNotifications();
+  const refs = await getScheduledNotificationRefs(owner);
+  const now = Date.now();
+  const idsToCancel = new Set<string>();
+
+  refs.forEach((ref) => {
+    if (ref.type !== 'medication' || ref.medicationId !== medicationId) return;
+    if (getRefScheduledTime(ref) > now && !desiredScheduleKeys.has(refSlot(ref))) {
+      idsToCancel.add(ref.notificationId);
+    }
+  });
+
+  if (Notifications) {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    scheduled.forEach((request) => {
+      const data = getScheduledRequestData(request);
+      if (data.type !== 'medication' || String(data.medicationId || '') !== medicationId) return;
+      const key = getScheduledRequestKey(request);
+      const scheduledAt = getRequestScheduledTime(request);
+      if (scheduledAt > now && scheduleKeyBelongsToOwner(key, owner) && !desiredScheduleKeys.has(key)) {
+        idsToCancel.add(request.identifier);
+      }
+    });
+    await Promise.all(Array.from(idsToCancel).map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  }
+
+  const nextRefs = refs.filter((ref) => !idsToCancel.has(ref.notificationId));
+  if (nextRefs.length !== refs.length) await writeScheduledNotificationRefs(nextRefs, owner);
+}
+
+function getRefScheduledTime(ref: ScheduledNotificationRef) {
+  const value = ref.scheduledAt || ref.doseTime;
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
 }
 
 async function writeScheduledNotificationRefs(refs: ScheduledNotificationRef[], owner?: CacheOwner | null) {
@@ -922,6 +1091,71 @@ export async function getScheduledNotificationRefs(owner?: CacheOwner | null): P
   }
 }
 
+export async function getHydrationReminderHistory(owner?: CacheOwner | null): Promise<HydrationReminderHistoryEvent[]> {
+  try {
+    const cacheOwner = await resolveNotificationOwner(owner);
+    if (!cacheOwner) return [];
+    const raw = await AsyncStorage.getItem(hydrationReminderHistoryKey(cacheOwner));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.type === 'hydration') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeHydrationReminderHistory(events: HydrationReminderHistoryEvent[], owner?: CacheOwner | null) {
+  try {
+    const cacheOwner = await resolveNotificationOwner(owner);
+    if (!cacheOwner) return;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 7);
+    const recentEvents = events.filter((event) => {
+      const scheduledAt = event?.scheduledAt ? new Date(event.scheduledAt).getTime() : 0;
+      return scheduledAt >= cutoff.getTime();
+    });
+    await AsyncStorage.setItem(hydrationReminderHistoryKey(cacheOwner), JSON.stringify(recentEvents));
+  } catch {}
+}
+
+async function saveHydrationReminderHistoryEvent(ref: ScheduledNotificationRef) {
+  const owner = await resolveNotificationOwner(ref);
+  if (!owner || ref.type !== 'hydration') return;
+  const scheduleKey = refSlot(ref);
+  const events = await getHydrationReminderHistory(owner);
+  const next = events.filter((item) => item.scheduleKey !== scheduleKey);
+  next.push({
+    owner_id: owner.owner_id,
+    owner_email: owner.owner_email,
+    notificationId: ref.notificationId,
+    type: 'hydration',
+    scheduleKey,
+    doseKey: scheduleKey,
+    amount: ref.amount,
+    suggestedAmount: ref.suggestedAmount,
+    scheduledAt: ref.scheduledAt,
+    createdAt: ref.createdAt || new Date().toISOString(),
+    canceledAt: null,
+  });
+  await writeHydrationReminderHistory(next, owner);
+}
+
+async function markHydrationReminderHistoryCanceled(ownerArg: CacheOwner | null | undefined, scheduleKeys: Set<string>) {
+  if (scheduleKeys.size === 0) return;
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const now = new Date().toISOString();
+  const events = await getHydrationReminderHistory(owner);
+  let changed = false;
+  const next = events.map((event) => {
+    if (!scheduleKeys.has(event.scheduleKey)) return event;
+    const scheduledTime = new Date(event.scheduledAt).getTime();
+    if (Number.isFinite(scheduledTime) && scheduledTime <= Date.now()) return event;
+    changed = true;
+    return { ...event, canceledAt: event.canceledAt || now };
+  });
+  if (changed) await writeHydrationReminderHistory(next, owner);
+}
+
 export async function saveScheduledNotificationRef(ref: ScheduledNotificationRef) {
   const owner = await resolveNotificationOwner(ref);
   if (!owner) return;
@@ -938,6 +1172,7 @@ export async function saveScheduledNotificationRef(ref: ScheduledNotificationRef
   }
   next.push(ref);
   await writeScheduledNotificationRefs(next, owner);
+  if (ref.type === 'hydration') await saveHydrationReminderHistoryEvent(ref);
 }
 
 async function removeScheduledNotificationRef(notificationId: string) {
@@ -965,6 +1200,7 @@ export async function cancelAllMedicationNotifications(ownerArg?: CacheOwner | n
     await Promise.all(medicationRefs.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
   }
   await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'medication'), owner);
+  DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'medication', at: Date.now() });
 }
 
 export async function cancelMedicationDoseNotifications(medicationId: string, doseTimeIso: string, ownerArg?: CacheOwner | null) {
@@ -996,7 +1232,9 @@ export async function cancelHydrationNotifications(ownerArg?: CacheOwner | null)
   if (Notifications) {
     await Promise.all(hydrationRefs.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
   }
+  await markHydrationReminderHistoryCanceled(owner, new Set(hydrationRefs.map((ref) => refSlot(ref))));
   await writeScheduledNotificationRefs(refs.filter((ref) => ref.type !== 'hydration'), owner);
+  DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'hydration', at: Date.now() });
 }
 
 export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | null) {
@@ -1100,7 +1338,11 @@ async function ensureUniqueScheduledSlot(owner: CacheOwner, type: ScheduledNotif
   if (keepId) {
     const keepRef = validRef || (keepRequest ? buildRefFromScheduledRequest(keepRequest, owner) : null);
     const nextRefs = refs.filter((ref) => !(ref.type === type && refSlot(ref) === scheduleKey));
-    if (keepRef) nextRefs.push({ ...keepRef, notificationId: keepId, scheduleKey, doseKey: scheduleKey });
+    if (keepRef) {
+      const normalizedRef = { ...keepRef, notificationId: keepId, scheduleKey, doseKey: scheduleKey };
+      nextRefs.push(normalizedRef);
+      if (type === 'hydration') await saveHydrationReminderHistoryEvent(normalizedRef);
+    }
     await writeScheduledNotificationRefs(nextRefs, owner);
     return true;
   }
@@ -1116,6 +1358,14 @@ export async function clearStaleNotificationRefs(ownerArg?: CacheOwner | null) {
 }
 
 export async function clearStaleHydrationNotificationRefs(ownerArg?: CacheOwner | null) {
+  await validateScheduledNotificationRefs(ownerArg);
+}
+
+export async function cleanupDuplicateHydrationNotifications(ownerArg?: CacheOwner | null) {
+  await validateScheduledNotificationRefs(ownerArg);
+}
+
+export async function cleanupDuplicateMedicationNotifications(ownerArg?: CacheOwner | null) {
   await validateScheduledNotificationRefs(ownerArg);
 }
 
@@ -1221,6 +1471,8 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
     if (!hasPermission) return;
     const slots = getUpcomingHydrationSlots(intervalMinutes);
     if (slots.length === 0) return;
+    const desiredKeys = new Set(slots.map((slot) => getHydrationScheduleKey(owner, slot)));
+    await cancelObsoleteHydrationNotifications(owner, desiredKeys);
     const remaining = Math.max(goal - currentTotal, 0);
     const amount = Math.max(150, Math.round(remaining / slots.length));
     const progressPercent = goal > 0 ? (currentTotal / goal) * 100 : undefined;
@@ -1228,6 +1480,7 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
       await notificationService.scheduleHydrationReminder(intervalMinutes, amount, undefined, owner, slot, progressPercent);
     }
     await validateScheduledNotificationRefs(owner);
+    DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'hydration', at: Date.now() });
   } finally {
     schedulingHydration = false;
   }

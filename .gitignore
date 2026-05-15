@@ -1,11 +1,25 @@
 node_modules
 .expo/
 backend/.vite/
+.env
+.env.*
+!.env.example
+app/.env
+app/.env.*
+!app/.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+*.log
 
 # Local credentials and signing keys
 credentials.json
 app/credentials.json
 credentials/
 app/credentials/
+backend/auth.json
 *.jks
 *.keystore
+*.p8
+*.p12
+*.pem

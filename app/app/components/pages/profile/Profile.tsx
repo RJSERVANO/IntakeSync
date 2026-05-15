@@ -200,7 +200,7 @@ export default function Profile() {
       await clearCachedSession();
       setSigningOut(false);
       setSignOutVisible(false);
-      router.replace({ pathname: '/login' } as any);
+      router.replace({ pathname: '/' } as any);
     }
   };
 

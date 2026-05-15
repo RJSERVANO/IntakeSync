@@ -10,7 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as api from './api';
-import { hasCompletedOnboarding, hasValidCachedSession, markOnboardingComplete, saveCachedSession } from '../services/offlineStorage';
+import { persistAuthResponse, routeAfterAuth } from '../services/authSession';
 import { AuthField, AuthSelectField } from '../components/auth/AuthField';
 import { AuthLayout } from '../components/auth/AuthLayout';
 import { authColors, authStyles, authShadows } from '../components/auth/authStyles';
@@ -67,6 +67,34 @@ export default function Register() {
 
   const displayEmail = email ? email.charAt(0).toUpperCase() + email.slice(1) : '';
 
+  const showGoogleRegisterError = (err: any) => {
+    if (err?.type === 'google_cancelled') {
+      showNotice('info', 'Google Sign-In', 'Google sign-in was cancelled.');
+      return;
+    }
+    if (err?.type === 'google_no_id_token') {
+      showNotice('warning', 'Google Sign-In', 'Google did not return an ID token. Please try again.');
+      return;
+    }
+    if (err?.type === 'google_backend_rejected') {
+      showNotice('error', 'Google Sign-In', err.message || 'Google login was rejected by the server.');
+      return;
+    }
+    if (err?.type === 'google_server_error') {
+      showNotice('error', 'Google Sign-In', 'Server error during Google login.');
+      return;
+    }
+    if (err?.type === 'google_backend_request_failed') {
+      showNotice('error', 'Google Sign-In', 'Google login request failed. Please try again.');
+      return;
+    }
+    if (api.isNetworkError(err)) {
+      showNotice('warning', api.getErrorTitle(err, 'Cannot Reach Backend'), api.getErrorMessage(err, 'Internet connection required for first-time login.'));
+      return;
+    }
+    showNotice('error', api.getErrorTitle(err, 'Registration Failed'), api.getErrorMessage(err, 'Google sign-in failed'));
+  };
+
   async function onRegister() {
     if (!name || !email || !password || !confirmPassword) {
       showNotice('warning', 'Validation', 'Please fill all required fields');
@@ -106,71 +134,34 @@ export default function Register() {
         gender: gender || null,
         address: address || null,
       });
-      if (!hasValidCachedSession({ token: res?.token })) {
-        showNotice('error', 'Registration Error', 'Registration succeeded but no valid session token was returned. Please sign in.');
-        router.replace({ pathname: '/login' } as any);
-        return;
-      }
-      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
-      await saveCachedSession({ token: res.token, user: sessionUser });
-      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
-
-      if (!onboardingCompleted) {
-        router.replace({
-          pathname: '/onboarding',
-          params: { token: res.token, name: sessionUser?.name || name },
-        } as any);
-      } else {
-        await markOnboardingComplete(sessionUser);
-        router.replace({ pathname: '/home', params: { token: res.token } } as any);
-      }
+      const session = await persistAuthResponse(res, { name, email });
+      routeAfterAuth(router, session, name);
     } catch (err: any) {
       console.log('register error', err);
       if (api.isNetworkError(err)) {
-        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
+        showNotice('warning', api.getErrorTitle(err, 'Cannot Reach Backend'), api.getErrorMessage(err, 'Internet connection required for first-time login.'));
         return;
       }
-      const message = err?.data?.message || err?.data || err?.message || 'Registration failed';
-      showNotice('error', 'Registration Failed', message);
+      showNotice(
+        api.isValidationError(err) ? 'warning' : 'error',
+        api.getErrorTitle(err, 'Registration Failed'),
+        api.getErrorMessage(err, 'Registration failed'),
+      );
     } finally {
       setLoading(false);
     }
   }
 
   async function onGoogleLogin() {
+    if (loading) return;
     try {
       setLoading(true);
       const res = await signInWithGoogle();
-      if (!res) {
-        return;
-      }
-      if (!hasValidCachedSession({ token: res?.token })) {
-        showNotice('error', 'Registration Error', 'No valid session token was returned. Please sign in.');
-        router.replace({ pathname: '/login' } as any);
-        return;
-      }
-      const sessionUser = { ...(res.user || {}), onboarding_completed: res.onboarding_completed === true };
-      await saveCachedSession({ token: res.token, user: sessionUser });
-      const onboardingCompleted = res.onboarding_completed === true || await hasCompletedOnboarding(sessionUser);
-
-      if (!onboardingCompleted) {
-        router.replace({
-          pathname: '/onboarding',
-          params: { token: res.token, name: sessionUser?.name || '' },
-        } as any);
-      } else {
-        await markOnboardingComplete(sessionUser);
-        router.replace({ pathname: '/home', params: { token: res.token } } as any);
-      }
+      const session = await persistAuthResponse(res);
+      routeAfterAuth(router, session);
     } catch (err: any) {
       console.log('google register error', err);
-      if (api.isNetworkError(err)) {
-        showNotice('warning', 'Offline', 'Internet connection required for first-time login.');
-        return;
-      }
-      const message =
-        err?.data?.message || err?.data || err?.message || 'Google sign-in failed';
-      showNotice('error', 'Registration Failed', message);
+      showGoogleRegisterError(err);
     } finally {
       setLoading(false);
     }
@@ -340,7 +331,7 @@ export default function Register() {
           <View style={authStyles.dividerLine} />
         </View>
 
-        <TouchableOpacity style={authStyles.socialButton} onPress={onGoogleLogin}>
+        <TouchableOpacity style={authStyles.socialButton} onPress={onGoogleLogin} disabled={loading}>
           <View style={authStyles.socialIconWrap}>
             <Ionicons name="logo-google" size={18} color="#DB4437" />
           </View>

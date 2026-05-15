@@ -20,8 +20,6 @@
         "backgroundColor": "#1E3A8A"
       },
       "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.POST_NOTIFICATIONS"
       ]
     },

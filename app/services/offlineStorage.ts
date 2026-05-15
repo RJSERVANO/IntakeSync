@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { emitHomeRefresh } from './homeEvents';
 
 export const SESSION_CACHE_KEY = 'intakesync.cached_session';
 export const HYDRATION_CACHE_KEY = 'hydration';
@@ -9,6 +10,7 @@ export const NOTIFICATIONS_CACHE_KEY = '@intakesync:notifications';
 export const OTC_SEARCH_CACHE_KEY = '@intakesync:otc_search_cache:v1';
 export const OTC_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const ONBOARDING_COMPLETE_KEY_PREFIX = '@intakesync:onboarding_complete:';
+export const ONBOARDING_PROGRESS_KEY_PREFIX = '@intakesync:onboarding_progress:';
 
 export type CacheOwner = {
   id?: string | number | null;
@@ -182,6 +184,10 @@ export function getOnboardingCompleteKey(userId: string | number): string {
   return `${ONBOARDING_COMPLETE_KEY_PREFIX}${normalizeCachePart(userId)}`;
 }
 
+export function getOnboardingProgressKey(userId: string | number): string {
+  return `${ONBOARDING_PROGRESS_KEY_PREFIX}${normalizeCachePart(userId)}`;
+}
+
 export async function hasCompletedOnboarding(user?: any | null): Promise<boolean> {
   const userId = getUserOnboardingId(user);
   if (!userId) return false;
@@ -203,9 +209,33 @@ export async function markOnboardingComplete(user?: any | null): Promise<boolean
   if (!userId) return false;
   try {
     await AsyncStorage.setItem(getOnboardingCompleteKey(userId), 'true');
+    await AsyncStorage.removeItem(getOnboardingProgressKey(userId));
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function readOnboardingProgress(user?: any | null): Promise<number | null> {
+  const userId = getUserOnboardingId(user);
+  if (!userId) return null;
+  try {
+    const raw = await AsyncStorage.getItem(getOnboardingProgressKey(userId));
+    if (!raw) return null;
+    const step = Number(raw);
+    return Number.isInteger(step) && step >= 0 ? step : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeOnboardingProgress(user: any | null | undefined, step: number): Promise<void> {
+  const userId = getUserOnboardingId(user);
+  if (!userId || !Number.isInteger(step) || step < 0) return;
+  try {
+    await AsyncStorage.setItem(getOnboardingProgressKey(userId), String(step));
+  } catch {
+    // Onboarding progress is a convenience cache; failed writes should not block navigation.
   }
 }
 
@@ -687,6 +717,7 @@ export async function writeMedicationCache(user: any | null | undefined, data: a
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationCacheKey(ownerKey), user, data);
+  emitHomeRefresh('medication');
 }
 
 export async function readMedicationHistoryCache<T = any[]>(user?: any | null): Promise<T | null> {
@@ -700,6 +731,7 @@ export async function writeMedicationHistoryCache(user: any | null | undefined, 
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
   await writeOwnedOfflineCache(getMedicationHistoryCacheKey(ownerKey), user, data);
+  emitHomeRefresh('history');
 }
 
 export async function readDeletedMedicationTombstones(user?: any | null): Promise<string[]> {
@@ -739,6 +771,7 @@ export async function writeHydrationCache(data: any): Promise<void> {
     const owner = getCacheOwner(user);
     if (!owner.owner_id && !owner.owner_email) return;
     await writeOwnedOfflineCache(getUserScopedKey(owner, 'hydration_cache'), user, data);
+    emitHomeRefresh('hydration');
     const goal = Number(data?.goal ?? data?.daily_goal_ml ?? data?.hydration_goal ?? 0);
     if (Number.isFinite(goal) && goal > 0) {
       await updateCachedHydrationGoal(goal);

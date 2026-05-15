@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  DeviceEventEmitter,
   Modal,
   RefreshControl,
   ScrollView,
@@ -8,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,14 +17,19 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
 import {
   getCachedSession,
+  getCacheOwner,
+  getUserScopedKey,
   readHydrationCache,
   readMedicationCache,
   readMedicationHistoryCache,
   readNotificationsCache,
+  readSettingsCache,
   writeNotificationsCache,
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
 import { getScheduledNotificationRefs } from '../../../../services/notificationService';
+import { notificationSettings } from '../../../../services/notificationSettings';
+import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from '../../../../services/homeEvents';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
@@ -156,7 +163,7 @@ const formatBeverageLabel = (entry: any) => {
   return type.charAt(0).toUpperCase() + type.slice(1);
 };
 
-const getReminderKey = (item: ReminderItem) => `${item.type}:${item.title}:${formatSafeTime(item.time)}`;
+const getReminderKey = (item: ReminderItem) => `${item.type}:${item.id || item.title}:${formatSafeTime(item.time)}`;
 
 const dedupeReminders = (items: ReminderItem[]) => {
   const seen = new Set<string>();
@@ -169,6 +176,16 @@ const dedupeReminders = (items: ReminderItem[]) => {
       return true;
     });
 };
+
+const hiddenRecentKey = (user: any) => {
+  const owner = getCacheOwner(user);
+  if (!owner.owner_id && !owner.owner_email) return null;
+  return getUserScopedKey(owner, 'notifications:hidden_recent_ids');
+};
+
+const isHiddenRecent = (item: NotificationItem, hiddenIds: Set<string>) => (
+  hiddenIds.has(String(item.id)) || item.status === 'cleared' || item.metadata?.recent_hidden === true || item.metadata?.hidden === true
+);
 
 export default function Activity() {
   const params = useLocalSearchParams();
@@ -191,12 +208,57 @@ export default function Activity() {
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showAllRecent, setShowAllRecent] = useState(false);
+  const [hiddenRecentIds, setHiddenRecentIds] = useState<Set<string>>(new Set());
+  const [localReminderPrefs, setLocalReminderPrefs] = useState({
+    allowNotifications: false,
+    medicationReminders: true,
+    hydrationReminders: true,
+  });
 
   useEffect(() => {
     if (!inlineNotice) return;
     const timer = setTimeout(() => setInlineNotice(null), 2400);
     return () => clearTimeout(timer);
   }, [inlineNotice]);
+
+  const loadHiddenRecentIds = useCallback(async (sessionUser: any) => {
+    const key = hiddenRecentKey(sessionUser);
+    if (!key) {
+      setHiddenRecentIds(new Set());
+      return new Set<string>();
+    }
+    try {
+      const parsed = JSON.parse((await AsyncStorage.getItem(key)) || '[]');
+      const next = new Set<string>(Array.isArray(parsed) ? parsed.map(String) : []);
+      setHiddenRecentIds(next);
+      return next;
+    } catch {
+      const empty = new Set<string>();
+      setHiddenRecentIds(empty);
+      return empty;
+    }
+  }, []);
+
+  const persistHiddenRecentIds = useCallback(async (sessionUser: any, ids: Set<string>) => {
+    const key = hiddenRecentKey(sessionUser);
+    if (!key) return;
+    await AsyncStorage.setItem(key, JSON.stringify(Array.from(ids)));
+  }, []);
+
+  const loadReminderPreferences = useCallback(async (sessionUser: any) => {
+    await notificationSettings.initialize();
+    const serviceSettings = notificationSettings.getSettings();
+    const cached = sessionUser ? await readSettingsCache<any>(sessionUser) : null;
+    const notificationPreferences = cached?.notificationPreferences || {};
+    const next = {
+      allowNotifications: notificationPreferences.allowNotifications !== false && serviceSettings.masterToggle,
+      medicationReminders: notificationPreferences.medicationReminders !== false && serviceSettings.categories.medications !== false,
+      hydrationReminders: notificationPreferences.hydrationReminders !== false && serviceSettings.categories.hydration !== false,
+    };
+    setLocalReminderPrefs(next);
+    return next;
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -350,13 +412,16 @@ export default function Activity() {
     return dedupeNotifications([...beverageRecords, ...medicationRecords, ...reminderRecords, ...syncRecords]);
   }, []);
 
-  const loadLocalReminderItems = useCallback(async (): Promise<ReminderItem[]> => {
+  const loadLocalReminderItems = useCallback(async (prefs = localReminderPrefs): Promise<ReminderItem[]> => {
     const refs = await getScheduledNotificationRefs();
     const now = Date.now();
     const today = new Date();
 
     return dedupeReminders(refs
       .filter((ref) => {
+        if (!prefs.allowNotifications) return false;
+        if (ref.type === 'hydration' && !prefs.hydrationReminders) return false;
+        if (ref.type === 'medication' && !prefs.medicationReminders) return false;
         const when = ref.scheduledAt || ref.doseTime;
         return getSafeTime(when) > now && isSameLocalDay(when, today);
       })
@@ -377,7 +442,7 @@ export default function Activity() {
           status: 'scheduled',
         };
       }));
-  }, []);
+  }, [localReminderPrefs]);
 
   const loadNotifications = useCallback(async () => {
     if (!token) return;
@@ -386,6 +451,8 @@ export default function Activity() {
       const session = await getCachedSession();
       const sessionUser = currentUser || session?.user || null;
       if (sessionUser && !currentUser) setCurrentUser(sessionUser);
+      const prefs = await loadReminderPreferences(sessionUser);
+      await loadHiddenRecentIds(sessionUser);
       await processSyncQueue(token);
       const [notificationRes, statsRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
@@ -394,7 +461,7 @@ export default function Activity() {
       ]);
       const localActivity = await buildLocalActivityRecords(sessionUser);
       const normalized = dedupeNotifications([...normalizeNotifications(notificationRes), ...localActivity]);
-      const localReminderItems = await loadLocalReminderItems();
+      const localReminderItems = await loadLocalReminderItems(prefs);
       const fallback = dedupeReminders([...localReminderItems, ...normalizeMedicationFallbacks(medicationRes)]);
       setNotifications(normalized);
       setStats(statsRes || null);
@@ -413,7 +480,9 @@ export default function Activity() {
         const cached = await readNotificationsCache<any>(currentUser);
         const session = await getCachedSession();
         const localActivity = await buildLocalActivityRecords(currentUser || session?.user || null);
-        const localReminderItems = await loadLocalReminderItems();
+        const prefs = await loadReminderPreferences(currentUser || session?.user || null);
+        await loadHiddenRecentIds(currentUser || session?.user || null);
+        const localReminderItems = await loadLocalReminderItems(prefs);
         if (cached) {
           setNotifications(dedupeNotifications([...(cached.notifications || []), ...localActivity]));
           setStats(cached.stats || null);
@@ -428,7 +497,7 @@ export default function Activity() {
     } finally {
       setSyncing(false);
     }
-  }, [buildLocalActivityRecords, currentUser, loadLocalReminderItems, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
+  }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
   const cacheCurrentNotifications = useCallback(async (nextNotifications: NotificationItem[], nextStats = stats) => {
     await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks }, currentUser);
@@ -441,10 +510,12 @@ export default function Activity() {
         const session = await getCachedSession();
         const sessionUser = currentUser || session?.user || null;
         if (sessionUser && mounted) setCurrentUser(sessionUser);
+        const prefs = await loadReminderPreferences(sessionUser);
+        await loadHiddenRecentIds(sessionUser);
         const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
         if (!mounted) return;
         const localActivity = await buildLocalActivityRecords(sessionUser);
-        const localReminderItems = await loadLocalReminderItems();
+        const localReminderItems = await loadLocalReminderItems(prefs);
         setNotifications(dedupeNotifications([...(cached?.notifications || []), ...localActivity]));
         setStats(cached?.stats || null);
         setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
@@ -456,13 +527,25 @@ export default function Activity() {
         mounted = false;
         setSyncing(false);
       };
-    }, [buildLocalActivityRecords, currentUser, loadLocalReminderItems, loadNotifications])
+    }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadNotifications, loadReminderPreferences])
   );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadNotifications();
     setRefreshing(false);
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    const refresh = () => {
+      loadNotifications().catch(() => {});
+    };
+    const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
+    const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, refresh);
+    return () => {
+      notificationSub.remove();
+      reminderSub.remove();
+    };
   }, [loadNotifications]);
 
   const markOneRead = useCallback(async (item: NotificationItem) => {
@@ -524,7 +607,11 @@ export default function Activity() {
   }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const clearNotification = useCallback(async (item: NotificationItem) => {
-    const nextNotifications = notifications.filter((current) => current.id !== item.id);
+    const nextHidden = new Set(hiddenRecentIds);
+    nextHidden.add(String(item.id));
+    setHiddenRecentIds(nextHidden);
+    await persistHiddenRecentIds(currentUser, nextHidden);
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'cleared' as const, metadata: { ...(current.metadata || {}), recent_hidden: true } } : current);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
@@ -540,7 +627,38 @@ export default function Activity() {
         setNoticeModal({ title: 'Could not clear', message: getErrorMessage(err, 'Please try again.') });
       }
     }
-  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
+  }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, loadNotifications, notifications, persistHiddenRecentIds, token]);
+
+  const markAllRead = useCallback(async () => {
+    const readAt = new Date().toISOString();
+    const nextNotifications = notifications.map((item) => (
+      isHiddenRecent(item, hiddenRecentIds)
+        ? item
+        : { ...item, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt }
+    ));
+    setNotifications(nextNotifications);
+    await cacheCurrentNotifications(nextNotifications);
+    setInlineNotice('Recent notifications marked read.');
+  }, [cacheCurrentNotifications, hiddenRecentIds, notifications]);
+
+  const clearRecent = useCallback(async () => {
+    const nextHidden = new Set(hiddenRecentIds);
+    notifications.forEach((item) => {
+      if (!isHiddenRecent(item, hiddenRecentIds)) nextHidden.add(String(item.id));
+    });
+    const readAt = new Date().toISOString();
+    const nextNotifications = notifications.map((item) => (
+      nextHidden.has(String(item.id))
+        ? { ...item, status: 'cleared' as const, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt, metadata: { ...(item.metadata || {}), recent_hidden: true } }
+        : item
+    ));
+    setHiddenRecentIds(nextHidden);
+    setNotifications(nextNotifications);
+    await persistHiddenRecentIds(currentUser, nextHidden);
+    await cacheCurrentNotifications(nextNotifications);
+    setShowAllRecent(false);
+    setInlineNotice('Recent notifications hidden. Medication and beverage history was kept.');
+  }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, notifications, persistHiddenRecentIds]);
 
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
     const today = new Date();
@@ -558,32 +676,45 @@ export default function Activity() {
         notification: item,
       }));
 
-    return dedupeReminders([...notificationReminders, ...medicationFallbacks]).slice(0, 8);
+    return dedupeReminders([...notificationReminders, ...medicationFallbacks]);
   }, [medicationFallbacks, notifications]);
 
   const filteredNotifications = useMemo(() => {
-    const sorted = [...notifications].sort(
+    const visible = notifications.filter((item) => !isHiddenRecent(item, hiddenRecentIds));
+    const sorted = [...visible].sort(
       (a, b) => getSafeTime(b.scheduled_at || b.scheduled_time || b.created_at) - getSafeTime(a.scheduled_at || a.scheduled_time || a.created_at)
     );
     if (filter === 'unread') return sorted.filter(isUnread);
     if (filter === 'medication' || filter === 'hydration') return sorted.filter(item => item.type === filter);
     return sorted;
-  }, [filter, notifications]);
+  }, [filter, hiddenRecentIds, notifications]);
 
-  const todayNotifications = filteredNotifications.filter(item => isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
-  const earlierNotifications = filteredNotifications.filter(item => !isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
+  const displayedNotifications = useMemo(() => (
+    showAllRecent ? filteredNotifications : filteredNotifications.slice(0, 5)
+  ), [filteredNotifications, showAllRecent]);
+
+  const todayNotifications = displayedNotifications.filter(item => isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
+  const earlierNotifications = displayedNotifications.filter(item => !isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
+  const hasMoreRecent = filteredNotifications.length > 5;
+  const nextReminder = upcomingReminders[0] || null;
 
   const counters = useMemo(() => {
     const today = new Date();
-    const unread = Number(stats?.unread ?? notifications.filter(item => !isLocalActivity(item) && isUnread(item)).length);
-    const scheduledToday = upcomingReminders.filter(item => isSameLocalDay(item.time, today) && getSafeTime(item.time) > Date.now()).length;
-    const alerts = Number(stats?.alerts ?? notifications.filter(item => isAlertStatus(item.status)).length);
+    void stats;
+    const visibleRecords = notifications.filter((item) => !isHiddenRecent(item, hiddenRecentIds));
+    const unread = visibleRecords.filter(item => isUnread(item)).length;
+    const scheduledKeys = new Set<string>();
+    upcomingReminders
+      .filter(item => isSameLocalDay(item.time, today) && getSafeTime(item.time) > Date.now())
+      .forEach((item) => scheduledKeys.add(getReminderKey(item)));
+    const scheduledToday = scheduledKeys.size;
+    const alerts = visibleRecords.filter(item => isAlertStatus(item.status)).length;
     return [
       { key: 'unread', label: 'Unread', value: unread, color: '#2563EB', icon: 'mail-unread-outline' as const },
       { key: 'scheduled', label: 'Scheduled Today', value: scheduledToday, color: '#2563EB', icon: 'time-outline' as const },
       { key: 'alerts', label: 'Alerts', value: alerts, color: '#DC2626', icon: 'alert-circle-outline' as const },
     ];
-  }, [notifications, stats, upcomingReminders]);
+  }, [hiddenRecentIds, notifications, stats, upcomingReminders]);
 
   const renderNotificationCard = (item: NotificationItem) => {
     const tone = getTone(item);
@@ -638,6 +769,50 @@ export default function Activity() {
     );
   };
 
+  const openReminderTarget = (item: ReminderItem | null) => {
+    if (!item) return;
+    if (item.type === 'medication') {
+      router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any);
+    } else if (item.type === 'hydration') {
+      router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any);
+    } else {
+      setShowAllRecent(true);
+    }
+  };
+
+  const renderNextReminder = () => {
+    if (!nextReminder) {
+      return (
+        <View style={styles.nextReminderCard}>
+          <View style={styles.nextReminderIcon}>
+            <Ionicons name="checkmark-circle-outline" size={20} color="#059669" />
+          </View>
+          <View style={styles.cardBody}>
+            <Text style={styles.nextReminderLabel}>Next Reminder</Text>
+            <Text style={styles.nextReminderTitle}>You're all set for now.</Text>
+            <Text style={styles.cardMessage}>No upcoming reminders today.</Text>
+          </View>
+        </View>
+      );
+    }
+    const tone = getTone(nextReminder);
+    return (
+      <TouchableOpacity style={styles.nextReminderCard} activeOpacity={0.84} onPress={() => openReminderTarget(nextReminder)}>
+        <View style={[styles.nextReminderIcon, { backgroundColor: tone.bg, borderColor: tone.border }]}>
+          <Ionicons name={tone.icon} size={20} color={tone.color} />
+        </View>
+        <View style={styles.cardBody}>
+          <Text style={styles.nextReminderLabel}>Next Reminder</Text>
+          <Text style={styles.nextReminderTitle} numberOfLines={1}>
+            {nextReminder.type === 'medication' ? 'Medication' : nextReminder.type === 'hydration' ? 'Hydration' : 'Alert'} | {formatSafeTime(nextReminder.time)}
+          </Text>
+          <Text style={styles.cardMessage} numberOfLines={2}>{nextReminder.title} - {nextReminder.message}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color="#2563EB" />
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 8) }]}>
@@ -679,6 +854,8 @@ export default function Activity() {
           ))}
         </View>
 
+        {renderNextReminder()}
+
         {error ? (
           <View style={styles.noticeBox}>
             <Ionicons name="cloud-offline-outline" size={18} color="#B45309" />
@@ -689,8 +866,20 @@ export default function Activity() {
         <View style={styles.inboxHeader}>
           <View>
             <Text style={[styles.sectionTitle, styles.inboxTitle]}>Recent Notifications</Text>
-            <Text style={styles.sectionSubtitle}>Notification records from reminders and alerts.</Text>
+            <Text style={styles.sectionSubtitle}>
+              Showing {Math.min(displayedNotifications.length, filteredNotifications.length)} of {filteredNotifications.length} records.
+            </Text>
           </View>
+        </View>
+        <View style={styles.recentActionRow}>
+          <TouchableOpacity style={styles.smallActionButton} onPress={markAllRead} activeOpacity={0.82} disabled={filteredNotifications.length === 0}>
+            <Ionicons name="mail-open-outline" size={15} color="#2563EB" />
+            <Text style={styles.smallActionText}>Mark all read</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.smallActionButton, styles.clearRecentButton]} onPress={clearRecent} activeOpacity={0.82} disabled={filteredNotifications.length === 0}>
+            <Ionicons name="archive-outline" size={15} color="#DC2626" />
+            <Text style={[styles.smallActionText, styles.clearRecentText]}>Clear recent</Text>
+          </TouchableOpacity>
         </View>
         <View style={styles.filterRow}>
           {[
@@ -709,7 +898,7 @@ export default function Activity() {
           ))}
         </View>
 
-        {loading ? null : filteredNotifications.length === 0 ? (
+        {loading ? null : displayedNotifications.length === 0 ? (
           <View style={styles.emptyInbox}>
             <Ionicons name="notifications-off-outline" size={32} color="#94A3B8" />
             <Text style={styles.emptyTitle}>No notification records yet</Text>
@@ -728,6 +917,12 @@ export default function Activity() {
                 <Text style={styles.groupTitle}>Earlier</Text>
                 {earlierNotifications.map(renderNotificationCard)}
               </>
+            ) : null}
+            {hasMoreRecent ? (
+              <TouchableOpacity style={styles.viewAllButton} onPress={() => setShowAllRecent((value) => !value)} activeOpacity={0.82}>
+                <Text style={styles.viewAllText}>{showAllRecent ? 'Show less' : 'View all'}</Text>
+                <Ionicons name={showAllRecent ? 'chevron-up' : 'chevron-down'} size={16} color="#2563EB" />
+              </TouchableOpacity>
             ) : null}
           </>
         )}
@@ -943,6 +1138,41 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
+  nextReminderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    padding: 12,
+    marginBottom: 12,
+  },
+  nextReminderIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextReminderLabel: {
+    color: '#2563EB',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  nextReminderTitle: {
+    color: '#0F172A',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+    marginTop: 1,
+  },
   sectionTitle: {
     color: '#0F172A',
     fontSize: 15,
@@ -979,6 +1209,35 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 10,
+  },
+  recentActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  smallActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  smallActionText: {
+    color: '#2563EB',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  clearRecentButton: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  clearRecentText: {
+    color: '#DC2626',
   },
   filterChip: {
     paddingHorizontal: 12,
@@ -1115,6 +1374,24 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 7,
     textTransform: 'uppercase',
+  },
+  viewAllButton: {
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 12,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  viewAllText: {
+    color: '#2563EB',
+    fontSize: 12,
+    fontWeight: '900',
   },
   loadingBox: {
     minHeight: 92,

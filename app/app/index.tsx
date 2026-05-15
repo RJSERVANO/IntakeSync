@@ -1,15 +1,21 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'expo-router';
 import Login from './login';
+import * as api from './api';
 import CustomSplash from './components/branding/CustomSplash';
-import { getCachedSession, hasCompletedOnboarding, hasValidCachedSession } from '../services/offlineStorage';
+import {
+  clearCachedSession,
+  getCachedSession,
+  hasCompletedOnboarding,
+  hasValidCachedSession,
+  updateCachedUser,
+} from '../services/offlineStorage';
 
-type StartupState = 'checking' | 'guestSplash' | 'guestLogin' | 'cachedNeedsOnboarding' | 'redirecting';
+type StartupState = 'hydrating' | 'guestSplash' | 'guestLogin' | 'redirecting';
 
 export default function Index() {
   const router = useRouter();
-  const [startupState, setStartupState] = useState<StartupState>('checking');
+  const [startupState, setStartupState] = useState<StartupState>('hydrating');
 
   useEffect(() => {
     let mounted = true;
@@ -20,7 +26,25 @@ export default function Index() {
         if (!mounted) return;
 
         if (hasValidCachedSession(cached)) {
-          const completed = await hasCompletedOnboarding(cached.user);
+          let user = cached.user;
+          let completed = await hasCompletedOnboarding(user);
+
+          if (!completed) {
+            try {
+              const remoteUser: any = await api.get('/me', cached.token, 3500);
+              if (!mounted) return;
+              user = { ...(user || {}), ...(remoteUser || {}) };
+              await updateCachedUser(user, cached.token);
+              completed = await hasCompletedOnboarding(user);
+            } catch (err: any) {
+              if (api.isAuthError(err)) {
+                await clearCachedSession();
+                if (mounted) setStartupState('guestSplash');
+                return;
+              }
+            }
+          }
+
           if (!mounted) return;
 
           if (completed) {
@@ -29,7 +53,11 @@ export default function Index() {
             return;
           }
 
-          setStartupState('cachedNeedsOnboarding');
+          setStartupState('redirecting');
+          router.replace({
+            pathname: '/onboarding',
+            params: { token: cached.token, name: user?.name || '' },
+          } as any);
           return;
         }
 
@@ -46,43 +74,13 @@ export default function Index() {
     };
   }, [router]);
 
-  const handleFinish = useCallback(async () => {
-    try {
-      const cached = await getCachedSession();
-      if (hasValidCachedSession(cached)) {
-        router.replace({
-          pathname: '/onboarding',
-          params: { token: cached.token, name: cached.user?.name || '' },
-        } as any);
-        return;
-      }
-    } catch {
-      // Fall through to login if local startup state cannot be read.
-    }
-    setStartupState('redirecting');
-    router.replace({ pathname: '/login' } as any);
-  }, [router]);
-
-  if (startupState === 'checking' || startupState === 'redirecting') {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="small" color="#2563EB" />
-      </View>
-    );
+  if (startupState === 'hydrating' || startupState === 'redirecting') {
+    return <CustomSplash mode="logo" minimumMs={900} />;
   }
 
-  if (startupState === 'guestSplash' || startupState === 'cachedNeedsOnboarding') {
-    return <CustomSplash onFinish={handleFinish} minimumMs={5000} />;
+  if (startupState === 'guestSplash') {
+    return <CustomSplash mode="full" onFinish={() => setStartupState('guestLogin')} />;
   }
 
   return <Login />;
 }
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-});

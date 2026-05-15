@@ -20,6 +20,7 @@ import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound';
 
 type NotificationPrefs = Record<SettingKey, boolean>;
+type PermissionState = { granted: boolean; status?: string; canAskAgain?: boolean };
 
 const DEFAULT_PREFS: NotificationPrefs = {
   allowNotifications: false,
@@ -36,6 +37,7 @@ export default function NotificationSettings() {
   const [, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [permissionBlocked, setPermissionBlocked] = useState(false);
+  const [permissionState, setPermissionState] = useState<PermissionState>({ granted: false, status: 'unknown', canAskAgain: true });
   const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string; primaryText?: string; secondaryText?: string; onPrimary?: () => void } | null>(null);
 
   useEffect(() => {
@@ -49,6 +51,7 @@ export default function NotificationSettings() {
 
   const refreshPermissionState = useCallback(async () => {
     const permission = await notificationService.getPermissionStatus();
+    setPermissionState(permission);
     if (!permission.granted) {
       if (prefs.allowNotifications) {
         const next = { ...prefs, allowNotifications: false };
@@ -87,6 +90,7 @@ export default function NotificationSettings() {
       const cached = session?.user ? await readSettingsCache<any>(session.user) : null;
       const next = { ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) };
       const permission = await notificationService.getPermissionStatus();
+      setPermissionState(permission);
       const normalized = permission.granted ? next : { ...next, allowNotifications: false };
       setPrefs(normalized);
       setPermissionBlocked(!permission.granted && (permission.status === 'denied' || permission.canAskAgain === false));
@@ -121,6 +125,8 @@ export default function NotificationSettings() {
 
     if (key === 'allowNotifications' && value) {
       const granted = await notificationService.requestPermissions();
+      const permission = await notificationService.getPermissionStatus();
+      setPermissionState(permission);
       if (!granted) {
         setPermissionBlocked(true);
         setNoticeModal({
@@ -140,6 +146,8 @@ export default function NotificationSettings() {
 
     if ((key === 'hydrationReminders' || key === 'medicationReminders') && value) {
       const granted = await notificationService.requestPermissions();
+      const permission = await notificationService.getPermissionStatus();
+      setPermissionState(permission);
       if (!granted) {
         setPermissionBlocked(true);
         setNoticeModal({
@@ -171,6 +179,10 @@ export default function NotificationSettings() {
       if (key === 'hydrationReminders' && !value) await cancelHydrationNotifications();
       if (key === 'medicationReminders' && !value) await cancelAllMedicationNotifications();
       if (key === 'allowNotifications' && !next.allowNotifications) await notificationService.cancelAllNotifications();
+      if (key === 'sound' && next.allowNotifications) {
+        await notificationService.cancelAllNotifications();
+        await bootstrapNotificationSchedules();
+      }
       if (next.allowNotifications && (key === 'allowNotifications' || key === 'hydrationReminders' || key === 'medicationReminders')) {
         await bootstrapNotificationSchedules();
       }
@@ -187,11 +199,21 @@ export default function NotificationSettings() {
     <SafeAreaView style={styles.container} edges={[]}>
       <ScreenHeader title="Notifications" subtitle="Manage reminders for hydration and medication schedules." showBackButton />
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.permissionBanner}>
+          <Ionicons
+            name={permissionState.granted ? 'checkmark-circle-outline' : 'alert-circle-outline'}
+            size={20}
+            color={permissionState.granted ? '#059669' : '#B45309'}
+          />
+          <Text style={styles.permissionText} maxFontSizeMultiplier={FONT_SCALE.description}>
+            Device permission: {permissionState.granted ? 'Granted' : permissionState.status === 'denied' ? 'Denied' : 'Not granted'}
+          </Text>
+        </View>
         <View style={styles.card}>
           <SettingRow
             icon="notifications-outline"
             title="Allow Notifications"
-            description="Request device permission and allow reminder alerts."
+            description={permissionState.granted ? 'Device permission is granted and reminders can be scheduled.' : 'Request Android notification permission before scheduling reminders.'}
             value={prefs.allowNotifications}
             onValueChange={(value) => updateSetting('allowNotifications', value)}
           />
@@ -223,7 +245,7 @@ export default function NotificationSettings() {
           <SettingRow
             icon="volume-high-outline"
             title="Sound"
-            description="Use reminder sounds when supported."
+            description="Use the custom hydration and medication reminder sounds for newly scheduled reminders."
             value={prefs.allowNotifications && prefs.sound}
             disabled={reminderDisabled}
             onValueChange={(value) => updateSetting('sound', value)}
@@ -330,6 +352,24 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     marginTop: 18,
     marginBottom: 8,
+  },
+  permissionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    marginBottom: 12,
+  },
+  permissionText: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '800',
   },
   card: {
     backgroundColor: '#FFFFFF',
