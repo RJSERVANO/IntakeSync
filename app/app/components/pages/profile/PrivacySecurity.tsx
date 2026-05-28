@@ -1,24 +1,71 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Modal } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as api from '../../../api';
 import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
 import { getPasswordRules, isStrongPassword, PASSWORD_POLICY_MESSAGE } from '../../../../utils/passwordPolicy';
-import { getCachedSession } from '../../../../services/offlineStorage';
+import { clearCachedSession, clearUserScopedLocalData, getCachedSession, getCacheOwner } from '../../../../services/offlineStorage';
+import { clearSyncQueueForUser } from '../../../../services/syncQueue';
+import { clearLocalNotificationInbox, notificationService } from '../../../../services/notificationService';
+import { notificationSettings } from '../../../../services/notificationSettings';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
+
+const DATA_PRIVACY_ITEMS = [
+  {
+    id: 'self-monitoring',
+    icon: 'stats-chart-outline' as const,
+    title: 'Self-monitoring',
+    preview: 'IntakeSync helps users organize beverage intake and medication routines for personal awareness.',
+    detail: 'IntakeSync is designed as a self-monitoring tool. It helps users manually log beverage intake, organize medication schedules, receive reminders, and review routine summaries. The app is intended to support personal awareness and organization, not clinical decision-making.',
+  },
+  {
+    id: 'not-medical-advice',
+    icon: 'medical-outline' as const,
+    title: 'Not medical advice',
+    preview: 'IntakeSync does not provide diagnosis, treatment, or professional medical advice.',
+    detail: 'IntakeSync is not a substitute for a doctor, pharmacist, or other qualified healthcare professional. Medication names, dosages, schedules, reminders, and completion records depend on the information entered by the user. Users should follow professional medical instructions and consult a qualified professional for health concerns.',
+  },
+  {
+    id: 'privacy-practices',
+    icon: 'document-text-outline' as const,
+    title: 'Privacy practices',
+    preview: 'User records are handled as account-based personal tracking data.',
+    detail: 'IntakeSync stores account-based information such as beverage logs, medication schedules, reminder preferences, and routine history to provide the app tracking features. Access to user records should remain limited to the authenticated account and system functions needed for app operation.',
+  },
+  {
+    id: 'manual-accuracy',
+    icon: 'create-outline' as const,
+    title: 'Manual data accuracy',
+    preview: 'Log accuracy depends on what the user enters.',
+    detail: 'Beverage amounts, sugar and caffeine levels, medication details, and completion records are manually entered or confirmed by the user. Entries may be estimated or incomplete. Sugar and caffeine levels are general categories and should not be treated as exact nutritional or medical measurements.',
+  },
+  {
+    id: 'user-controlled',
+    icon: 'person-circle-outline' as const,
+    title: 'User-controlled data',
+    preview: 'Users can manage their account information and saved records.',
+    detail: 'Users can update profile details, manage medication schedules, clear or delete supported records, and request account/data deletion where available. Some records may be needed temporarily for synchronization, app reliability, or account-based access.',
+  },
+];
 
 export default function PrivacySecurity() {
   useFontScaleVersion();
   const { token } = useLocalSearchParams();
+  const router = useRouter();
   const [cachedToken, setCachedToken] = useState<string | undefined>();
   const authToken = (token as string | undefined) || cachedToken;
   const insets = useSafeAreaInsets();
   const [modalVisible, setModalVisible] = useState(false);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [expandedInfoId, setExpandedInfoId] = useState<string | null>(null);
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
@@ -32,6 +79,7 @@ export default function PrivacySecurity() {
       const context = await captureAuthSessionContext(session?.token, session?.user ?? null);
       if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
       setCachedToken(session?.token);
+      setCurrentUser(session?.user ?? null);
     }).catch(() => {});
   }, []);
 
@@ -87,6 +135,48 @@ export default function PrivacySecurity() {
     }
   };
 
+  const closeDeleteModal = () => {
+    if (deletingAccount) return;
+    setDeleteModalVisible(false);
+    setDeleteConfirmation('');
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmation !== 'DELETEACCOUNT' || deletingAccount) return;
+    if (!authToken) {
+      setNotice({ type: 'warning', title: 'Internet Required', message: 'Account deletion requires an internet connection.' });
+      return;
+    }
+
+    try {
+      setDeletingAccount(true);
+      const session = await getCachedSession();
+      const deleteUser = currentUser || session?.user || null;
+      const context = await captureAuthSessionContext(authToken, deleteUser);
+      if (!(await isAuthSessionContextCurrent(context))) return;
+      await api.del('/account', authToken, 12000);
+      if (!(await isAuthSessionContextCurrent(context))) return;
+
+      const owner = getCacheOwner(deleteUser);
+      await notificationService.cancelAllNotifications();
+      await clearLocalNotificationInbox(owner);
+      await clearSyncQueueForUser(deleteUser);
+      await clearUserScopedLocalData(deleteUser);
+      await notificationSettings.clearAll();
+      await clearCachedSession();
+      setDeleteModalVisible(false);
+      router.replace('/login');
+    } catch (error: any) {
+      if (api.isNetworkError(error)) {
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'Account deletion requires an internet connection.' });
+      } else {
+        setNotice({ type: 'error', title: 'Delete Failed', message: error?.data?.message || 'We could not delete the account. Please try again.' });
+      }
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScreenHeader title="Privacy & Security" subtitle="Manage account security and privacy information." showBackButton />
@@ -115,24 +205,31 @@ export default function PrivacySecurity() {
             </View>
             <Text style={styles.badge}>Coming soon</Text>
           </View>
+          <View style={styles.divider} />
+          <TouchableOpacity style={styles.settingItem} onPress={() => setDeleteModalVisible(true)}>
+            <View style={[styles.settingIcon, styles.dangerIcon]}>
+              <Ionicons name="trash-outline" size={20} color="#DC2626" />
+            </View>
+            <View style={styles.settingContent}>
+              <Text style={styles.dangerTitle}>Delete Account and All Data</Text>
+              <Text style={styles.settingDescription}>Permanently delete your account and associated IntakeSync records.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#94A3B8" />
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.sectionTitle}>Data & Privacy</Text>
-        <InfoCard
-          icon="stats-chart-outline"
-          title="Self-monitoring data"
-          text="IntakeSync stores app data used for beverage tracking, hydration goals, and medication reminders."
-        />
-        <InfoCard
-          icon="medical-outline"
-          title="Not medical advice"
-          text="IntakeSync supports personal tracking and reminders. It does not diagnose, treat, or replace professional medical advice."
-        />
-        <InfoCard
-          icon="document-text-outline"
-          title="Privacy practices"
-          text="Review Help & Support for privacy and terms information."
-        />
+        {DATA_PRIVACY_ITEMS.map((item) => (
+          <InfoCard
+            key={item.id}
+            icon={item.icon}
+            title={item.title}
+            text={item.preview}
+            detail={item.detail}
+            expanded={expandedInfoId === item.id}
+            onPress={() => setExpandedInfoId((current) => current === item.id ? null : item.id)}
+          />
+        ))}
       </ScrollView>
 
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={closeModal}>
@@ -167,6 +264,54 @@ export default function PrivacySecurity() {
           </View>
         </SafeAreaView>
       </Modal>
+      <Modal visible={deleteModalVisible} animationType="slide" transparent onRequestClose={closeDeleteModal}>
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom + 16, 28) }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <View style={styles.modalHeaderCopy}>
+                <Text style={styles.modalTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Delete Account and All Data</Text>
+                <Text style={styles.modalSubtitle} maxFontSizeMultiplier={FONT_SCALE.description}>This action cannot be undone.</Text>
+              </View>
+              <TouchableOpacity style={styles.closeButton} onPress={closeDeleteModal} disabled={deletingAccount}>
+                <Ionicons name="close" size={22} color="#475569" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.modalForm} showsVerticalScrollIndicator={false}>
+              <View style={styles.deleteWarningBox}>
+                <Ionicons name="warning-outline" size={22} color="#DC2626" />
+                <Text style={styles.deleteWarningText}>
+                  This permanently deletes the account and associated IntakeSync data, including beverage logs, medication schedules/history, notification records, profile information, local cache, and pending sync data where applicable.
+                </Text>
+              </View>
+              <Text style={styles.label} maxFontSizeMultiplier={FONT_SCALE.description}>Type DELETEACCOUNT to confirm</Text>
+              <TextInput
+                style={styles.input}
+                value={deleteConfirmation}
+                onChangeText={setDeleteConfirmation}
+                placeholder="DELETEACCOUNT"
+                placeholderTextColor="#94A3B8"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!deletingAccount}
+                maxFontSizeMultiplier={FONT_SCALE.input}
+              />
+              <View style={styles.modalActions}>
+                <TouchableOpacity style={styles.cancelButton} onPress={closeDeleteModal} disabled={deletingAccount}>
+                  <Text style={styles.cancelText} maxFontSizeMultiplier={FONT_SCALE.button}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.deleteButton, (deleteConfirmation !== 'DELETEACCOUNT' || deletingAccount) && styles.saveButtonDisabled]}
+                  onPress={handleDeleteAccount}
+                  disabled={deleteConfirmation !== 'DELETEACCOUNT' || deletingAccount}
+                >
+                  <Text style={styles.deleteButtonText} maxFontSizeMultiplier={FONT_SCALE.button}>{deletingAccount ? 'Deleting...' : 'Delete Account'}</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </SafeAreaView>
+      </Modal>
       <ThemedNoticeModal
         visible={!!notice}
         type={notice?.type || 'info'}
@@ -180,17 +325,19 @@ export default function PrivacySecurity() {
   );
 }
 
-function InfoCard({ icon, title, text }: { icon: keyof typeof Ionicons.glyphMap; title: string; text: string }) {
+function InfoCard({ icon, title, text, detail, expanded, onPress }: { icon: keyof typeof Ionicons.glyphMap; title: string; text: string; detail: string; expanded: boolean; onPress: () => void }) {
   return (
-    <View style={styles.infoCard}>
+    <TouchableOpacity style={styles.infoCard} onPress={onPress} activeOpacity={0.85}>
       <View style={styles.infoIcon}>
         <Ionicons name={icon} size={22} color="#2563EB" />
       </View>
       <View style={styles.infoContent}>
         <Text style={styles.infoTitle} maxFontSizeMultiplier={FONT_SCALE.title}>{title}</Text>
         <Text style={styles.infoText} maxFontSizeMultiplier={FONT_SCALE.description}>{text}</Text>
+        {expanded ? <Text style={styles.infoDetail} maxFontSizeMultiplier={FONT_SCALE.description}>{detail}</Text> : null}
       </View>
-    </View>
+      <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={18} color="#2563EB" />
+    </TouchableOpacity>
   );
 }
 
@@ -290,6 +437,9 @@ const styles = StyleSheet.create({
   disabledIcon: {
     backgroundColor: '#F1F5F9',
   },
+  dangerIcon: {
+    backgroundColor: '#FEF2F2',
+  },
   settingContent: {
     flex: 1,
     minWidth: 0,
@@ -304,6 +454,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     color: '#94A3B8',
+    marginBottom: 3,
+  },
+  dangerTitle: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#DC2626',
     marginBottom: 3,
   },
   settingDescription: {
@@ -351,6 +507,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: '600',
   },
+  infoDetail: {
+    fontSize: 12,
+    color: '#334155',
+    lineHeight: 18,
+    fontWeight: '600',
+    marginTop: 9,
+  },
   badge: {
     color: '#64748B',
     backgroundColor: '#F1F5F9',
@@ -391,6 +554,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 14,
     gap: 16,
+  },
+  modalHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
   },
   modalTitle: {
     fontSize: 20,
@@ -517,6 +684,36 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  deleteWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+  deleteWarningText: {
+    flex: 1,
+    color: '#7F1D1D',
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  deleteButton: {
+    flex: 1.4,
+    backgroundColor: '#DC2626',
+    paddingVertical: 13,
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  deleteButtonText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',

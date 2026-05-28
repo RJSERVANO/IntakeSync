@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
+import { Linking, View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
@@ -10,54 +10,126 @@ interface FAQItem {
   answer: string;
 }
 
+const SUPPORT_EMAIL = 'intakesyncsupport@gmail.com';
+const SUPPORT_SUBJECT = 'IntakeSync Support Request';
+const SUPPORT_BODY = [
+  'Hello IntakeSync Support,',
+  '',
+  'I need help with:',
+  '',
+  'Issue type:',
+  '[Account / Beverage Tracking / Medication Reminders / Notifications / Data & Privacy / App Bug / Other]',
+  '',
+  'Description:',
+  '[Please describe what happened.]',
+  '',
+  'Steps to reproduce:',
+  '1.',
+  '2.',
+  '3.',
+  '',
+  'Expected result:',
+  '[What did you expect to happen?]',
+  '',
+  'Device information:',
+  '- Device model:',
+  '- Android version:',
+  '- IntakeSync app version:',
+  '- Internet connection: Online / Offline',
+  '',
+  'Attached screenshots:',
+  '[Attach screenshots if available.]',
+  '',
+  'Thank you.',
+].join('\r\n');
+
 export default function HelpSupport() {
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
 
+  const openEmailSupport = async () => {
+    const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(SUPPORT_SUBJECT)}&body=${encodeURIComponent(SUPPORT_BODY)}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (!canOpen) {
+        setNotice({ title: 'Email Support', message: `Email app is unavailable. Contact IntakeSync support at ${SUPPORT_EMAIL}.` });
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      setNotice({ title: 'Email Support', message: `Email app is unavailable. Contact IntakeSync support at ${SUPPORT_EMAIL}.` });
+    }
+  };
+
   const showPrivacyPolicy = () => {
     setNotice({
       title: 'IntakeSync Privacy Policy',
-      message: 'IntakeSync is a self-monitoring app for beverage tracking, hydration goals, and medication reminder support.\n\nIt may store account/profile information and app activity needed for app features. Data is used to support functionality such as reminders, summaries, and preferences.\n\nIntakeSync does not provide medical diagnosis, treatment, or professional medical advice. Users are responsible for reviewing medication instructions from healthcare professionals.',
+      message: 'Purpose of IntakeSync\nIntakeSync is a self-monitoring app for beverage intake and medication routine organization.\n\nInformation users provide\nThe app may store account information, profile details used for personalization, beverage logs, medication names, dosage, schedules, completion records, reminder preferences, and support messages sent by the user.\n\nHow information is used\nInformation is used to display progress, schedule reminders, summarize routines, support synchronization and account access, and improve app reliability and usability.\n\nManual entry and accuracy\nUser-entered data may be inaccurate or incomplete. Sugar and caffeine levels are general categories, not exact nutritional measurements.\n\nNot medical advice\nIntakeSync does not diagnose, treat, prescribe, or replace professional medical advice.\n\nData storage and access\nAccount-based records may be stored on the device for cache/offline support and on the backend for persistent account features where applicable.\n\nNotifications\nReminders depend on Android permissions, device settings, and user schedules.\n\nUser choices\nUsers can manage records, notifications, account settings, and account/data deletion where available.\n\nContact\nintakesyncsupport@gmail.com',
     });
   };
 
   const showTerms = () => {
     setNotice({
       title: 'IntakeSync Terms of Service',
-      message: 'IntakeSync is for personal organization and self-monitoring. It does not replace professional healthcare advice.\n\nUsers should consult a qualified professional for medical concerns and are responsible for the accuracy of information they enter.\n\nReminder notifications may depend on device permissions and settings and may not always be delivered. Use of the app means accepting these limitations.',
+      message: 'Acceptance of terms\nUsing IntakeSync means using it within these terms and app limitations.\n\nPurpose of the app\nIntakeSync supports personal beverage logging, medication schedule organization, reminders, and routine summaries.\n\nUser responsibilities\nUsers are responsible for entering accurate information, verifying medication schedules with a qualified professional or reliable source, and keeping account credentials secure.\n\nNot medical advice\nIntakeSync does not provide diagnosis, treatment, emergency support, prescriptions, or professional medical advice.\n\nApp limitations\nManual entries may be estimated or inaccurate. Notifications depend on Android permissions, device settings, app settings, battery behavior, and schedules entered by the user. Offline mode and syncing may be delayed. The current version does not use external sensors or medical devices.\n\nProhibited use\nDo not misuse the app, tamper with it, use another user account, record alcoholic beverages, record or manage illegal/recreational/controlled-substance use, or bypass unsupported alcohol or drug entry restrictions.\n\nUnsupported substances\nIntakeSync currently excludes alcoholic beverages from beverage tracking and does not support illegal, recreational, or controlled-substance entries in Medication.\n\nAccount deletion\nDeletion may remove account data and cannot be undone.\n\nChanges and availability\nThe app may be updated and features may change.\n\nContact\nintakesyncsupport@gmail.com',
     });
   };
 
   const faqItems: FAQItem[] = [
     {
       id: '1',
-      question: 'How do I add medications?',
-      answer: 'Open the Medication tab and add the medicine details and reminder schedule you want to track.',
+      question: 'What is IntakeSync?',
+      answer: 'IntakeSync is a self-monitoring app that helps users log beverage intake, organize medication schedules, receive reminders, and review routine summaries.',
     },
     {
       id: '2',
-      question: 'How do I track beverages?',
-      answer: 'Open the Beverage tab, choose a beverage type, and log the amount you drank.',
+      question: 'Is IntakeSync a medical app?',
+      answer: 'IntakeSync supports personal tracking and organization only. It does not provide diagnosis, treatment, prescriptions, or professional medical advice.',
     },
     {
       id: '3',
-      question: 'How is my hydration goal shown?',
-      answer: 'Your hydration goal appears in hydration-related screens and can be adjusted from your profile information when supported.',
+      question: 'Can IntakeSync tell me the exact sugar or caffeine amount?',
+      answer: 'No. Sugar and caffeine levels are general categories such as none, low, medium, or high. They are not exact nutritional measurements.',
     },
     {
       id: '4',
-      question: 'How do notifications work?',
-      answer: 'Open Profile > Notifications to allow notifications and choose which reminder preferences to keep on. Reminder delivery depends on device permission and the existing reminder setup.',
+      question: 'Why did I not receive a reminder?',
+      answer: 'Reminders depend on Android notification permission, device settings, battery restrictions, app settings, and the schedule entered by the user.',
     },
     {
       id: '5',
-      question: 'How do I edit my profile?',
-      answer: 'Open Profile > Personal Information, then tap the edit icon to update account and hydration profile details.',
+      question: 'Can I use IntakeSync offline?',
+      answer: 'Some data can be cached and recorded offline. Changes may sync when an internet connection becomes available.',
     },
     {
       id: '6',
-      question: 'How do I change my password?',
-      answer: 'Open Profile > Privacy & Security and choose Change Password.',
+      question: 'Why does my data look delayed?',
+      answer: 'The app may show saved local data first while syncing newer updates in the background.',
+    },
+    {
+      id: '7',
+      question: 'Can I delete my account and data?',
+      answer: 'Yes, if the Delete Account and All Data option is available. The app requires confirmation by typing DELETEACCOUNT because deletion cannot be undone.',
+    },
+    {
+      id: '8',
+      question: 'How do I contact support?',
+      answer: 'You can contact IntakeSync support at intakesyncsupport@gmail.com.',
+    },
+    {
+      id: '9',
+      question: 'Are alcoholic drinks supported?',
+      answer: 'No. IntakeSync currently excludes alcoholic beverages from beverage tracking.',
+    },
+    {
+      id: '10',
+      question: 'Are illegal, recreational, or controlled-substance entries supported in Medication?',
+      answer: 'No. IntakeSync is intended for medication schedule organization only and does not support illegal, recreational, or controlled-substance entries.',
+    },
+    {
+      id: '11',
+      question: 'Can IntakeSync connect to sensors or medical devices?',
+      answer: 'No. The current version does not collect data from external sensors or medical devices.',
     },
   ];
 
@@ -65,9 +137,9 @@ export default function HelpSupport() {
     {
       id: '1',
       title: 'Email Support',
-      description: 'support@intakesync.local',
+      description: SUPPORT_EMAIL,
       icon: 'mail-outline',
-      action: () => setNotice({ title: 'Email Support', message: 'Email support is not available yet.' }),
+      action: openEmailSupport,
     },
     {
       id: '2',

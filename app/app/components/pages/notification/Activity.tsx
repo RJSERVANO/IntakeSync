@@ -170,7 +170,7 @@ const activityDate = (item: NotificationItem) => item.scheduled_at || item.sched
 const dedupeNotifications = (items: NotificationItem[]) => {
   const byKey = new Map<string, NotificationItem>();
   items.forEach((item) => {
-    const key = String(item.id || `${item.type}:${item.title}:${activityDate(item)}`);
+    const key = getNotificationIdentity(item);
     const existing = byKey.get(key);
     if (!existing || getSafeTime(activityDate(item)) > getSafeTime(activityDate(existing))) {
       byKey.set(key, item);
@@ -194,14 +194,24 @@ const medicationHistoryCompositeKey = (entry: any) => [
 const getReminderKey = (item: ReminderItem) => `${item.type}:${item.id || item.title}:${formatSafeTime(item.time)}`;
 
 const getNotificationIdentity = (item: NotificationItem) => String(
-  item.metadata?.scheduleKey ||
-  item.metadata?.schedule_key ||
-  item.metadata?.doseKey ||
-  item.metadata?.dose_key ||
-  item.metadata?.notificationId ||
-  item.metadata?.notification_id ||
-  item.id ||
-  `${item.type}:${item.title}:${activityDate(item)}`
+  item.type === 'hydration' && item.metadata?.source === 'hydration_log'
+    ? (
+      item.metadata?.local_id
+        ? `hydration-log:${item.metadata.local_id}`
+        : item.metadata?.client_uuid
+          ? `hydration-log:${item.metadata.client_uuid}`
+          : item.metadata?.server_id || item.metadata?.hydration_log_id
+            ? `hydration-log:server:${item.metadata.server_id || item.metadata.hydration_log_id}`
+            : `hydration-log:fallback:${item.metadata?.timestamp || activityDate(item)}:${item.metadata?.amount_ml || item.metadata?.amount || ''}:${String(item.metadata?.drink_label || item.title || '').trim().toLowerCase()}`
+    )
+    : item.metadata?.scheduleKey ||
+      item.metadata?.schedule_key ||
+      item.metadata?.doseKey ||
+      item.metadata?.dose_key ||
+      item.metadata?.notificationId ||
+      item.metadata?.notification_id ||
+      item.id ||
+      `${item.type}:${item.title}:${activityDate(item)}`
 );
 
 const mergeNotificationRecords = (items: NotificationItem[]) => {
@@ -581,7 +591,14 @@ export default function Activity() {
             local_activity: true,
             source: 'hydration_log',
             local_id: entry?.local_id || entry?.id,
+            client_uuid: entry?.client_uuid || entry?.local_id,
+            server_id: entry?.server_id || (entry?.id && !String(entry.id).startsWith('bev_') ? entry.id : null),
+            hydration_log_id: entry?.id || entry?.server_id,
             hydrationSlotKey: `hydration:${getLocalHourKey(when)}`,
+            amount_ml: Number(entry?.amount_ml || entry?.logged_ml || 0),
+            drink_label: entry?.drink_label || null,
+            beverage_type: entry?.beverage_type || null,
+            timestamp: when,
           },
         };
       });

@@ -21,6 +21,7 @@ import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 type SettingKey = 'allowNotifications' | 'medicationReminders' | 'hydrationReminders' | 'sound';
 
 type NotificationPrefs = Record<SettingKey, boolean>;
+type ManualOffPrefs = Partial<Record<Exclude<SettingKey, 'allowNotifications'>, boolean>>;
 type PermissionState = { granted: boolean; status?: string; canAskAgain?: boolean };
 
 const DEFAULT_PREFS: NotificationPrefs = {
@@ -39,16 +40,36 @@ export default function NotificationSettings() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [permissionBlocked, setPermissionBlocked] = useState(false);
   const [permissionState, setPermissionState] = useState<PermissionState>({ granted: false, status: 'unknown', canAskAgain: true });
+  const [manualOffPrefs, setManualOffPrefs] = useState<ManualOffPrefs>({});
   const [noticeModal, setNoticeModal] = useState<{ type: ThemedNoticeType; title: string; message: string; primaryText?: string; secondaryText?: string; onPrimary?: () => void } | null>(null);
 
   useEffect(() => {
     loadSettings();
   }, []);
 
-  const persist = useCallback(async (next: NotificationPrefs) => {
+  const persist = useCallback(async (next: NotificationPrefs, nextManualOff = manualOffPrefs) => {
     const existing = currentUser ? await readSettingsCache<any>(currentUser) : null;
-    await writeSettingsCache({ ...(existing || {}), notificationPreferences: next }, currentUser);
-  }, [currentUser]);
+    await writeSettingsCache({ ...(existing || {}), notificationPreferences: next, notificationPreferencesManualOff: nextManualOff }, currentUser);
+  }, [currentUser, manualOffPrefs]);
+
+  const normalizeWithPermission = useCallback((base: NotificationPrefs, permission: PermissionState, manualOff: ManualOffPrefs) => {
+    if (!permission.granted) return { ...base, allowNotifications: false };
+    return {
+      ...base,
+      allowNotifications: true,
+      medicationReminders: manualOff.medicationReminders ? false : true,
+      hydrationReminders: manualOff.hydrationReminders ? false : true,
+      sound: manualOff.sound ? false : true,
+    };
+  }, []);
+
+  const syncNotificationSettingsService = useCallback(async (next: NotificationPrefs) => {
+    await notificationSettings.initialize();
+    await notificationSettings.setMasterToggle(next.allowNotifications);
+    await notificationSettings.setSoundEnabled(next.sound);
+    await notificationSettings.updateCategoryWithBackend('hydration', next.hydrationReminders);
+    await notificationSettings.updateCategoryWithBackend('medications', next.medicationReminders);
+  }, []);
 
   const refreshPermissionState = useCallback(async () => {
     const permission = await notificationService.getPermissionStatus();
@@ -65,17 +86,15 @@ export default function NotificationSettings() {
       return;
     }
 
-    if (permissionBlocked) {
-      const next = { ...prefs, allowNotifications: true };
+    if (permission.granted) {
+      const next = normalizeWithPermission(prefs, permission, manualOffPrefs);
       setPrefs(next);
       setPermissionBlocked(false);
       await persist(next);
-      await notificationSettings.initialize();
-      await notificationSettings.setMasterToggle(true);
-    } else {
-      setPermissionBlocked(false);
+      await syncNotificationSettingsService(next);
+      await validateScheduledNotificationRefs();
     }
-  }, [permissionBlocked, persist, prefs]);
+  }, [manualOffPrefs, normalizeWithPermission, persist, prefs, syncNotificationSettingsService]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
@@ -91,18 +110,24 @@ export default function NotificationSettings() {
       if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
       setCurrentUser(session?.user ?? null);
       const cached = session?.user ? await readSettingsCache<any>(session.user) : null;
-      const next = { ...DEFAULT_PREFS, ...(cached?.notificationPreferences || cached || {}) };
+      const storedPrefs = cached?.notificationPreferences || cached || {};
+      const next = { ...DEFAULT_PREFS, ...storedPrefs };
+      const nextManualOff: ManualOffPrefs = cached?.notificationPreferencesManualOff || {
+        medicationReminders: storedPrefs.medicationReminders === false,
+        hydrationReminders: storedPrefs.hydrationReminders === false,
+        sound: storedPrefs.sound === false,
+      };
+      setManualOffPrefs(nextManualOff);
       const permission = await notificationService.getPermissionStatus();
       if (session?.token && !(await isAuthSessionContextCurrent(context))) return;
       setPermissionState(permission);
-      const normalized = permission.granted ? next : { ...next, allowNotifications: false };
+      const normalized = normalizeWithPermission(next, permission, nextManualOff);
       setPrefs(normalized);
       setPermissionBlocked(!permission.granted && (permission.status === 'denied' || permission.canAskAgain === false));
       if (permission.granted) await validateScheduledNotificationRefs();
-      if (normalized.allowNotifications !== next.allowNotifications) {
-        await writeSettingsCache({ ...(cached || {}), notificationPreferences: normalized }, session?.user ?? null);
-        await notificationSettings.initialize();
-        await notificationSettings.setMasterToggle(false);
+      if (JSON.stringify(normalized) !== JSON.stringify(next)) {
+        await writeSettingsCache({ ...(cached || {}), notificationPreferences: normalized, notificationPreferencesManualOff: nextManualOff }, session?.user ?? null);
+        await syncNotificationSettingsService(normalized);
       }
     } catch (error) {
       console.log('Notification settings load error:', error);
@@ -172,9 +197,19 @@ export default function NotificationSettings() {
       next = { ...next, allowNotifications: false };
     }
 
+    let nextManualOff = { ...manualOffPrefs };
+    if (key === 'hydrationReminders' || key === 'medicationReminders' || key === 'sound') {
+      if (value) {
+        delete nextManualOff[key];
+      } else {
+        nextManualOff[key] = true;
+      }
+    }
+
     setPrefs(next);
+    setManualOffPrefs(nextManualOff);
     try {
-      await persist(next);
+      await persist(next, nextManualOff);
       await notificationSettings.initialize();
       if (key === 'allowNotifications') await notificationSettings.setMasterToggle(next.allowNotifications);
       if (key === 'sound') await notificationSettings.setSoundEnabled(next.sound);
@@ -193,6 +228,7 @@ export default function NotificationSettings() {
     } catch (error) {
       console.log('Notification settings save error:', error);
       setPrefs(previous);
+      setManualOffPrefs(manualOffPrefs);
       setNoticeModal({ type: 'error', title: 'Could Not Save', message: 'Your notification preference was not saved. Please try again.' });
     }
   };
@@ -244,11 +280,11 @@ export default function NotificationSettings() {
           />
         </View>
 
-        <Text style={styles.sectionTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Alert Style</Text>
+        <Text style={styles.sectionTitle} maxFontSizeMultiplier={FONT_SCALE.title}>Alerts</Text>
         <View style={styles.card}>
           <SettingRow
             icon="volume-high-outline"
-            title="Sound"
+            title="Alert Sounds"
             description="Use the custom hydration and medication reminder sounds for newly scheduled reminders."
             value={prefs.allowNotifications && prefs.sound}
             disabled={reminderDisabled}

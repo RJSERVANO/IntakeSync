@@ -3,6 +3,9 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal,
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -103,9 +106,86 @@ const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 const MISSED_DOSE_GRACE_MS = 30 * 60 * 1000;
+const EXPORT_MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+const UNSUPPORTED_MEDICATION_TERMS = [
+  'cocaine',
+  'shabu',
+  'meth',
+  'methamphetamine',
+  'crystal meth',
+  'marijuana',
+  'cannabis',
+  'weed',
+  'ecstasy',
+  'mdma',
+  'lsd',
+  'acid',
+  'heroin',
+  'opium',
+  'magic mushroom',
+  'psilocybin',
+  'party drug',
+  'illegal drug',
+  'recreational drug',
+  'droga',
+  'ipinagbabawal na gamot',
+  'fentanyl',
+  'ketamine',
+];
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
+}
+
+function normalizeUnsupportedMedicationText(text: string) {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function hasUnsupportedMedicationTerm(normalized: string, compact: string, term: string) {
+  const normalizedTerm = normalizeUnsupportedMedicationText(term);
+  const compactTerm = normalizedTerm.replace(/\s+/g, '');
+  const phrasePattern = new RegExp(`(^|\\s)${normalizedTerm.replace(/\s+/g, '\\s+')}(\\s|$)`);
+  return phrasePattern.test(normalized) || (compactTerm.length > 2 && compact.includes(compactTerm));
+}
+
+export function isUnsupportedMedicationText(text: string): boolean {
+  const normalized = normalizeUnsupportedMedicationText(text);
+  if (!normalized) return false;
+  const compact = normalized.replace(/\s+/g, '');
+  return UNSUPPORTED_MEDICATION_TERMS.some((term) => hasUnsupportedMedicationTerm(normalized, compact, term));
+}
+
+function escapeCsvField(value: any) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function escapeHtml(value: any) {
+  return (value === null || value === undefined ? '' : String(value))
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function todayDateString() {
@@ -513,6 +593,9 @@ export default function Medication() {
   const [clearedHistoryKeys, setClearedHistoryKeys] = useState<string[]>([]);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [exportModalVisible, setExportModalVisible] = useState(false);
+  const [pdfMonthModalVisible, setPdfMonthModalVisible] = useState(false);
+  const [selectedPdfMonth, setSelectedPdfMonth] = useState(new Date().getMonth());
+  const [selectedPdfYear, setSelectedPdfYear] = useState(new Date().getFullYear());
   const [statsModalType, setStatsModalType] = useState<'total' | 'active' | 'today' | 'missed' | null>(null);
   const [busyActions, setBusyActions] = useState<Record<string, boolean>>({});
   const [headerElevated, setHeaderElevated] = useState(false);
@@ -528,7 +611,10 @@ export default function Medication() {
     onPrimary?: () => void | Promise<void>;
   } | null>(null);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
+  const [cacheHydrating, setCacheHydrating] = useState(false);
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [queueSyncing, setQueueSyncing] = useState(false);
+  const [hasPendingOfflineChanges, setHasPendingOfflineChanges] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
   const [medicationCacheLoaded, setMedicationCacheLoaded] = useState(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -576,6 +662,7 @@ export default function Medication() {
   const [timeModalVisible, setTimeModalVisible] = useState(false);
   const MODAL_ANIM = useRef(new Animated.Value(0)).current;
   const handledRoutePrefillKeyRef = useRef<string | null>(null);
+  const activeSyncing = backgroundRefreshing || queueSyncing;
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 30000);
@@ -626,8 +713,9 @@ export default function Medication() {
           const context = await captureAuthSessionContext(token as string);
           if (!(await isAuthSessionContextCurrent(context))) return;
           const pendingActions = (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION'));
+          setHasPendingOfflineChanges(pendingActions.length > 0);
           if (pendingActions.length === 0) return;
-          setSyncing(true);
+          setQueueSyncing(true);
           try {
             await processSyncQueue(token as string, async (item) => {
               if (!(await isAuthSessionContextCurrent(context))) return;
@@ -635,8 +723,10 @@ export default function Medication() {
                 await reloadAllData();
               }
             }).catch(() => {});
+            const remaining = (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION'));
+            setHasPendingOfflineChanges(remaining.length > 0);
           } finally {
-            if (await isAuthSessionContextCurrent(context)) setSyncing(false);
+            if (await isAuthSessionContextCurrent(context)) setQueueSyncing(false);
           }
         })();
       }
@@ -762,6 +852,7 @@ export default function Medication() {
     let mounted = true;
     (async () => {
       hydratingMedicationCacheRef.current = true;
+      setCacheHydrating(true);
       try {
         const session = await getCachedSession();
         const context = await captureAuthSessionContext((token as string | undefined) || session?.token, session?.user ?? null);
@@ -775,6 +866,7 @@ export default function Medication() {
         const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
         const localHistory: HistoryEntry[] = sessionUser ? (await readMedicationHistoryCache<HistoryEntry[]>(sessionUser)) || [] : [];
         const pendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
+        setHasPendingOfflineChanges(pendingActions.length > 0);
         const deletedKeys = new Set(sessionUser ? await readDeletedMedicationTombstones(sessionUser) : []);
         pendingActions
           .filter((item) => item.action_type === 'DELETE_MEDICATION')
@@ -788,6 +880,7 @@ export default function Medication() {
         setLoading(false);
 
         hydratingMedicationCacheRef.current = false;
+        setCacheHydrating(false);
 
         if (!token) {
           setOfflineMode(true);
@@ -798,7 +891,7 @@ export default function Medication() {
           return;
         }
 
-        setSyncing(true);
+        setBackgroundRefreshing(true);
 
         if (token) {
           // load from backend
@@ -873,6 +966,7 @@ export default function Medication() {
         }
       } catch (err) {
         hydratingMedicationCacheRef.current = false;
+        setCacheHydrating(false);
         if (api.isStaleSessionError(err)) return;
         if (api.isAuthError(err)) {
           const context = await captureAuthSessionContext(token as string | undefined);
@@ -888,14 +982,17 @@ export default function Medication() {
       } finally {
         if (mounted) {
           setLoading(false);
-          setSyncing(false);
+          setCacheHydrating(false);
+          setBackgroundRefreshing(false);
         }
       }
     })();
     return () => {
       mounted = false;
       hydratingMedicationCacheRef.current = false;
-      setSyncing(false);
+      setCacheHydrating(false);
+      setBackgroundRefreshing(false);
+      setQueueSyncing(false);
     };
   // Cache hydration must be keyed to owner/token changes; cache writes are guarded by refs to avoid startup wipes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1069,6 +1166,18 @@ export default function Medication() {
   async function saveMedication() {
     if (!name.trim()) return showNotice('warning', 'Validation', 'Please enter a name');
     if (!times.length) return showNotice('warning', 'Validation', 'Please add at least one reminder time');
+    const identityValuesToCheck = [
+      name,
+      selectedOtcMedicine?.generic_name,
+      selectedOtcMedicine?.brand,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (identityValuesToCheck.some(isUnsupportedMedicationText)) {
+      return showNotice(
+        'warning',
+        'Unsupported medication entry',
+        'IntakeSync is for medication schedule organization only. Illegal, recreational, or controlled-substance entries are not supported.'
+      );
+    }
     const originalStart = editing?.start_date ? toDateStringLocal(parseDateStringLocal(editing.start_date)) : '';
     const startChanged = !editing || (startDate || todayDateString()) !== originalStart;
     if (startChanged && parseDateStringLocal(startDate || todayDateString()).getTime() < parseDateStringLocal(todayDateString()).getTime()) {
@@ -1261,6 +1370,7 @@ export default function Medication() {
 
   function showInlineNotice(message: string) {
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    if (message === 'Will sync later') setHasPendingOfflineChanges(true);
     setInlineNotice(message);
     noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2400);
   }
@@ -2450,28 +2560,202 @@ export default function Medication() {
   }
 
   async function handleExport() {
-    if (!token) return;
     setExportModalVisible(true);
   }
 
-  async function runExport(format: 'csv' | 'pdf') {
-    if (!token || exporting) return;
+  function getExportRows(sourceHistory = getValidHistoryEntries()) {
+    return dedupeMedicationHistory(sourceHistory).map((entry) => {
+      const med = meds.find((item) => getMedicationIdentityValues(item).includes(String(entry.medId)) || item.id === entry.medId);
+      const scheduled = new Date(entry.time);
+      const actionTime = getHistoryLoggedAt(entry);
+      return {
+        medicationName: entry.medicationName || med?.name || (entry.medicationDeleted ? 'Deleted medication' : 'Medication'),
+        dosage: entry.dosage || med?.dosage || '',
+        scheduleTime: Number.isNaN(scheduled.getTime()) ? '' : scheduled.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }),
+        scheduledDateTime: Number.isNaN(scheduled.getTime()) ? '' : scheduled.toLocaleString(),
+        status: entry.status || '',
+        actionTime: actionTime ? new Date(actionTime).toLocaleString() : '',
+        date: Number.isNaN(scheduled.getTime()) ? '' : toDateStringLocal(scheduled),
+        notes: med?.notes || '',
+        rawTime: entry.time,
+      };
+    });
+  }
+
+  function getAvailableExportYears() {
+    const currentYear = new Date().getFullYear();
+    const years = new Set<number>([currentYear]);
+    history.forEach((entry) => {
+      const date = new Date(entry.time);
+      if (!Number.isNaN(date.getTime())) years.add(date.getFullYear());
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }
+
+  function selectedMonthHistory(month: number, year: number) {
+    return getValidHistoryEntries().filter((entry) => {
+      const date = new Date(entry.time);
+      return !Number.isNaN(date.getTime()) && date.getMonth() === month && date.getFullYear() === year;
+    });
+  }
+
+  async function shareExportFile(uri: string, mimeType: string, dialogTitle: string) {
+    const available = await Sharing.isAvailableAsync();
+    if (!available) {
+      showNotice('warning', 'Sharing unavailable', 'File created, but sharing is not available on this device.');
+      return;
+    }
+    await Sharing.shareAsync(uri, { mimeType, dialogTitle });
+  }
+
+  function showExportSuccess() {
+    if (offlineMode || hasPendingOfflineChanges) {
+      showNotice('success', 'Export ready', 'Based on local records. Some data may be pending sync.', 'Done');
+      return;
+    }
+    showNotice('success', 'Export ready', 'Your medication export is ready to share.', 'Done');
+  }
+
+  async function runCsvExport() {
     try {
       setExporting(true);
-      await api.get(`/medications/export/${format}`, token as string, 20000);
+      const rows = getExportRows();
+      if (rows.length === 0) {
+        showNotice('warning', 'No medication logs', 'No medication logs found to export.');
+        return;
+      }
+      const headers = ['Medication Name', 'Dosage', 'Schedule Time', 'Status', 'Taken/Missed/Snoozed Time', 'Date', 'Notes'];
+      const csv = [
+        headers.map(escapeCsvField).join(','),
+        ...rows.map((row) => [
+          row.medicationName,
+          row.dosage,
+          row.scheduleTime,
+          row.status,
+          row.actionTime,
+          row.date,
+          row.notes,
+        ].map(escapeCsvField).join(',')),
+      ].join('\r\n');
+      const fileName = `IntakeSync_Medication_Logs_${toDateStringLocal(new Date())}.csv`;
+      const exportDirectory = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
+      const uri = `${exportDirectory}${fileName}`;
+      await FileSystem.writeAsStringAsync(uri, csv, { encoding: FileSystem.EncodingType.UTF8 });
       setExportModalVisible(false);
-      showNotice('success', 'Export ready', `${format.toUpperCase()} export generated. Use web download to save a file.`, 'Done');
+      await shareExportFile(uri, 'text/csv', 'Share medication CSV');
+      showExportSuccess();
     } catch (err: any) {
       console.log('Export error:', err);
-      if (err?.status === 408) {
-        showNotice('warning', 'Export Timeout', 'The export took too long. Please check your connection and try again.');
-      } else {
-        const message = err?.data?.message || err?.message || `Failed to export ${format.toUpperCase()} medication history.`;
-        showNotice('error', 'Export Failed', message);
-      }
+      const message = err?.data?.message || err?.message || 'Failed to export CSV medication history.';
+      showNotice('error', 'Export Failed', message);
     } finally {
       setExporting(false);
     }
+  }
+
+  async function runPdfExport(month = selectedPdfMonth, year = selectedPdfYear) {
+    try {
+      setExporting(true);
+      const monthHistory = selectedMonthHistory(month, year);
+      if (monthHistory.length === 0) {
+        showNotice('warning', 'No medication logs', 'No medication logs found for the selected month.');
+        return;
+      }
+      const rows = getExportRows(monthHistory);
+      const takenCount = rows.filter((row) => row.status === 'completed').length;
+      const missedCount = rows.filter((row) => row.status === 'missed' || row.status === 'skipped').length;
+      const snoozedCount = rows.filter((row) => row.status === 'snoozed').length;
+      const totalScheduled = rows.length;
+      const adherence = totalScheduled > 0 ? Math.round((takenCount / totalScheduled) * 100) : 0;
+      const userLabel = currentUser?.name || currentUser?.email || 'Current IntakeSync user';
+      const generatedAt = new Date().toLocaleString();
+      const selectedMonthLabel = `${EXPORT_MONTHS[month]} ${year}`;
+      const html = `
+        <!doctype html>
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <style>
+              body { font-family: Arial, sans-serif; color: #0f172a; padding: 24px; }
+              h1 { font-size: 22px; margin: 0 0 8px; }
+              .meta { color: #475569; font-size: 12px; margin-bottom: 18px; line-height: 1.5; }
+              .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+              .box { border: 1px solid #dbeafe; background: #eff6ff; border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+              table { width: 100%; border-collapse: collapse; font-size: 11px; }
+              th { text-align: left; background: #f1f5f9; border: 1px solid #cbd5e1; padding: 7px; }
+              td { border: 1px solid #e2e8f0; padding: 7px; vertical-align: top; }
+            </style>
+          </head>
+          <body>
+            <h1>IntakeSync Medication Report</h1>
+            <div class="meta">
+              User: ${escapeHtml(userLabel)}<br />
+              Selected month: ${escapeHtml(selectedMonthLabel)}<br />
+              Generated date: ${escapeHtml(generatedAt)}
+            </div>
+            <div class="summary">
+              <div class="box">Total scheduled doses: ${totalScheduled}</div>
+              <div class="box">Taken: ${takenCount}</div>
+              <div class="box">Missed: ${missedCount}</div>
+              <div class="box">Snoozed: ${snoozedCount}</div>
+              <div class="box">Adherence: ${adherence}%</div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Medication name</th>
+                  <th>Dosage</th>
+                  <th>Scheduled date/time</th>
+                  <th>Status</th>
+                  <th>Action time</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr>
+                    <td>${escapeHtml(row.medicationName)}</td>
+                    <td>${escapeHtml(row.dosage)}</td>
+                    <td>${escapeHtml(row.scheduledDateTime)}</td>
+                    <td>${escapeHtml(row.status)}</td>
+                    <td>${escapeHtml(row.actionTime)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </body>
+        </html>
+      `;
+      const printed = await Print.printToFileAsync({ html });
+      const fileName = `IntakeSync_Medication_Report_${year}_${String(month + 1).padStart(2, '0')}.pdf`;
+      const exportDirectory = FileSystem.cacheDirectory || FileSystem.documentDirectory || '';
+      const targetUri = `${exportDirectory}${fileName}`;
+      await FileSystem.copyAsync({ from: printed.uri, to: targetUri });
+      setPdfMonthModalVisible(false);
+      setExportModalVisible(false);
+      await shareExportFile(targetUri, 'application/pdf', 'Share medication PDF');
+      showExportSuccess();
+    } catch (err: any) {
+      console.log('PDF export error:', err);
+      const message = err?.data?.message || err?.message || 'Failed to export PDF medication history.';
+      showNotice('error', 'Export Failed', message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function runExport(format: 'csv' | 'pdf') {
+    if (exporting) return;
+    if (format === 'pdf') {
+      const newest = dedupeMedicationHistory(getValidHistoryEntries())[0];
+      const baseDate = newest?.time ? new Date(newest.time) : new Date();
+      const safeDate = Number.isNaN(baseDate.getTime()) ? new Date() : baseDate;
+      setSelectedPdfMonth(safeDate.getMonth());
+      setSelectedPdfYear(safeDate.getFullYear());
+      setExportModalVisible(false);
+      setPdfMonthModalVisible(true);
+      return;
+    }
+    void runCsvExport();
   }
 
   function formatTimeUntilNext(nextTime: string) {
@@ -2517,13 +2801,18 @@ export default function Medication() {
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <InlineSyncNotice
-        visible={syncing && !inlineNotice && !modalVisible && !deleteTarget && !noticeModal}
+        visible={activeSyncing && !inlineNotice && !offlineMode && !modalVisible && !deleteTarget && !noticeModal}
         message="Syncing..."
         top={Math.max(insets.top, 8) + 54}
       />
       <InlineNotice
         visible={Boolean(inlineNotice) && !modalVisible && !deleteTarget && !noticeModal}
         message={inlineNotice || ''}
+        top={Math.max(insets.top, 8) + 54}
+      />
+      <InlineNotice
+        visible={!cacheHydrating && !inlineNotice && !offlineMode && !activeSyncing && hasPendingOfflineChanges && !modalVisible && !deleteTarget && !noticeModal}
+        message="Pending changes will sync later"
         top={Math.max(insets.top, 8) + 54}
       />
       <Animated.ScrollView
@@ -3524,6 +3813,54 @@ export default function Medication() {
         </View>
       </Modal>
 
+      {/* PDF Month Modal */}
+      <Modal visible={pdfMonthModalVisible} transparent animationType="fade" onRequestClose={() => !exporting && setPdfMonthModalVisible(false)}>
+        <View style={styles.sheetWrapper}>
+          <TouchableWithoutFeedback onPress={() => !exporting && setPdfMonthModalVisible(false)}>
+            <View style={styles.sheetBackdrop} />
+          </TouchableWithoutFeedback>
+          <View style={styles.sheetContent}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Medication PDF Month</Text>
+            <Text style={styles.sheetSubtitle}>Choose the month and year to include in the report.</Text>
+            <Text style={styles.pickerSectionTitle}>Month</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.exportPickerRow}>
+              {EXPORT_MONTHS.map((month, index) => (
+                <TouchableOpacity
+                  key={month}
+                  style={[styles.exportPickerChip, selectedPdfMonth === index && styles.exportPickerChipActive]}
+                  onPress={() => setSelectedPdfMonth(index)}
+                  disabled={exporting}
+                >
+                  <Text style={[styles.exportPickerChipText, selectedPdfMonth === index && styles.exportPickerChipTextActive]}>{month}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <Text style={styles.pickerSectionTitle}>Year</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.exportPickerRow}>
+              {getAvailableExportYears().map((year) => (
+                <TouchableOpacity
+                  key={year}
+                  style={[styles.exportPickerChip, selectedPdfYear === year && styles.exportPickerChipActive]}
+                  onPress={() => setSelectedPdfYear(year)}
+                  disabled={exporting}
+                >
+                  <Text style={[styles.exportPickerChipText, selectedPdfYear === year && styles.exportPickerChipTextActive]}>{year}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.exportModalActions}>
+              <TouchableOpacity style={styles.exportModalCancelButton} onPress={() => setPdfMonthModalVisible(false)} disabled={exporting}>
+                <Text style={styles.exportModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.exportModalGenerateButton, exporting && styles.exportOptionDisabled]} onPress={() => runPdfExport()} disabled={exporting}>
+                {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.exportModalGenerateText}>Generate</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Stats Detail Modal */}
       <Modal visible={!!statsModalType} transparent animationType="fade" onRequestClose={() => setStatsModalType(null)}>
         <View style={styles.sheetWrapper}>
@@ -4074,6 +4411,17 @@ const styles = StyleSheet.create({
   exportOptionTextWrap: { flex: 1 },
   exportOptionTitle: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
   exportOptionSubtitle: { fontSize: 11, fontWeight: '700', color: '#64748B', marginTop: 2 },
+  pickerSectionTitle: { color: '#475569', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginTop: 10, marginBottom: 8 },
+  exportPickerRow: { gap: 8, paddingBottom: 4 },
+  exportPickerChip: { minHeight: 36, borderRadius: 12, borderWidth: 1, borderColor: '#DBEAFE', backgroundColor: '#FFFFFF', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  exportPickerChipActive: { backgroundColor: '#2563EB', borderColor: '#2563EB' },
+  exportPickerChipText: { color: '#1E3A8A', fontSize: 12, fontWeight: '900' },
+  exportPickerChipTextActive: { color: '#FFFFFF' },
+  exportModalActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  exportModalCancelButton: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  exportModalCancelText: { color: '#334155', fontWeight: '900' },
+  exportModalGenerateButton: { flex: 1, minHeight: 44, borderRadius: 12, backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center' },
+  exportModalGenerateText: { color: '#FFFFFF', fontWeight: '900' },
   statsDetailList: { maxHeight: 280 },
   statsDetailItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
   statsDetailIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 10 },

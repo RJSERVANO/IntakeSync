@@ -114,7 +114,8 @@ class AuthController extends Controller
     public function google(Request $request)
     {
         $data = $request->validate([
-            'id_token' => 'required|string',
+            'id_token' => 'nullable|required_without:access_token|string',
+            'access_token' => 'nullable|required_without:id_token|string',
         ]);
 
         $clientIds = config('services.google.client_ids', []);
@@ -122,11 +123,13 @@ class AuthController extends Controller
             $clientIds = [config('services.google.client_id')];
         }
 
-        if (empty($clientIds)) {
+        if (!empty($data['id_token']) && empty($clientIds)) {
             return response()->json(['message' => 'Google sign-in is not configured.'], 500);
         }
 
-        $verification = $this->verifyGoogleIdToken($data['id_token'], $clientIds);
+        $verification = !empty($data['id_token'])
+            ? $this->verifyGoogleIdToken($data['id_token'], $clientIds)
+            : $this->verifyGoogleAccessToken($data['access_token']);
         if (!$verification['ok']) {
             Log::warning('Google sign-in token verification failed', [
                 'reason' => $verification['error'] ?? 'unknown',
@@ -258,6 +261,46 @@ class AuthController extends Controller
         ];
     }
 
+    protected function verifyGoogleAccessToken(string $accessToken): array
+    {
+        try {
+            $response = Http::timeout(5)
+                ->withToken($accessToken)
+                ->get('https://www.googleapis.com/oauth2/v3/userinfo');
+        } catch (\Throwable) {
+            return ['ok' => false, 'error' => 'invalid token'];
+        }
+
+        if (!$response->ok()) {
+            return ['ok' => false, 'error' => 'invalid token'];
+        }
+
+        $payload = $response->json();
+        $emailVerified = $payload['email_verified'] ?? false;
+
+        if (empty($payload['sub'])) {
+            return ['ok' => false, 'error' => 'invalid token'];
+        }
+
+        if (empty($payload['email'])) {
+            return ['ok' => false, 'error' => 'missing email'];
+        }
+
+        if (!($emailVerified === true || $emailVerified === 'true' || $emailVerified === '1')) {
+            return ['ok' => false, 'error' => 'Google account not verified'];
+        }
+
+        return [
+            'ok' => true,
+            'user' => [
+                'sub' => $payload['sub'],
+                'email' => $payload['email'],
+                'name' => $payload['name'] ?? null,
+                'picture' => $payload['picture'] ?? null,
+            ],
+        ];
+    }
+
     public function logout(Request $request)
     {
         $user = $request->user();
@@ -270,6 +313,68 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         return response()->json($request->user());
+    }
+
+    public function deleteAccount(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Authentication required.'], 401);
+        }
+
+        if (($user->role ?? null) === 'admin') {
+            return response()->json(['message' => 'Admin accounts cannot be deleted from the mobile app.'], 403);
+        }
+
+        DB::transaction(function () use ($user) {
+            $medicationIds = DB::table('medications')
+                ->where('user_id', $user->id)
+                ->pluck('id')
+                ->all();
+
+            if (Schema::hasTable('snooze_logs')) {
+                DB::table('snooze_logs')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('notifications')) {
+                DB::table('notifications')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('hydration_entries')) {
+                DB::table('hydration_entries')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('medication_history')) {
+                DB::table('medication_history')
+                    ->where(function ($query) use ($user, $medicationIds) {
+                        $query->where('user_id', $user->id);
+                        if (!empty($medicationIds)) {
+                            $query->orWhereIn('medication_id', $medicationIds);
+                        }
+                    })
+                    ->delete();
+            }
+
+            if (Schema::hasTable('medications')) {
+                DB::table('medications')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('insights')) {
+                DB::table('insights')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('user_activity_logs')) {
+                DB::table('user_activity_logs')->where('user_id', $user->id)->delete();
+            }
+
+            if (Schema::hasTable('password_reset_tokens')) {
+                DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+            }
+
+            $user->forceFill(['api_token' => null])->delete();
+        });
+
+        return response()->json(['message' => 'Account deleted.']);
     }
 
     public function update(Request $request)

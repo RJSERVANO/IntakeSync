@@ -32,6 +32,7 @@ Route::get('admin/dashboard-stats', [App\Http\Controllers\AdminController::class
 // simple token guard middleware inline: expects header 'Authorization: Bearer {token}'
 Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
+    Route::delete('account', [AuthController::class, 'deleteAccount']);
     Route::get('me', [AuthController::class, 'me']);
     Route::put('me', [AuthController::class, 'update']);
     Route::post('me/change-password', [AuthController::class, 'changePassword']);

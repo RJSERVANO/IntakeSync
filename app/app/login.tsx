@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -25,10 +25,13 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [googleLoginInProgress, setGoogleLoginInProgress] = useState(false);
+  const googleLoginInFlightRef = useRef(false);
   const headerOpacity = React.useRef(new Animated.Value(0)).current;
   const cardTranslate = React.useRef(new Animated.Value(30)).current;
   const cardOpacity = React.useRef(new Animated.Value(0)).current;
-  const { signInWithGoogle } = useGoogleAuth();
+  const { signInWithGoogle, isGoogleAuthReady } = useGoogleAuth();
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -76,8 +79,16 @@ export default function Login() {
   }
 
   async function showGoogleLoginError(err: any) {
+    if (api.isStaleSessionError(err) || err?.type === 'google_stale_session') {
+      console.log('[GoogleLogin] stale session ignored');
+      return;
+    }
     if (err?.type === 'google_cancelled') {
       showNotice('info', 'Google Sign-In', 'Google sign-in was cancelled.');
+      return;
+    }
+    if (err?.type === 'google_in_progress') {
+      showNotice('info', 'Google Sign-In', 'Google sign-in is already in progress.');
       return;
     }
     if (err?.type === 'google_no_id_token') {
@@ -93,7 +104,7 @@ export default function Login() {
       return;
     }
     if (err?.type === 'google_backend_request_failed') {
-      showNotice('error', 'Google Sign-In', 'Google login request failed. Please try again.');
+      showNotice('error', 'Google Sign-In', err.message || 'Google sign-in could not connect to the server. Please try again.');
       return;
     }
     await showLoginError(err, 'Google sign-in failed');
@@ -122,19 +133,33 @@ export default function Login() {
   }, [cardOpacity, cardTranslate, headerOpacity]);
 
   useEffect(() => {
+    console.log('[GoogleLogin] request ready status', {
+      isGoogleAuthReady,
+      isSessionLoading,
+      googleLoginInProgress,
+    });
+  }, [googleLoginInProgress, isGoogleAuthReady, isSessionLoading]);
+
+  useEffect(() => {
     let mounted = true;
 
     async function redirectIfAlreadySignedIn() {
-      const cached = await getCachedSession();
-      if (!mounted || !hasValidCachedSession(cached)) return;
-      const context = await captureAuthSessionContext(cached.token, cached.user);
-      if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
-      routeAfterAuth(router, {
-        token: cached.token,
-        user: cached.user,
-        onboardingCompleted: await hasCompletedOnboarding(cached.user),
-        sessionVersion: '',
-      });
+      setIsSessionLoading(true);
+      try {
+        if (googleLoginInFlightRef.current) return;
+        const cached = await getCachedSession();
+        if (!mounted || googleLoginInFlightRef.current || !hasValidCachedSession(cached)) return;
+        const context = await captureAuthSessionContext(cached.token, cached.user);
+        if (!mounted || googleLoginInFlightRef.current || !(await isAuthSessionContextCurrent(context))) return;
+        routeAfterAuth(router, {
+          token: cached.token,
+          user: cached.user,
+          onboardingCompleted: await hasCompletedOnboarding(cached.user),
+          sessionVersion: context.sessionVersion,
+        });
+      } finally {
+        if (mounted) setIsSessionLoading(false);
+      }
     }
 
     void redirectIfAlreadySignedIn();
@@ -163,19 +188,34 @@ export default function Login() {
   }
 
   async function onGoogle() {
-    if (loading) return;
+    if (loading || isSessionLoading || googleLoginInFlightRef.current || googleLoginInProgress) return;
+    if (!isGoogleAuthReady) {
+      showNotice('warning', 'Google Sign-In', 'Google sign-in is still preparing. Please try again in a moment.');
+      return;
+    }
     try {
+      googleLoginInFlightRef.current = true;
+      setGoogleLoginInProgress(true);
       setLoading(true);
-      const res = await signInWithGoogle();
+      const context = await captureAuthSessionContext();
+      const res = await signInWithGoogle({ authContext: context });
+      if (!(await isAuthSessionContextCurrent(context))) {
+        console.log('[GoogleLogin] stale session ignored after Google response');
+        return;
+      }
       const session = await persistAuthResponse(res);
       routeAfterAuth(router, session);
     } catch (err: any) {
       console.log('google signin error', err);
       await showGoogleLoginError(err);
     } finally {
+      googleLoginInFlightRef.current = false;
+      setGoogleLoginInProgress(false);
       setLoading(false);
     }
   }
+
+  const googleButtonDisabled = loading || isSessionLoading || googleLoginInProgress || !isGoogleAuthReady;
 
   return (
     <>
@@ -247,11 +287,13 @@ export default function Login() {
         <View style={authStyles.dividerLine} />
       </View>
 
-      <TouchableOpacity style={authStyles.socialButton} onPress={onGoogle} disabled={loading}>
+      <TouchableOpacity style={[authStyles.socialButton, googleButtonDisabled && styles.disabledButton]} onPress={onGoogle} disabled={googleButtonDisabled}>
         <View style={authStyles.socialIconWrap}>
           <Ionicons name="logo-google" size={18} color="#DB4437" />
         </View>
-        <Text style={authStyles.socialButtonText}>Continue with Google</Text>
+        <Text style={authStyles.socialButtonText}>
+          {googleLoginInProgress ? 'Connecting to Google...' : 'Continue with Google'}
+        </Text>
       </TouchableOpacity>
 
       <View style={styles.footerWrap}>
@@ -285,5 +327,8 @@ const styles = StyleSheet.create({
   footerButton: {
     alignItems: 'center',
     paddingVertical: 10,
+  },
+  disabledButton: {
+    opacity: 0.6,
   },
 });

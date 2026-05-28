@@ -1154,6 +1154,16 @@ function getRefScheduledTime(ref: ScheduledNotificationRef) {
 
 function localInboxIdentity(record: Pick<LocalNotificationRecord, 'id' | 'metadata'>) {
   const metadata = record.metadata || {};
+  if (metadata.source === 'hydration_log') {
+    return String(
+      metadata.activity_id ||
+      (metadata.local_id ? `hydration-log:${metadata.owner_key || ''}:${metadata.local_id}` : '') ||
+      (metadata.client_uuid ? `hydration-log:${metadata.owner_key || ''}:${metadata.client_uuid}` : '') ||
+      (metadata.server_id ? `hydration-log:${metadata.owner_key || ''}:server-${metadata.server_id}` : '') ||
+      record.id ||
+      ''
+    );
+  }
   return String(
     metadata.scheduleKey ||
     metadata.schedule_key ||
@@ -1391,6 +1401,13 @@ export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | 
       });
     await AsyncStorage.setItem(getNotificationInboxKey(owner), JSON.stringify(next));
   } catch {}
+}
+
+export async function clearLocalNotificationInbox(ownerArg?: CacheOwner | null) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  await AsyncStorage.removeItem(getNotificationInboxKey(owner));
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox-clear' });
 }
 
 export async function upsertLocalNotificationRecord(ownerArg: CacheOwner | null | undefined, record: Partial<LocalNotificationRecord> & { id?: string; metadata?: Record<string, any> | null }) {
@@ -1643,6 +1660,10 @@ export async function upsertMedicationTakenNotification(ownerArg: CacheOwner | n
 }
 
 export async function upsertHydrationLogNotification(ownerArg: CacheOwner | null | undefined, entry: any) {
+  return upsertHydrationLogActivityRecord(ownerArg, entry);
+}
+
+export async function upsertHydrationLogActivityRecord(ownerArg: CacheOwner | null | undefined, entry: any) {
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
   const loggedAt = entry?.timestamp || entry?.created_at || new Date().toISOString();
@@ -1650,8 +1671,11 @@ export async function upsertHydrationLogNotification(ownerArg: CacheOwner | null
   const amount = Number(entry?.amount_ml || entry?.logged_ml || 0);
   const label = entry?.drink_label || (String(entry?.beverage_type || 'water').replace(/_/g, ' '));
   const title = `${String(label || 'Water').charAt(0).toUpperCase()}${String(label || 'Water').slice(1)} logged`;
+  const ownerKey = getOwnerSchedulePart(owner);
+  const sourceId = entry?.local_id || entry?.client_uuid || entry?.id || entry?.server_id || `${loggedAt}:${amount}:${label}`;
+  const activityId = `hydration-log:${ownerKey}:${sourceId}`;
   await upsertLocalNotificationRecord(owner, {
-    id: `hydration-log:${entry?.local_id || entry?.id || loggedAt}`,
+    id: activityId,
     type: 'hydration',
     title,
     message: `${amount} ml beverage log`,
@@ -1665,13 +1689,21 @@ export async function upsertHydrationLogNotification(ownerArg: CacheOwner | null
     metadata: {
       local_activity: true,
       source: 'hydration_log',
+      owner_key: ownerKey,
+      activity_id: activityId,
       local_id: entry?.local_id || entry?.id || null,
       client_uuid: entry?.client_uuid || entry?.local_id || null,
+      server_id: entry?.server_id || (entry?.id && !String(entry.id).startsWith('bev_') ? entry.id : null),
+      hydration_log_id: entry?.id || entry?.server_id || null,
       hydrationSlotKey: slotKey,
       hydration_slot_key: slotKey,
       respondedScheduleKey: slotKey,
       responded_schedule_key: slotKey,
       amount,
+      amount_ml: amount,
+      drink_label: entry?.drink_label || null,
+      beverage_type: entry?.beverage_type || null,
+      timestamp: loggedAt,
     },
   });
 }

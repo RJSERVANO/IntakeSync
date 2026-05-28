@@ -13,7 +13,7 @@ import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeMo
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { cancelHydrationSlotNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, hideHydrationLogNotifications, isNotificationRecordHidden, markHydrationGoalCompleted, notificationService, readLocalNotificationInbox, reconcileNotificationInbox, rescheduleHydrationNotifications, upsertHydrationLogNotification } from '../../../../services/notificationService';
+import { cancelHydrationSlotNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, hideHydrationLogNotifications, isNotificationRecordHidden, markHydrationGoalCompleted, notificationService, readLocalNotificationInbox, reconcileNotificationInbox, rescheduleHydrationNotifications, upsertHydrationLogActivityRecord } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
   calculatePersonalizedHydrationGoal,
@@ -1016,7 +1016,7 @@ export default function Hydration() {
         await persistLocal({ goal, entries: newEntries });
         const session = await getCachedSession();
         const owner = getCacheOwner(session?.user ?? null);
-        await upsertHydrationLogNotification(owner, entry);
+        await upsertHydrationLogActivityRecord(owner, entry);
         await cancelHydrationSlotNotifications(owner, entry.timestamp);
       } catch {
         entriesRef.current = previousEntries;
@@ -1125,7 +1125,7 @@ export default function Hydration() {
       return;
     }
     if (val > 2000) {
-      showNotice('warning', 'Maximum Amount', 'Maximum custom log is 2000 ml per entry.');
+      showNotice('warning', 'Maximum is 2000 ml', 'Custom beverage logs are limited to 2000 ml per entry.');
       return;
     }
     const selectedDrinkOption = DRINK_OPTIONS.find((option) => option.value === selectedDrink) || DRINK_OPTIONS[0];

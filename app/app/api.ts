@@ -37,6 +37,7 @@ export interface ApiError {
   isValidationError?: boolean;
   isStaleSessionError?: boolean;
   requestSessionVersion?: string;
+  responseFormat?: 'json' | 'html' | 'text' | 'empty';
 }
 
 function validationMessage(data: any) {
@@ -78,6 +79,7 @@ function makeApiError(status: number | undefined, data: any, fallbackMessage: st
     isNetworkError: type === 'network',
     isAuthError: type === 'auth',
     isValidationError: type === 'validation',
+    responseFormat: data?.response_format,
   };
 }
 
@@ -177,12 +179,12 @@ async function parseResponse(res: Response) {
   const text = await res.text();
   if (!text) return null;
   if (isHtmlResponse(text, res)) {
-    return { message: 'Server route not found. Please check API configuration.' };
+    return { message: 'Server route not found. Please check API configuration.', response_format: 'html' };
   }
   try {
     return JSON.parse(text);
   } catch {
-    return text;
+    return { message: 'Unexpected server response. Please try again.', raw: text, response_format: 'text' };
   }
 }
 
@@ -355,6 +357,43 @@ export function getErrorMessage(error: any, fallbackMessage = 'Request failed.')
     return 'Server route not found. Please check API configuration.';
   }
   return error?.message || error?.data?.message || error?.data || defaultMessageForStatus(error?.status) || fallbackMessage;
+}
+
+export async function postWithMeta(path: string, body: any, token?: string, timeout: number = 10000) {
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
+  const controller = createTrackedAbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const url = joinPath(path);
+  logRequest('POST', url);
+  try {
+    await ensureCurrentSession('POST', url, token, requestSessionVersion);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    logStatus('POST', url, res);
+    const data = await parseResponse(res);
+    await ensureCurrentSession('POST', url, token, requestSessionVersion);
+    if (!res.ok) {
+      const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
+      throw { ...error, requestSessionVersion };
+    }
+    return {
+      data,
+      status: res.status,
+      responseFormat: data?.response_format ? data.response_format : 'json',
+    };
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    throw normalizeFetchError(error, 'POST', url, requestSessionVersion);
+  } finally {
+    releaseTrackedAbortController(controller);
+  }
 }
 
 export function isNetworkError(error: any) {

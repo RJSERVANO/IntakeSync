@@ -133,6 +133,10 @@ export async function clearPendingSyncActionsForUser(user?: any | null) {
   await writeQueue(next, user);
 }
 
+export async function clearSyncQueueForUser(user?: any | null) {
+  await writeQueue([], user);
+}
+
 function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQueueItem['method']; payload: any } {
   if (item.endpoint) return { endpoint: item.endpoint, method: item.method, payload: item.payload };
 

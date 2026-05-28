@@ -122,6 +122,19 @@ export async function clearCachedSession(): Promise<void> {
   }
 }
 
+export async function clearUserScopedLocalData(user?: any | null): Promise<void> {
+  const owner = getCacheOwner(user);
+  if (!owner.owner_id && !owner.owner_email) return;
+  try {
+    const prefix = getUserScopedKey(owner, '');
+    const keys = await AsyncStorage.getAllKeys();
+    const scopedKeys = keys.filter((key) => key.startsWith(prefix));
+    if (scopedKeys.length > 0) await AsyncStorage.multiRemove(scopedKeys);
+  } catch {
+    // Account deletion should continue with other local cleanup steps.
+  }
+}
+
 export async function hasSeenStartupSplash(): Promise<boolean> {
   try {
     return await AsyncStorage.getItem(STARTUP_SPLASH_SEEN_KEY) === 'true';
