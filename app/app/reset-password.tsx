@@ -76,6 +76,10 @@ export default function ResetPassword() {
 
     setLoading(true);
     try {
+      if (!(await api.checkBackendReachability(undefined, true))) {
+        showNotice('warning', 'Internet Required', 'Internet connection is required for this function.');
+        return;
+      }
       await api.post('/reset-password', {
         code,
         email,
@@ -94,7 +98,7 @@ export default function ResetPassword() {
     } catch (err: any) {
       console.log('reset password error', err);
       const message = api.isNetworkError(err)
-        ? 'You need to connect to the internet to change or reset your password.'
+        ? 'Internet connection is required for this function.'
         : err?.data?.message || err?.data || 'We could not reset your password. Please try again.';
       showNotice(api.isNetworkError(err) ? 'warning' : 'error', api.isNetworkError(err) ? 'Internet Required' : 'Reset Failed', message);
     } finally {

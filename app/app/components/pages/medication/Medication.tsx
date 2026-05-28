@@ -30,10 +30,13 @@ import { cancelMedicationDoseNotifications, cancelMedicationNotifications, hideM
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
+import { deriveTopNotice } from '../../common/topNotice';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
 import { buildHistoricalMedicationSummary, deriveMedicationStats, type HistoricalMedicationSummary } from '../../../../utils/medicationSummary';
 import { useFontScaleVersion } from '../../../accessibility/FontScaleProvider';
 import { hapticError, hapticForNotice, hapticSuccess, hapticWarning } from '../../../../utils/haptics';
+import { useConnectionStatus } from '../../../../hooks/useConnectionStatus';
+import { logPerf, perfNow } from '../../../../utils/perf';
 
 type MedicationItem = {
   id: string;
@@ -106,6 +109,9 @@ const LATE_GRACE_MS = 30 * 60 * 1000;
 const SNOOZE_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 const MISSED_DOSE_GRACE_MS = 30 * 60 * 1000;
+const MEDICATION_HISTORY_FALLBACK_TTL_MS = 60 * 1000;
+const medicationHistoryFallbackCache = new Map<string, { loadedAt: number; data: HistoryEntry[] }>();
+const medicationHistoryFallbackInFlight = new Map<string, Promise<HistoryEntry[]>>();
 const EXPORT_MONTHS = [
   'January',
   'February',
@@ -499,6 +505,65 @@ function applyPendingMedicationActions(baseMeds: MedicationItem[], pendingAction
   return filterDeletedMedicationRecords(mergeMedicationLists(nextMeds, pendingCreates), deletedKeys);
 }
 
+function normalizeDuplicateText(value?: string | null) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function duplicateNameKeys(value?: string | null) {
+  const normalized = normalizeDuplicateText(value);
+  return {
+    normalized,
+    compact: normalized.replace(/\s+/g, ''),
+  };
+}
+
+function duplicateDosageKey(value?: string | null) {
+  return normalizeDuplicateText(value).replace(/[.,;:]+/g, '').replace(/\s+/g, ' ');
+}
+
+function duplicateScheduleKey(sourceTimes?: string[]) {
+  const minutes = (sourceTimes || [])
+    .map((time) => {
+      const parsed = new Date(time);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed.getHours() * 60 + parsed.getMinutes();
+    })
+    .filter((minute): minute is number => minute !== null)
+    .sort((a, b) => a - b);
+  return Array.from(new Set(minutes)).join('|');
+}
+
+function duplicateFrequencyKey(value?: string | null) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function wasMedicationRecentlyCreated(med: Partial<MedicationItem>, now = Date.now()) {
+  const created = med.local_created_at || med.client_created_at || med.schedule_created_at || med.created_at;
+  const createdAt = created ? new Date(created).getTime() : 0;
+  return Number.isFinite(createdAt) && createdAt > 0 && now - createdAt <= 5 * 60 * 1000;
+}
+
+function isSimilarMedicationForConfirmation(candidate: Partial<MedicationItem>, existing: Partial<MedicationItem>) {
+  if (existing.deleted_at || existing.active === false) return false;
+  const candidateName = duplicateNameKeys(candidate.name);
+  const existingName = duplicateNameKeys(existing.name);
+  const nameMatches = Boolean(candidateName.normalized && (
+    candidateName.normalized === existingName.normalized ||
+    candidateName.compact === existingName.compact
+  ));
+  if (!nameMatches) return false;
+  if (duplicateDosageKey(candidate.dosage) !== duplicateDosageKey(existing.dosage)) return false;
+  if (duplicateScheduleKey(candidate.times) !== duplicateScheduleKey(existing.times)) return false;
+  const candidateFrequency = duplicateFrequencyKey(candidate.frequency);
+  const existingFrequency = duplicateFrequencyKey(existing.frequency);
+  if (candidateFrequency && existingFrequency && candidateFrequency !== existingFrequency) return false;
+  return true;
+}
+
 function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
   return {
     id: entry.id?.toString() || uid(),
@@ -663,6 +728,7 @@ export default function Medication() {
   const MODAL_ANIM = useRef(new Animated.Value(0)).current;
   const handledRoutePrefillKeyRef = useRef<string | null>(null);
   const activeSyncing = backgroundRefreshing || queueSyncing;
+  const connection = useConnectionStatus(token);
 
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 30000);
@@ -853,6 +919,8 @@ export default function Medication() {
     (async () => {
       hydratingMedicationCacheRef.current = true;
       setCacheHydrating(true);
+      const cacheStartedAt = perfNow();
+      let backendStartedAt = 0;
       try {
         const session = await getCachedSession();
         const context = await captureAuthSessionContext((token as string | undefined) || session?.token, session?.user ?? null);
@@ -866,6 +934,11 @@ export default function Medication() {
         const localMeds: MedicationItem[] = sessionUser ? (await readMedicationCache<MedicationItem[]>(sessionUser)) || [] : [];
         const localHistory: HistoryEntry[] = sessionUser ? (await readMedicationHistoryCache<HistoryEntry[]>(sessionUser)) || [] : [];
         const pendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
+        logPerf('Medication cache load', cacheStartedAt, {
+          medicationCount: localMeds.length,
+          historyCount: localHistory.length,
+          pendingCount: pendingActions.length,
+        });
         setHasPendingOfflineChanges(pendingActions.length > 0);
         const deletedKeys = new Set(sessionUser ? await readDeletedMedicationTombstones(sessionUser) : []);
         pendingActions
@@ -887,7 +960,6 @@ export default function Medication() {
           if (cachedMeds.length > 0 && sessionUser && cachedMeds.length !== localMeds.length) {
             await writeMedicationCacheIfSafe(sessionUser, cachedMeds, true);
           }
-          showInlineNotice('Offline mode');
           return;
         }
 
@@ -895,6 +967,7 @@ export default function Medication() {
 
         if (token) {
           // load from backend
+          backendStartedAt = perfNow();
           const serverMeds: any[] = await api.get('/medications', token as string);
           if (!(await isAuthSessionContextCurrent(context))) return;
           const latestPendingActions = sessionUser ? (await getPendingSyncActions()).filter((item) => item.action_type.includes('MEDICATION')) : [];
@@ -903,27 +976,12 @@ export default function Medication() {
           setMeds(normalizedMeds);
           if (sessionUser) await writeMedicationCacheIfSafe(sessionUser, normalizedMeds, (serverMeds || []).length === 0 && latestPendingActions.length === 0);
 
-          // Load everything in parallel for better performance
-          const [historyResults, statsData, upcomingData] = await Promise.allSettled([
-            loadAllMedicationHistoryFromServer(serverMeds || []),
-            // Load stats
+          // Load current screen summaries in parallel; full history is loaded lazily for export/history views.
+          const [statsData, upcomingData] = await Promise.allSettled([
             api.get('/medications/stats', token as string),
-            // Load upcoming
             api.get('/medications/upcoming', token as string)
           ]);
           if (!(await isAuthSessionContextCurrent(context))) return;
-
-          // Set history from parallel results
-          if (historyResults.status === 'fulfilled') {
-            const allHistory = historyResults.value;
-            console.log('Initial history loaded:', allHistory.length, 'entries');
-            const nextHistory = dedupeMedicationHistory([...allHistory, ...localHistory]);
-            if (!mounted) return;
-            setHistory(nextHistory);
-            if (sessionUser) await writeMedicationHistoryCache(sessionUser, nextHistory);
-          } else {
-            console.log('Failed to load history:', historyResults.reason);
-          }
 
           // Load last cleared timestamp
           try {
@@ -963,8 +1021,18 @@ export default function Medication() {
             setUpcoming(filterDeletedUpcomingItems(upcomingData.value || [], deletedKeys));
           }
           setOfflineMode(false);
+          logPerf('Medication backend refresh', backendStartedAt, {
+            endpointCount: 3,
+            medicationCount: Array.isArray(serverMeds) ? serverMeds.length : 0,
+          });
         }
       } catch (err) {
+        if (backendStartedAt > 0) {
+          logPerf('Medication backend refresh', backendStartedAt, {
+            endpointCount: 3,
+            failed: true,
+          });
+        }
         hydratingMedicationCacheRef.current = false;
         setCacheHydrating(false);
         if (api.isStaleSessionError(err)) return;
@@ -975,7 +1043,6 @@ export default function Medication() {
         }
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
-          showInlineNotice('Offline mode');
         } else {
           console.log('Failed to load meds');
         }
@@ -1059,12 +1126,8 @@ export default function Medication() {
         if (!(await isAuthSessionContextCurrent(context))) return;
         setStats(statsData);
 
-        // Reload history to get any new missed entries, including deleted medications.
-        const allHistory = await loadAllMedicationHistoryFromServer();
-        if (!(await isAuthSessionContextCurrent(context))) return;
-        setHistory((current) => dedupeMedicationHistory([...allHistory, ...current]));
       } catch (e) {
-        console.log('Failed to reload stats/history:', e);
+        console.log('Failed to reload stats:', e);
       }
     };
 
@@ -1075,8 +1138,6 @@ export default function Medication() {
     const interval = setInterval(checkAndReload, 5 * 60 * 1000);
 
     return () => clearInterval(interval);
-  // Periodic reconciliation intentionally reads the latest helper implementation without making the interval depend on helper identity.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, meds]);
 
   useEffect(() => {
@@ -1087,7 +1148,7 @@ export default function Medication() {
     newMissed.forEach((entry) => {
       syncMissedDose(entry);
     });
-    void reconcileNotificationInbox(getCacheOwner(currentUser));
+    void reconcileNotificationInbox(getCacheOwner(currentUser), { force: true, reason: 'medication_missed_local' });
   // Dose reconciliation is intentionally keyed to state snapshots; helper identities change every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, history, meds, nowTick]);
@@ -1163,7 +1224,7 @@ export default function Medication() {
     }
   }
 
-  async function saveMedication() {
+  async function saveMedication(confirmSimilarDuplicate = false) {
     if (!name.trim()) return showNotice('warning', 'Validation', 'Please enter a name');
     if (!times.length) return showNotice('warning', 'Validation', 'Please add at least one reminder time');
     const identityValuesToCheck = [
@@ -1221,6 +1282,28 @@ export default function Medication() {
         is_otc: true,
       } : null,
     };
+
+    if (!editing && !confirmSimilarDuplicate) {
+      const now = Date.now();
+      const similarMedication = meds.find((med) => (
+        isSimilarMedicationForConfirmation(medData, med) &&
+        (med.active !== false || wasMedicationRecentlyCreated(med, now))
+      ));
+      if (similarMedication) {
+        setNoticeModal({
+          type: 'confirm',
+          title: 'Similar medication found',
+          message: 'A similar medication is already in your medications. Are you sure you want to add this medication again?',
+          primaryText: 'Add Anyway',
+          secondaryText: 'Cancel',
+          onPrimary: async () => {
+            setNoticeModal(null);
+            await saveMedication(true);
+          },
+        });
+        return;
+      }
+    }
 
     const successMessage = editing ? 'Medicine updated' : 'Medicine saved';
     let savedSuccessfully = false;
@@ -1419,10 +1502,26 @@ export default function Medication() {
 
     const activeServerMeds = filterDeletedMedicationRecords(serverMeds || meds, deletedMedicationKeysRef.current);
     const results = await Promise.all(activeServerMeds.map(async (m) => {
+      const medIdentity = String(m.server_id || m.id);
+      const cacheKey = `${token}:${medIdentity}`;
+      const cached = medicationHistoryFallbackCache.get(cacheKey);
+      if (cached && Date.now() - cached.loadedAt < MEDICATION_HISTORY_FALLBACK_TTL_MS) return cached.data;
+      const existing = medicationHistoryFallbackInFlight.get(cacheKey);
+      if (existing) return existing;
+      const request = (async () => {
+        try {
+          const h = await api.get(`/medications/${medIdentity}/history`, token as string);
+          if (!(await isAuthSessionContextCurrent(context))) return [];
+          const data = (h || []).map((hh: any) => normalizeHistoryEntry(hh, medIdentity));
+          medicationHistoryFallbackCache.set(cacheKey, { loadedAt: Date.now(), data });
+          return data;
+        } finally {
+          medicationHistoryFallbackInFlight.delete(cacheKey);
+        }
+      })();
+      medicationHistoryFallbackInFlight.set(cacheKey, request);
       try {
-        const h = await api.get(`/medications/${m.server_id || m.id}/history`, token as string);
-        if (!(await isAuthSessionContextCurrent(context))) return [];
-        return (h || []).map((hh: any) => normalizeHistoryEntry(hh, (m.server_id || m.id).toString()));
+        return await request;
       } catch {
         return [];
       }
@@ -1430,14 +1529,14 @@ export default function Medication() {
     return results.flat();
   }
 
-  async function reloadAllData(colorFallbacks: Record<string, string | undefined> = {}) {
+  async function reloadAllData(colorFallbacks: Record<string, string | undefined> = {}, options: { includeHistory?: boolean } = {}) {
     if (!token) return;
     try {
       const context = await captureAuthSessionContext(token as string);
       if (!(await isAuthSessionContextCurrent(context))) return;
       const [medsData, historyResults, statsData, upcomingData] = await Promise.allSettled([
         api.get('/medications', token as string),
-        loadAllMedicationHistoryFromServer(),
+        options.includeHistory ? loadAllMedicationHistoryFromServer() : Promise.resolve([]),
         api.get('/medications/stats', token as string),
         api.get('/medications/upcoming', token as string)
       ]);
@@ -1454,7 +1553,7 @@ export default function Medication() {
       }
 
       // Update history
-      if (historyResults.status === 'fulfilled') {
+      if (options.includeHistory && historyResults.status === 'fulfilled') {
         const allHistory = historyResults.value;
         console.log('Reloaded history:', allHistory.length, 'entries');
         console.log('Sample entries:', allHistory.slice(0, 3));
@@ -1463,7 +1562,7 @@ export default function Medication() {
           if (currentUser) writeMedicationHistoryCache(currentUser, nextHistory).catch(() => {});
           return nextHistory;
         });
-      } else {
+      } else if (options.includeHistory && historyResults.status === 'rejected') {
         console.log('Failed to reload history:', historyResults.reason);
       }
 
@@ -1549,13 +1648,14 @@ export default function Medication() {
     } else if (token) {
       deleted = await performServerDelete(deleteTarget, previous, newMeds, previousHistory, previousUpcoming);
     } else {
-      await enqueueSyncAction({
-        action_type: 'DELETE_MEDICATION',
-        method: 'DELETE',
-        local_id: deleteTarget.local_id || id,
-        payload: { ...deleteTarget, id, server_id: deleteTarget.server_id || id },
-      });
-      showInlineNotice('Will sync later');
+      await removeDeletedMedicationTombstones(currentUser, deleteTarget);
+      setMeds(previous);
+      setUpcoming(previousUpcoming);
+      setHistory(previousHistory);
+      try { await writeMedicationCache(currentUser, previous); } catch {}
+      try { await writeMedicationHistoryCache(currentUser, previousHistory); } catch {}
+      showInlineNotice('Internet connection is required for this function.');
+      deleted = false;
     }
 
     if (deleted) {
@@ -1590,15 +1690,15 @@ export default function Medication() {
       }
 
       if (api.isNetworkError(err)) {
-        await enqueueSyncAction({
-          action_type: 'DELETE_MEDICATION',
-          method: 'DELETE',
-          local_id: deleteMed.local_id || deleteMed.id,
-          payload: { ...deleteMed, id: deleteMed.id, server_id: deleteMed.server_id || deleteMed.id },
-        });
+        await removeDeletedMedicationTombstones(currentUser, deleteMed);
+        setMeds(previous);
+        setUpcoming(previousUpcoming);
+        setHistory(previousHistory);
+        try { await writeMedicationCache(currentUser, previous); } catch {}
+        try { await writeMedicationHistoryCache(currentUser, previousHistory); } catch {}
         setOfflineMode(true);
-        showInlineNotice('Will sync later');
-        return true;
+        showInlineNotice('Internet connection is required for this function.');
+        return false;
       }
 
       // For other errors, revert and notify user
@@ -2024,6 +2124,10 @@ export default function Medication() {
 
 
   async function clearHistory() {
+    if (!token || connection.isDeviceOffline || connection.backendReachable === false) {
+      showInlineNotice('Internet connection is required for this function.');
+      return;
+    }
     hapticWarning();
     setNoticeModal({
       type: 'destructive',
@@ -2058,12 +2162,6 @@ export default function Medication() {
           setLastClearedTime(now);
           setClearedHistoryKeys(nextClearedKeys);
           setHistoryExpanded(false);
-          await enqueueSyncAction({
-            action_type: 'CLEAR_MEDICATION_HISTORY',
-            method: 'POST',
-            local_id: `clear_history_${now}`,
-            payload: { cleared_at: new Date(now).toISOString(), keys: keysToClear },
-          });
           showInlineNotice('Recent history cleared');
         } catch (error) {
           console.log('Error saving cleared time:', error);
@@ -2592,8 +2690,8 @@ export default function Medication() {
     return Array.from(years).sort((a, b) => b - a);
   }
 
-  function selectedMonthHistory(month: number, year: number) {
-    return getValidHistoryEntries().filter((entry) => {
+  function selectedMonthHistory(month: number, year: number, sourceHistory = getValidHistoryEntries()) {
+    return sourceHistory.filter((entry) => {
       const date = new Date(entry.time);
       return !Number.isNaN(date.getTime()) && date.getMonth() === month && date.getFullYear() === year;
     });
@@ -2616,10 +2714,21 @@ export default function Medication() {
     showNotice('success', 'Export ready', 'Your medication export is ready to share.', 'Done');
   }
 
+  async function ensureExportHistoryLoaded() {
+    if (!token) return getValidHistoryEntries();
+    const allHistory = await loadAllMedicationHistoryFromServer();
+    if (allHistory.length === 0) return getValidHistoryEntries();
+    const nextHistory = dedupeMedicationHistory([...allHistory, ...history]);
+    setHistory(nextHistory);
+    if (currentUser) await writeMedicationHistoryCache(currentUser, nextHistory);
+    return nextHistory;
+  }
+
   async function runCsvExport() {
     try {
       setExporting(true);
-      const rows = getExportRows();
+      const exportHistory = await ensureExportHistoryLoaded();
+      const rows = getExportRows(exportHistory);
       if (rows.length === 0) {
         showNotice('warning', 'No medication logs', 'No medication logs found to export.');
         return;
@@ -2656,7 +2765,8 @@ export default function Medication() {
   async function runPdfExport(month = selectedPdfMonth, year = selectedPdfYear) {
     try {
       setExporting(true);
-      const monthHistory = selectedMonthHistory(month, year);
+      const exportHistory = await ensureExportHistoryLoaded();
+      const monthHistory = selectedMonthHistory(month, year, exportHistory);
       if (monthHistory.length === 0) {
         showNotice('warning', 'No medication logs', 'No medication logs found for the selected month.');
         return;
@@ -2797,22 +2907,27 @@ export default function Medication() {
   const selectedHour12 = selectedHour24 === 0 ? 12 : (selectedHour24 > 12 ? selectedHour24 - 12 : selectedHour24);
   const selectedMinute = selectedTime.getMinutes();
   const selectedPeriod = selectedHour24 < 12 ? 'AM' : 'PM';
+  const topSystemNotice = !inlineNotice && !modalVisible && !deleteTarget && !noticeModal
+    ? deriveTopNotice({
+      isDeviceOffline: connection.isDeviceOffline,
+      backendReachable: connection.backendReachable,
+      syncing: activeSyncing,
+      pendingCount: !cacheHydrating && hasPendingOfflineChanges ? 1 : 0,
+    })
+    : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <InlineSyncNotice
-        visible={activeSyncing && !inlineNotice && !offlineMode && !modalVisible && !deleteTarget && !noticeModal}
-        message="Syncing..."
+        visible={Boolean(topSystemNotice)}
+        message={topSystemNotice?.message || ''}
+        iconName={topSystemNotice?.iconName || 'sync-outline'}
+        variant={topSystemNotice?.variant}
         top={Math.max(insets.top, 8) + 54}
       />
       <InlineNotice
         visible={Boolean(inlineNotice) && !modalVisible && !deleteTarget && !noticeModal}
         message={inlineNotice || ''}
-        top={Math.max(insets.top, 8) + 54}
-      />
-      <InlineNotice
-        visible={!cacheHydrating && !inlineNotice && !offlineMode && !activeSyncing && hasPendingOfflineChanges && !modalVisible && !deleteTarget && !noticeModal}
-        message="Pending changes will sync later"
         top={Math.max(insets.top, 8) + 54}
       />
       <Animated.ScrollView
@@ -2847,13 +2962,6 @@ export default function Medication() {
             </TouchableOpacity>
           </View>
         </View>
-
-        {offlineMode ? (
-          <View style={styles.offlineBanner}>
-            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode</Text>
-          </View>
-        ) : null}
 
         {/* Stats Dashboard */}
         <View style={styles.statsContainer}>
@@ -3400,7 +3508,7 @@ export default function Medication() {
               </View>
             </View>
 
-            <TouchableOpacity onPress={saveMedication} style={styles.saveBtn}>
+            <TouchableOpacity onPress={() => void saveMedication()} style={styles.saveBtn}>
               <Text style={styles.saveText}>Save</Text>
             </TouchableOpacity>
           </ScrollView>

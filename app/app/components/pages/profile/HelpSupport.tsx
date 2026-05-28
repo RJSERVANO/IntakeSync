@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Linking, View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
+import { Linking, Modal, View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
@@ -43,9 +43,35 @@ const SUPPORT_BODY = [
   'Thank you.',
 ].join('\r\n');
 
+const PRIVACY_SECTIONS = [
+  { title: 'Purpose of IntakeSync', body: 'IntakeSync is a self-monitoring app for beverage intake and medication routine organization.' },
+  { title: 'Information Users Provide', body: 'The app may store account information, profile details used for personalization, beverage logs, medication names, dosage, schedules, completion records, reminder preferences, and support messages sent by the user.' },
+  { title: 'How Information Is Used', body: 'Information is used to display progress, schedule reminders, summarize routines, support synchronization and account access, and improve app reliability and usability.' },
+  { title: 'Manual Entry and Accuracy', body: 'User-entered data may be inaccurate or incomplete. Sugar and caffeine levels are general categories, not exact nutritional measurements.' },
+  { title: 'Not Medical Advice', body: 'IntakeSync does not diagnose, treat, prescribe, or replace professional medical advice.' },
+  { title: 'Data Storage and Access', body: 'Account-based records may be stored on the device for cache/offline support and on the backend for persistent account features where applicable.' },
+  { title: 'Notifications', body: 'Reminders depend on Android permissions, device settings, app settings, battery behavior, and schedules entered by the user.' },
+  { title: 'User Choices', body: 'Users can manage records, notifications, account settings, and account/data deletion where available.' },
+  { title: 'Contact', body: SUPPORT_EMAIL },
+];
+
+const TERMS_SECTIONS = [
+  { title: 'Acceptance of Terms', body: 'Using IntakeSync means using it within these terms and app limitations.' },
+  { title: 'Purpose of the App', body: 'IntakeSync supports personal beverage logging, medication schedule organization, reminders, and routine summaries.' },
+  { title: 'User Responsibilities', body: 'Users are responsible for entering accurate information, verifying medication schedules with a qualified professional or reliable source, and keeping account credentials secure.' },
+  { title: 'Not Medical Advice', body: 'IntakeSync does not provide diagnosis, treatment, emergency support, prescriptions, or professional medical advice.' },
+  { title: 'App Limitations', body: 'Manual entries may be estimated or inaccurate. Notifications depend on Android permissions, device settings, app settings, battery behavior, and schedules entered by the user. Offline cache and syncing may be delayed. The current version does not use external sensors or medical devices.' },
+  { title: 'Prohibited Use', body: 'Do not misuse the app, tamper with it, use another user account, record alcoholic beverages, record or manage illegal, recreational, or controlled-substance use, or bypass unsupported alcohol or drug entry restrictions.' },
+  { title: 'Unsupported Substances', body: 'IntakeSync currently excludes alcoholic beverages from beverage tracking and does not support illegal, recreational, or controlled-substance entries in Medication.' },
+  { title: 'Account Deletion', body: 'Deletion may remove account data and cannot be undone.' },
+  { title: 'Changes and Availability', body: 'The app may be updated and features may change.' },
+  { title: 'Contact', body: SUPPORT_EMAIL },
+];
+
 export default function HelpSupport() {
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
+  const [legalDoc, setLegalDoc] = useState<{ title: string; intro: string; icon: keyof typeof Ionicons.glyphMap; sections: typeof PRIVACY_SECTIONS } | null>(null);
 
   const openEmailSupport = async () => {
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(SUPPORT_SUBJECT)}&body=${encodeURIComponent(SUPPORT_BODY)}`;
@@ -62,16 +88,20 @@ export default function HelpSupport() {
   };
 
   const showPrivacyPolicy = () => {
-    setNotice({
+    setLegalDoc({
       title: 'IntakeSync Privacy Policy',
-      message: 'Purpose of IntakeSync\nIntakeSync is a self-monitoring app for beverage intake and medication routine organization.\n\nInformation users provide\nThe app may store account information, profile details used for personalization, beverage logs, medication names, dosage, schedules, completion records, reminder preferences, and support messages sent by the user.\n\nHow information is used\nInformation is used to display progress, schedule reminders, summarize routines, support synchronization and account access, and improve app reliability and usability.\n\nManual entry and accuracy\nUser-entered data may be inaccurate or incomplete. Sugar and caffeine levels are general categories, not exact nutritional measurements.\n\nNot medical advice\nIntakeSync does not diagnose, treat, prescribe, or replace professional medical advice.\n\nData storage and access\nAccount-based records may be stored on the device for cache/offline support and on the backend for persistent account features where applicable.\n\nNotifications\nReminders depend on Android permissions, device settings, and user schedules.\n\nUser choices\nUsers can manage records, notifications, account settings, and account/data deletion where available.\n\nContact\nintakesyncsupport@gmail.com',
+      intro: 'A readable summary of how IntakeSync handles self-monitoring data, offline cache, reminders, and user choices.',
+      icon: 'information-circle',
+      sections: PRIVACY_SECTIONS,
     });
   };
 
   const showTerms = () => {
-    setNotice({
+    setLegalDoc({
       title: 'IntakeSync Terms of Service',
-      message: 'Acceptance of terms\nUsing IntakeSync means using it within these terms and app limitations.\n\nPurpose of the app\nIntakeSync supports personal beverage logging, medication schedule organization, reminders, and routine summaries.\n\nUser responsibilities\nUsers are responsible for entering accurate information, verifying medication schedules with a qualified professional or reliable source, and keeping account credentials secure.\n\nNot medical advice\nIntakeSync does not provide diagnosis, treatment, emergency support, prescriptions, or professional medical advice.\n\nApp limitations\nManual entries may be estimated or inaccurate. Notifications depend on Android permissions, device settings, app settings, battery behavior, and schedules entered by the user. Offline mode and syncing may be delayed. The current version does not use external sensors or medical devices.\n\nProhibited use\nDo not misuse the app, tamper with it, use another user account, record alcoholic beverages, record or manage illegal/recreational/controlled-substance use, or bypass unsupported alcohol or drug entry restrictions.\n\nUnsupported substances\nIntakeSync currently excludes alcoholic beverages from beverage tracking and does not support illegal, recreational, or controlled-substance entries in Medication.\n\nAccount deletion\nDeletion may remove account data and cannot be undone.\n\nChanges and availability\nThe app may be updated and features may change.\n\nContact\nintakesyncsupport@gmail.com',
+      intro: 'Terms for using IntakeSync as a personal routine organization and self-monitoring app.',
+      icon: 'shield-checkmark-outline',
+      sections: TERMS_SECTIONS,
     });
   };
 
@@ -212,6 +242,33 @@ export default function HelpSupport() {
         onPrimary={() => setNotice(null)}
         onClose={() => setNotice(null)}
       />
+      <Modal visible={Boolean(legalDoc)} animationType="slide" onRequestClose={() => setLegalDoc(null)}>
+        <SafeAreaView style={styles.legalContainer}>
+          <View style={styles.legalHeader}>
+            <View style={styles.legalIcon}>
+              <Ionicons name={legalDoc?.icon || 'document-text-outline'} size={24} color="#2563EB" />
+            </View>
+            <View style={styles.legalHeaderCopy}>
+              <Text style={styles.legalTitle}>{legalDoc?.title}</Text>
+              <Text style={styles.legalIntro}>{legalDoc?.intro}</Text>
+            </View>
+            <TouchableOpacity style={styles.legalCloseButton} onPress={() => setLegalDoc(null)}>
+              <Ionicons name="close" size={22} color="#475569" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.legalScroll} contentContainerStyle={styles.legalContent} showsVerticalScrollIndicator={false}>
+            {legalDoc?.sections.map((section) => (
+              <View style={styles.legalSectionCard} key={section.title}>
+                <Text style={styles.legalSectionTitle}>{section.title}</Text>
+                <Text style={styles.legalSectionBody}>{section.body}</Text>
+              </View>
+            ))}
+            <TouchableOpacity style={styles.legalDoneButton} onPress={() => setLegalDoc(null)}>
+              <Text style={styles.legalDoneText}>Done</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -336,5 +393,97 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#94A3B8',
     fontWeight: '700',
+  },
+  legalContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  legalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  legalIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legalHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  legalTitle: {
+    color: '#0F172A',
+    fontSize: 20,
+    fontWeight: '900',
+    textAlign: 'left',
+  },
+  legalIntro: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+    marginTop: 4,
+    textAlign: 'left',
+  },
+  legalCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legalScroll: {
+    flex: 1,
+  },
+  legalContent: {
+    padding: 18,
+    paddingBottom: 34,
+  },
+  legalSectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 16,
+    marginBottom: 12,
+  },
+  legalSectionTitle: {
+    color: '#0F172A',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 7,
+    textAlign: 'left',
+  },
+  legalSectionBody: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 21,
+    textAlign: 'left',
+  },
+  legalDoneButton: {
+    minHeight: 50,
+    borderRadius: 16,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  legalDoneText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '900',
   },
 });

@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
+  FlatList,
   Modal,
   RefreshControl,
   ScrollView,
@@ -37,6 +38,7 @@ import {
   isUnreadActionableNotificationRecord,
   markLocalNotificationCleared,
   markLocalNotificationRead,
+  readLocalNotificationInbox,
   reconcileNotificationInbox,
 } from '../../../../services/notificationService';
 import { notificationSettings } from '../../../../services/notificationSettings';
@@ -46,6 +48,9 @@ import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
+import { deriveTopNotice } from '../../common/topNotice';
+import { useConnectionStatus } from '../../../../hooks/useConnectionStatus';
+import { logPerf, perfNow } from '../../../../utils/perf';
 
 type NotificationType = 'hydration' | 'medication' | 'general';
 type NotificationStatus =
@@ -61,6 +66,9 @@ type NotificationStatus =
   | 'cleared';
 type InboxFilter = 'all' | 'unread' | 'medication' | 'hydration';
 type CounterKey = 'unread' | 'scheduled' | 'alerts';
+const RECENT_NOTIFICATION_PAGE_SIZE = 50;
+const ACTIVITY_BACKEND_REFRESH_TTL_MS = 20 * 1000;
+const ACTIVITY_LOCAL_INBOX_READ_TTL_MS = 7500;
 
 interface NotificationItem {
   id: number | string;
@@ -419,15 +427,33 @@ export default function Activity() {
   const [offlineMode, setOfflineMode] = useState(false);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const [hiddenRecentIds, setHiddenRecentIds] = useState<Set<string>>(new Set());
   const [recordListModal, setRecordListModal] = useState<{ title: string; records: NotificationItem[] } | null>(null);
+  const [recentRenderLimit, setRecentRenderLimit] = useState(RECENT_NOTIFICATION_PAGE_SIZE);
   const [localReminderPrefs, setLocalReminderPrefs] = useState({
     allowNotifications: false,
     medicationReminders: true,
     hydrationReminders: true,
   });
+  const backendRefreshInFlightRef = useRef(false);
+  const lastBackendRefreshRef = useRef<{ ownerKey: string; completedAt: number } | null>(null);
+  const localHydrationInFlightRef = useRef(false);
+  const lastLocalInboxReadRef = useRef<Map<string, { loadedAt: number; records: any[] }>>(new Map());
+  const localHydrationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentUserRef = useRef<any>(null);
+  const statsRef = useRef<NotificationStats | null>(null);
+  const connection = useConnectionStatus(token);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
 
   useEffect(() => {
     if (!inlineNotice) return;
@@ -685,20 +711,37 @@ export default function Activity() {
     const context = await captureAuthSessionContext(token);
     if (!(await isAuthSessionContextCurrent(context))) return;
     const pendingActions = await getPendingSyncActions();
+    setPendingSyncCount(pendingActions.length);
     const shouldShowSync = showSync || pendingActions.length > 0;
+    let ownsBackendRefresh = false;
     if (shouldShowSync) setSyncing(true);
     try {
       const session = await getCachedSession();
       if (session?.token !== token || !(await isAuthSessionContextCurrent(context))) return;
-      const sessionUser = currentUser || session?.user || null;
-      if (sessionUser && !currentUser) setCurrentUser(sessionUser);
+      const sessionUser = currentUserRef.current || session?.user || null;
+      if (sessionUser && !currentUserRef.current) {
+        currentUserRef.current = sessionUser;
+        setCurrentUser(sessionUser);
+      }
+      const owner = getCacheOwner(sessionUser);
+      const ownerKey = String(owner.owner_id || owner.owner_email || token);
+      const lastRefresh = lastBackendRefreshRef.current;
+      if (!showSync && backendRefreshInFlightRef.current) return;
+      if (!showSync && lastRefresh?.ownerKey === ownerKey && Date.now() - lastRefresh.completedAt < ACTIVITY_BACKEND_REFRESH_TTL_MS) return;
+      backendRefreshInFlightRef.current = true;
+      ownsBackendRefresh = true;
       const prefs = await loadReminderPreferences(sessionUser);
       await loadHiddenRecentIds(sessionUser);
       if (pendingActions.length > 0) await processSyncQueue(token);
-      const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
-      const [notificationRes, statsRes, medicationRes] = await Promise.all([
+      setPendingSyncCount((await getPendingSyncActions()).length);
+      const reconcileStartedAt = perfNow();
+      const localInbox = sessionUser ? await reconcileNotificationInbox(owner, { reason: showSync ? 'manual_refresh' : 'activity_backend_refresh' }) : [];
+      logPerf('Activity notification reconciliation', reconcileStartedAt, {
+        count: localInbox.length,
+        source: 'backend_refresh',
+      });
+      const [notificationRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
-        get('/notifications/stats', token, 5000).catch(() => null),
         get('/medications/upcoming', token, 5000).catch(() => []),
       ]);
       if (!(await isAuthSessionContextCurrent(context))) return;
@@ -707,9 +750,9 @@ export default function Activity() {
       const localReminderItems = await loadLocalReminderItems(prefs);
       const fallback = dedupeReminders([...localReminderItems, ...normalizeMedicationFallbacks(medicationRes)]);
       setNotifications(normalized);
-      setStats(statsRes || null);
       setMedicationFallbacks(fallback);
-      await writeNotificationsCache({ notifications: normalized, stats: statsRes || null, medicationFallbacks: fallback }, sessionUser);
+      await writeNotificationsCache({ notifications: normalized, stats: statsRef.current, medicationFallbacks: fallback }, sessionUser);
+      lastBackendRefreshRef.current = { ownerKey, completedAt: Date.now() };
       setError(null);
       setOfflineMode(false);
     } catch (err) {
@@ -720,11 +763,17 @@ export default function Activity() {
       }
       if (isNetworkError(err)) {
         setOfflineMode(true);
+        setPendingSyncCount((await getPendingSyncActions()).length);
         setError('Offline mode');
-        const cached = await readNotificationsCache<any>(currentUser);
+        const cached = await readNotificationsCache<any>(currentUserRef.current);
         const session = await getCachedSession();
-        const fallbackUser = currentUser || session?.user || null;
-        const localInbox = fallbackUser ? await reconcileNotificationInbox(getCacheOwner(fallbackUser)) : [];
+        const fallbackUser = currentUserRef.current || session?.user || null;
+        const reconcileStartedAt = perfNow();
+        const localInbox = fallbackUser ? await readLocalNotificationInbox(getCacheOwner(fallbackUser)) : [];
+        logPerf('Activity notification reconciliation', reconcileStartedAt, {
+          count: localInbox.length,
+          source: 'offline_fallback',
+        });
         const localActivity = await buildLocalActivityRecords(fallbackUser);
         const prefs = await loadReminderPreferences(fallbackUser);
         await loadHiddenRecentIds(fallbackUser);
@@ -742,36 +791,70 @@ export default function Activity() {
       setError(getErrorMessage(err, 'Could not load notifications from the backend.'));
     } finally {
       if (shouldShowSync && await isAuthSessionContextCurrent(context)) setSyncing(false);
+      if (ownsBackendRefresh) backendRefreshInFlightRef.current = false;
     }
-  }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
+  }, [buildLocalActivityRecords, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, normalizeMedicationFallbacks, normalizeNotifications, router, token]);
 
   const cacheCurrentNotifications = useCallback(async (nextNotifications: NotificationItem[], nextStats = stats) => {
     await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks }, currentUser);
   }, [currentUser, medicationFallbacks, stats]);
 
-  const hydrateLocalNotifications = useCallback(async () => {
-    const session = await getCachedSession();
-    const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
-    if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
-    const sessionUser = currentUser || session?.user || null;
-    if (sessionUser) setCurrentUser(sessionUser);
-    const prefs = await loadReminderPreferences(sessionUser);
-    await loadHiddenRecentIds(sessionUser);
-    const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
-    if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
-    const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
-    const localActivity = await buildLocalActivityRecords(sessionUser);
-    const localReminderItems = await loadLocalReminderItems(prefs);
-    setNotifications(mergeNotificationRecords([...(cached?.notifications || []), ...localInbox, ...localActivity]));
-    setStats(cached?.stats || null);
-    setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
-  }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, token]);
+  const hydrateLocalNotifications = useCallback(async (options: { force?: boolean; source?: string } = {}) => {
+    if (localHydrationInFlightRef.current) return;
+    localHydrationInFlightRef.current = true;
+    const startedAt = perfNow();
+    let didReadInbox = false;
+    try {
+      const session = await getCachedSession();
+      const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
+      if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
+      const sessionUser = currentUserRef.current || session?.user || null;
+      if (sessionUser && !currentUserRef.current) {
+        currentUserRef.current = sessionUser;
+        setCurrentUser(sessionUser);
+      }
+      const prefs = await loadReminderPreferences(sessionUser);
+      await loadHiddenRecentIds(sessionUser);
+      const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
+      if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
+      const owner = getCacheOwner(sessionUser);
+      const ownerKey = String(owner.owner_id || owner.owner_email || token || 'unknown');
+      const lastRead = lastLocalInboxReadRef.current.get(ownerKey);
+      let localInbox = lastRead?.records || [];
+      if (sessionUser && (options.force || !lastRead || Date.now() - lastRead.loadedAt > ACTIVITY_LOCAL_INBOX_READ_TTL_MS)) {
+        const localInboxStartedAt = perfNow();
+        localInbox = await readLocalNotificationInbox(owner);
+        didReadInbox = true;
+        lastLocalInboxReadRef.current.set(ownerKey, { loadedAt: Date.now(), records: localInbox });
+        logPerf('Activity local inbox cache read', localInboxStartedAt, {
+          count: localInbox.length,
+          source: options.source || 'activity:local_hydration',
+        });
+      }
+      const localActivity = await buildLocalActivityRecords(sessionUser);
+      const localReminderItems = await loadLocalReminderItems(prefs);
+      setNotifications(mergeNotificationRecords([...(cached?.notifications || []), ...localInbox, ...localActivity]));
+      setStats(cached?.stats || null);
+      setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
+      if (didReadInbox) {
+        logPerf('Activity local inbox load', startedAt, {
+          cacheHit: Boolean(cached),
+          localInboxCount: localInbox.length,
+          localActivityCount: localActivity.length,
+          reminderCount: localReminderItems.length,
+          source: options.source || 'activity:local_hydration',
+        });
+      }
+    } finally {
+      localHydrationInFlightRef.current = false;
+    }
+  }, [buildLocalActivityRecords, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, token]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
       const run = async () => {
-        await hydrateLocalNotifications();
+        await hydrateLocalNotifications({ source: 'activity:focus' });
         if (!mounted) return;
         await loadNotifications(false);
       };
@@ -792,16 +875,20 @@ export default function Activity() {
   useEffect(() => {
     const refresh = (event?: { source?: string }) => {
       if (event?.source === 'cache') return;
-      hydrateLocalNotifications().catch(() => {});
-      loadNotifications(false).catch(() => {});
+      if (event?.source === 'reconciliation') return;
+      if (localHydrationDebounceRef.current) clearTimeout(localHydrationDebounceRef.current);
+      localHydrationDebounceRef.current = setTimeout(() => {
+        hydrateLocalNotifications({ force: true, source: event?.source ? `activity:${event.source}` : 'activity:notification_event' }).catch(() => {});
+      }, 250);
     };
     const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
     const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, refresh);
     return () => {
       notificationSub.remove();
       reminderSub.remove();
+      if (localHydrationDebounceRef.current) clearTimeout(localHydrationDebounceRef.current);
     };
-  }, [hydrateLocalNotifications, loadNotifications]);
+  }, [hydrateLocalNotifications]);
 
   const markOneRead = useCallback(async (item: NotificationItem) => {
     const openedAt = new Date().toISOString();
@@ -876,6 +963,11 @@ export default function Activity() {
   }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
 
   const clearNotification = useCallback(async (item: NotificationItem) => {
+    const backendId = backendNotificationId(item);
+    if (backendId && (connection.isDeviceOffline || connection.backendReachable === false)) {
+      setInlineNotice('Internet connection is required for this function.');
+      return;
+    }
     const nextHidden = new Set(hiddenRecentIds);
     nextHidden.add(String(item.id));
     setHiddenRecentIds(nextHidden);
@@ -886,7 +978,6 @@ export default function Activity() {
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
     if (currentUser) await markLocalNotificationCleared(getCacheOwner(currentUser), getNotificationIdentity(item));
-    const backendId = backendNotificationId(item);
     if (!backendId) {
       setInlineNotice('Cleared');
       return;
@@ -899,14 +990,13 @@ export default function Activity() {
         console.log('Notification clear route unavailable; kept local update.');
         setInlineNotice('Cleared');
       } else if (isNetworkError(err)) {
-        await enqueueSyncAction({ action_type: 'CLEAR_NOTIFICATION', method: 'DELETE', local_id: String(backendId), payload: { notification_id: backendId } });
         setOfflineMode(true);
-        setInlineNotice('Will sync later');
+        setInlineNotice('Internet connection is required for this function.');
       } else {
         setNoticeModal({ title: 'Could not update', message: getErrorMessage(err, 'Please try again.') });
       }
     }
-  }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, loadNotifications, notifications, persistHiddenRecentIds, token]);
+  }, [cacheCurrentNotifications, connection.backendReachable, connection.isDeviceOffline, currentUser, hiddenRecentIds, loadNotifications, notifications, persistHiddenRecentIds, token]);
 
   const markAllRead = useCallback(async () => {
     const readAt = new Date().toISOString();
@@ -931,6 +1021,10 @@ export default function Activity() {
   }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications]);
 
   const clearRecent = useCallback(async () => {
+    if (connection.isDeviceOffline || connection.backendReachable === false) {
+      setInlineNotice('Internet connection is required for this function.');
+      return;
+    }
     const targets = notifications
       .filter((item) => !isHiddenRecent(item, hiddenRecentIds))
       .filter(hasHappenedOrWasActioned)
@@ -955,7 +1049,7 @@ export default function Activity() {
     }
     setShowAllRecent(false);
     setInlineNotice('Recent hidden');
-  }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications, persistHiddenRecentIds]);
+  }, [cacheCurrentNotifications, connection.backendReachable, connection.isDeviceOffline, currentUser, filter, hiddenRecentIds, notifications, persistHiddenRecentIds]);
 
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
     const today = new Date();
@@ -1034,11 +1128,15 @@ export default function Activity() {
     return sorted;
   }, [filter, recentNotifications]);
 
-  const displayedNotifications = useMemo(() => (
-    showAllRecent ? filteredNotifications : filteredNotifications.slice(0, 5)
-  ), [filteredNotifications, showAllRecent]);
+  useEffect(() => {
+    setRecentRenderLimit(RECENT_NOTIFICATION_PAGE_SIZE);
+  }, [filter]);
 
-  const hasMoreRecent = filteredNotifications.length > 5;
+  const displayedNotifications = useMemo(() => (
+    showAllRecent ? filteredNotifications.slice(0, recentRenderLimit) : filteredNotifications.slice(0, 5)
+  ), [filteredNotifications, recentRenderLimit, showAllRecent]);
+
+  const hasMoreRecent = showAllRecent ? filteredNotifications.length > displayedNotifications.length : filteredNotifications.length > 5;
   const nextReminder = useMemo<ReminderItem | null>(() => {
     const now = Date.now();
     const actionable = scheduledTodayRecords
@@ -1074,6 +1172,14 @@ export default function Activity() {
       { key: 'alerts' as const, label: 'Alerts', value: alertRecords.length, color: '#DC2626', icon: 'alert-circle-outline' as const },
     ];
   }, [alertRecords.length, scheduledTodayRecords.length, stats, unreadRecords.length]);
+  const topSystemNotice = !inlineNotice && !selectedNotification && !noticeModal
+    ? deriveTopNotice({
+      isDeviceOffline: connection.isDeviceOffline,
+      backendReachable: connection.backendReachable,
+      syncing,
+      pendingCount: pendingSyncCount,
+    })
+    : null;
 
   const renderNotificationCard = (item: NotificationItem) => {
     const tone = getTone(item);
@@ -1183,13 +1289,6 @@ export default function Activity() {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {offlineMode ? (
-          <View style={styles.offlineBanner}>
-            <Ionicons name="cloud-offline-outline" size={17} color="#2563EB" />
-            <Text style={styles.offlineBannerText}>Offline mode</Text>
-          </View>
-        ) : null}
-
         <View style={styles.counterRow}>
           {counters.map(counter => (
             <TouchableOpacity
@@ -1273,11 +1372,36 @@ export default function Activity() {
           </View>
         ) : (
           <>
-            {displayedNotifications.map(renderNotificationCard)}
+            <FlatList
+              data={displayedNotifications}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={({ item }) => renderNotificationCard(item)}
+              scrollEnabled={false}
+              initialNumToRender={Math.min(RECENT_NOTIFICATION_PAGE_SIZE, displayedNotifications.length)}
+              maxToRenderPerBatch={RECENT_NOTIFICATION_PAGE_SIZE}
+              windowSize={5}
+            />
             {hasMoreRecent ? (
-              <TouchableOpacity style={styles.viewAllButton} onPress={() => setShowAllRecent((value) => !value)} activeOpacity={0.82}>
-                <Text style={styles.viewAllText}>{showAllRecent ? 'Show less' : 'View all'}</Text>
-                <Ionicons name={showAllRecent ? 'chevron-up' : 'chevron-down'} size={16} color="#2563EB" />
+              <TouchableOpacity
+                style={styles.viewAllButton}
+                onPress={() => {
+                  if (!showAllRecent) {
+                    setShowAllRecent(true);
+                    setRecentRenderLimit(RECENT_NOTIFICATION_PAGE_SIZE);
+                    return;
+                  }
+                  setRecentRenderLimit((value) => Math.min(value + RECENT_NOTIFICATION_PAGE_SIZE, filteredNotifications.length));
+                }}
+                activeOpacity={0.82}
+              >
+                <Text style={styles.viewAllText}>{showAllRecent ? 'View more' : 'View all'}</Text>
+                <Ionicons name="chevron-down" size={16} color="#2563EB" />
+              </TouchableOpacity>
+            ) : null}
+            {showAllRecent ? (
+              <TouchableOpacity style={styles.viewAllButton} onPress={() => setShowAllRecent(false)} activeOpacity={0.82}>
+                <Text style={styles.viewAllText}>Show less</Text>
+                <Ionicons name="chevron-up" size={16} color="#2563EB" />
               </TouchableOpacity>
             ) : null}
           </>
@@ -1409,8 +1533,10 @@ export default function Activity() {
         onClose={() => setNoticeModal(null)}
       />
       <InlineSyncNotice
-        visible={syncing && !inlineNotice && !selectedNotification && !noticeModal}
-        message="Syncing..."
+        visible={Boolean(topSystemNotice)}
+        message={topSystemNotice?.message || ''}
+        iconName={topSystemNotice?.iconName || 'sync-outline'}
+        variant={topSystemNotice?.variant}
         top={Math.max(insets.top, 8) + 54}
       />
       <InlineNotice

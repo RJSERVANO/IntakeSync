@@ -18,6 +18,7 @@ import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, readMedicationHistoryCache, readNotificationsCache, writeMedicationCache, writeNotificationsCache } from './offlineStorage';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from './homeEvents';
+import { logPerf, perfNow } from '../utils/perf';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
@@ -33,7 +34,14 @@ const HYDRATION_LOOKAHEAD_HOURS = 14;
 let schedulingHydration = false;
 const schedulingMedicationIds = new Set<string>();
 const VALIDATE_SCHEDULED_REFS_INTERVAL_MS = 25 * 1000;
+const NOTIFICATION_RECONCILE_TTL_MS = 60 * 1000;
 const lastScheduledRefValidationByOwner = new Map<string, number>();
+const CONSUMED_NOTIFICATION_RESPONSES_KEY = '@intakesync_consumed_notification_responses_v1';
+const MAX_CONSUMED_NOTIFICATION_RESPONSES = 80;
+const consumedNotificationResponses = new Set<string>();
+const notificationInboxMemoryCache = new Map<string, { records: LocalNotificationRecord[]; updatedAt: number; version: number }>();
+const notificationInboxReconcileState = new Map<string, { completedAt: number; fingerprint: string; promise?: Promise<LocalNotificationRecord[]> }>();
+const notificationReconcileSkipLogState = new Map<string, { loggedAt: number; suppressed: number }>();
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
@@ -865,6 +873,10 @@ export function getNotificationInboxKey(owner: CacheOwner) {
   return getUserScopedKey(owner, 'notification_inbox');
 }
 
+function getNotificationInboxMetaKey(owner: CacheOwner) {
+  return getUserScopedKey(owner, 'notification_inbox_meta');
+}
+
 function refSlot(ref: ScheduledNotificationRef) {
   return ref.scheduleKey || ref.doseKey || ref.scheduledAt;
 }
@@ -1309,10 +1321,15 @@ export async function readLocalNotificationInbox(ownerArg?: CacheOwner | null): 
   try {
     const owner = await resolveNotificationOwner(ownerArg);
     if (!owner) return [];
-    const raw = await AsyncStorage.getItem(getNotificationInboxKey(owner));
+    const ownerKey = getOwnerSchedulePart(owner);
+    const memory = notificationInboxMemoryCache.get(ownerKey);
+    if (memory) return memory.records;
+    const [rawEntry, metaEntry] = await AsyncStorage.multiGet([getNotificationInboxKey(owner), getNotificationInboxMetaKey(owner)]);
+    const raw = rawEntry?.[1];
+    const meta = metaEntry?.[1] ? JSON.parse(metaEntry[1]) : null;
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    const records = parsed
       .filter((item) => item && typeof item === 'object')
       .map((item): LocalNotificationRecord => ({
         id: String(item.id || localInboxIdentity(item)),
@@ -1331,6 +1348,12 @@ export async function readLocalNotificationInbox(ownerArg?: CacheOwner | null): 
         deleted_at: item.deleted_at || null,
         metadata: item.metadata || item.data || null,
       }));
+    notificationInboxMemoryCache.set(ownerKey, {
+      records,
+      updatedAt: Number(meta?.updated_at || Date.now()),
+      version: Number(meta?.version || 1),
+    });
+    return records;
   } catch {
     return [];
   }
@@ -1359,6 +1382,7 @@ export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | 
   try {
     const owner = await resolveNotificationOwner(ownerArg);
     if (!owner) return;
+    const ownerKey = getOwnerSchedulePart(owner);
     const byIdentity = new Map<string, LocalNotificationRecord>();
     records.forEach((record) => {
       if (!record?.id) return;
@@ -1399,7 +1423,14 @@ export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | 
         const bTime = new Date(b.scheduled_at || b.scheduled_time || b.created_at || 0).getTime();
         return bTime - aTime;
       });
-    await AsyncStorage.setItem(getNotificationInboxKey(owner), JSON.stringify(next));
+    const previous = notificationInboxMemoryCache.get(ownerKey);
+    const version = (previous?.version || 0) + 1;
+    const updatedAt = Date.now();
+    notificationInboxMemoryCache.set(ownerKey, { records: next, updatedAt, version });
+    await AsyncStorage.multiSet([
+      [getNotificationInboxKey(owner), JSON.stringify(next)],
+      [getNotificationInboxMetaKey(owner), JSON.stringify({ updated_at: updatedAt, version })],
+    ]);
   } catch {}
 }
 
@@ -1407,6 +1438,8 @@ export async function clearLocalNotificationInbox(ownerArg?: CacheOwner | null) 
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
   await AsyncStorage.removeItem(getNotificationInboxKey(owner));
+  await AsyncStorage.removeItem(getNotificationInboxMetaKey(owner));
+  notificationInboxMemoryCache.delete(getOwnerSchedulePart(owner));
   DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox-clear' });
 }
 
@@ -1743,7 +1776,7 @@ export async function recordNotificationResponse(response: ExpoNotifications.Not
     if (owner) {
       await upsertLocalNotificationRecord(owner, notificationRecordFromDeliveredNotification(notification, 'delivered'));
       await markLocalNotificationRead(owner, String(key));
-      await reconcileNotificationInbox(owner);
+      await reconcileNotificationInbox(owner, { force: true, reason: 'notification_tap' });
     }
     DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'tap' });
     return data;
@@ -1759,6 +1792,65 @@ export async function getLastNotificationResponse(): Promise<ExpoNotifications.N
     return await Notifications.getLastNotificationResponseAsync();
   } catch {
     return null;
+  }
+}
+
+export function getNotificationResponseKey(response: ExpoNotifications.NotificationResponse | null | undefined): string | null {
+  const notification = response?.notification;
+  const request = notification?.request;
+  const identifier = request?.identifier ? String(request.identifier) : '';
+  if (!identifier) return null;
+  const action = response?.actionIdentifier ? String(response.actionIdentifier) : 'default';
+  const data = (request?.content?.data || {}) as Record<string, any>;
+  const timestamp = String(
+    (notification as any)?.date ||
+    data.responseTimestamp ||
+    data.scheduledAt ||
+    data.doseTime ||
+    data.scheduleKey ||
+    data.doseKey ||
+    ''
+  );
+  return [identifier, action, timestamp].filter(Boolean).join(':');
+}
+
+async function loadConsumedNotificationResponseKeys() {
+  if (consumedNotificationResponses.size > 0) return;
+  try {
+    const parsed = JSON.parse((await AsyncStorage.getItem(CONSUMED_NOTIFICATION_RESPONSES_KEY)) || '[]');
+    if (Array.isArray(parsed)) {
+      parsed.filter(Boolean).slice(-MAX_CONSUMED_NOTIFICATION_RESPONSES).forEach((key) => consumedNotificationResponses.add(String(key)));
+    }
+  } catch {
+    // Consumed response tracking is best effort; a corrupt value should not block notification routing.
+  }
+}
+
+export async function hasConsumedNotificationResponse(key: string | null | undefined) {
+  if (!key) return true;
+  await loadConsumedNotificationResponseKeys();
+  return consumedNotificationResponses.has(key);
+}
+
+export async function markNotificationResponseConsumed(key: string | null | undefined) {
+  if (!key) return;
+  await loadConsumedNotificationResponseKeys();
+  consumedNotificationResponses.add(key);
+  const next = Array.from(consumedNotificationResponses).slice(-MAX_CONSUMED_NOTIFICATION_RESPONSES);
+  consumedNotificationResponses.clear();
+  next.forEach((item) => consumedNotificationResponses.add(item));
+  await AsyncStorage.setItem(CONSUMED_NOTIFICATION_RESPONSES_KEY, JSON.stringify(next)).catch(() => undefined);
+}
+
+export async function clearLastNotificationResponseIfSupported() {
+  const Notifications = getNotifications();
+  const clearLast = (Notifications as any)?.clearLastNotificationResponseAsync;
+  if (typeof clearLast !== 'function') return false;
+  try {
+    await clearLast();
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1827,65 +1919,177 @@ function medicationDoseHasOutcome(ref: ScheduledNotificationRef, history: any[])
   });
 }
 
-export async function reconcileNotificationInbox(ownerArg?: CacheOwner | null): Promise<LocalNotificationRecord[]> {
+function latestTime(values: Array<string | null | undefined>) {
+  return values.reduce((latest, value) => {
+    const time = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(time) && time > latest ? time : latest;
+  }, 0);
+}
+
+function buildNotificationReconcileFingerprint({
+  inbox,
+  refs,
+  hydrationCache,
+  medicationHistory,
+  memory,
+}: {
+  inbox: LocalNotificationRecord[];
+  refs: ScheduledNotificationRef[];
+  hydrationCache: any;
+  medicationHistory: any[];
+  memory?: { updatedAt: number; version: number };
+}) {
+  return JSON.stringify({
+    inboxCount: inbox.length,
+    inboxUpdatedAt: memory?.updatedAt || 0,
+    inboxVersion: memory?.version || 0,
+    refCount: refs.length,
+    latestRef: latestTime(refs.map((ref) => ref.scheduledAt || ref.doseTime || null)),
+    hydrationCount: Array.isArray(hydrationCache?.entries) ? hydrationCache.entries.length : 0,
+    hydrationLatest: latestTime((hydrationCache?.entries || []).map((entry: any) => entry?.updated_at || entry?.timestamp || entry?.created_at)),
+    medicationHistoryCount: Array.isArray(medicationHistory) ? medicationHistory.length : 0,
+    medicationHistoryLatest: latestTime((medicationHistory || []).map((entry: any) => entry?.updated_at || entry?.time || entry?.created_at)),
+  });
+}
+
+export async function reconcileNotificationInbox(ownerArg?: CacheOwner | null, options: { force?: boolean; reason?: string } = {}): Promise<LocalNotificationRecord[]> {
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return [];
-  const [inbox, refs, hydrationCache, medicationHistory] = await Promise.all([
-    readLocalNotificationInbox(owner),
-    getScheduledNotificationRefs(owner),
-    readHydrationCache<any>(),
-    getCachedSession().then((session) => readMedicationHistoryCache<any[]>(session?.user ?? null)),
-  ]);
-  const now = Date.now();
-  const next = [...inbox];
-  const hydrationRefs = refs
-    .filter((ref) => ref.type === 'hydration')
-    .sort((a, b) => getRefScheduledTime(a) - getRefScheduledTime(b));
+  const ownerKey = getOwnerSchedulePart(owner);
+  const existingState = notificationInboxReconcileState.get(ownerKey);
+  const memory = notificationInboxMemoryCache.get(ownerKey);
+  if (existingState?.promise) {
+    logPerf('Notification inbox reconciliation', perfNow(), {
+      source: 'coalesced_in_flight',
+      ownerKey,
+      reason: options.reason || 'normal',
+    });
+    return existingState.promise;
+  }
+  if (!options.force && existingState && Date.now() - existingState.completedAt < NOTIFICATION_RECONCILE_TTL_MS) {
+    const skipLogKey = `${ownerKey}:${options.reason || 'normal'}`;
+    const skipLog = notificationReconcileSkipLogState.get(skipLogKey);
+    if (!skipLog || Date.now() - skipLog.loggedAt > 10 * 1000) {
+      logPerf('Notification inbox reconciliation', perfNow(), {
+        source: 'ttl_skip',
+        ownerKey,
+        reason: options.reason || 'normal',
+        suppressed: skipLog?.suppressed || 0,
+      });
+      notificationReconcileSkipLogState.set(skipLogKey, { loggedAt: Date.now(), suppressed: 0 });
+    } else {
+      skipLog.suppressed += 1;
+      notificationReconcileSkipLogState.set(skipLogKey, skipLog);
+    }
+    return memory?.records || readLocalNotificationInbox(owner);
+  }
 
-  refs.forEach((ref) => {
-    const scheduledTime = getRefScheduledTime(ref);
-    const existing = next.find((record) => matchesLocalNotificationRecord(record, refSlot(ref)) || matchesLocalNotificationRecord(record, ref.notificationId));
-    const baseStatus: LocalNotificationStatus = scheduledTime > now ? 'scheduled' : 'delivered';
-    const record = localInboxRecordFromRef(ref, baseStatus);
-    if (scheduledTime <= now) record.delivered_at = existing?.delivered_at || new Date().toISOString();
-    next.push(record);
-  });
-
-  refs.forEach((ref) => {
-    const scheduledTime = getRefScheduledTime(ref);
-    const scheduleKey = refSlot(ref);
-    if (!scheduleKey || scheduledTime <= 0) return;
-
-    if (ref.type === 'hydration' && scheduledTime + HYDRATION_RESPONSE_WINDOW_MS < now) {
-      const index = hydrationRefs.findIndex((item) => refSlot(item) === scheduleKey);
-      const nextHydrationRef = index >= 0 ? hydrationRefs[index + 1] : null;
-      const responded = isHydrationResponded(ref.scheduledAt, nextHydrationRef?.scheduledAt || null, hydrationCache?.entries || []);
-      if (!responded) {
-        next.push({
-          ...localInboxRecordFromRef(ref, 'missed'),
-          title: 'Hydration reminder missed',
-          message: 'No beverage log was recorded after this reminder.',
-          delivered_at: new Date().toISOString(),
-          metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_hydration_reminder' },
-        });
-      }
+  const startedAt = perfNow();
+  const promise = (async () => {
+    const [inbox, refs, hydrationCache, medicationHistory] = await Promise.all([
+      readLocalNotificationInbox(owner),
+      getScheduledNotificationRefs(owner),
+      readHydrationCache<any>(),
+      getCachedSession().then((session) => readMedicationHistoryCache<any[]>(session?.user ?? null)),
+    ]);
+    const fingerprint = buildNotificationReconcileFingerprint({
+      inbox,
+      refs,
+      hydrationCache,
+      medicationHistory: medicationHistory || [],
+      memory: notificationInboxMemoryCache.get(ownerKey),
+    });
+    if (!options.force && existingState?.fingerprint === fingerprint) {
+      notificationInboxReconcileState.set(ownerKey, { completedAt: Date.now(), fingerprint });
+      logPerf('Notification inbox reconciliation', startedAt, {
+        source: 'fingerprint_skip',
+        ownerKey,
+        reason: options.reason || 'normal',
+        count: inbox.length,
+      });
+      return inbox;
     }
 
-    if (ref.type === 'medication' && ref.doseTime && new Date(ref.doseTime).getTime() + MEDICATION_MISSED_GRACE_MS < now) {
-      if (!medicationDoseHasOutcome(ref, medicationHistory || [])) {
-        next.push({
-          ...localInboxRecordFromRef(ref, 'missed'),
-          title: `${ref.medicationName || 'Medication'} missed`,
-          message: ref.doseTime ? `Dose at ${new Date(ref.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}` : 'Dose was not recorded.',
-          delivered_at: new Date().toISOString(),
-          metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_medication_reminder' },
-        });
+    const now = Date.now();
+    const next = [...inbox];
+    const hydrationRefs = refs
+      .filter((ref) => ref.type === 'hydration')
+      .sort((a, b) => getRefScheduledTime(a) - getRefScheduledTime(b));
+
+    refs.forEach((ref) => {
+      const scheduledTime = getRefScheduledTime(ref);
+      const existing = next.find((record) => matchesLocalNotificationRecord(record, refSlot(ref)) || matchesLocalNotificationRecord(record, ref.notificationId));
+      const baseStatus: LocalNotificationStatus = scheduledTime > now ? 'scheduled' : 'delivered';
+      const record = localInboxRecordFromRef(ref, baseStatus);
+      if (scheduledTime <= now) record.delivered_at = existing?.delivered_at || new Date().toISOString();
+      next.push(record);
+    });
+
+    refs.forEach((ref) => {
+      const scheduledTime = getRefScheduledTime(ref);
+      const scheduleKey = refSlot(ref);
+      if (!scheduleKey || scheduledTime <= 0) return;
+
+      if (ref.type === 'hydration' && scheduledTime + HYDRATION_RESPONSE_WINDOW_MS < now) {
+        const index = hydrationRefs.findIndex((item) => refSlot(item) === scheduleKey);
+        const nextHydrationRef = index >= 0 ? hydrationRefs[index + 1] : null;
+        const responded = isHydrationResponded(ref.scheduledAt, nextHydrationRef?.scheduledAt || null, hydrationCache?.entries || []);
+        if (!responded) {
+          next.push({
+            ...localInboxRecordFromRef(ref, 'missed'),
+            title: 'Hydration reminder missed',
+            message: 'No beverage log was recorded after this reminder.',
+            delivered_at: new Date().toISOString(),
+            metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_hydration_reminder' },
+          });
+        }
       }
-    }
+
+      if (ref.type === 'medication' && ref.doseTime && new Date(ref.doseTime).getTime() + MEDICATION_MISSED_GRACE_MS < now) {
+        if (!medicationDoseHasOutcome(ref, medicationHistory || [])) {
+          next.push({
+            ...localInboxRecordFromRef(ref, 'missed'),
+            title: `${ref.medicationName || 'Medication'} missed`,
+            message: ref.doseTime ? `Dose at ${new Date(ref.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}` : 'Dose was not recorded.',
+            delivered_at: new Date().toISOString(),
+            metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_medication_reminder' },
+          });
+        }
+      }
+    });
+
+    const before = JSON.stringify(inbox);
+    await writeLocalNotificationInbox(owner, next);
+    const reconciled = await readLocalNotificationInbox(owner);
+    const nextFingerprint = buildNotificationReconcileFingerprint({
+      inbox: reconciled,
+      refs,
+      hydrationCache,
+      medicationHistory: medicationHistory || [],
+      memory: notificationInboxMemoryCache.get(ownerKey),
+    });
+    notificationInboxReconcileState.set(ownerKey, { completedAt: Date.now(), fingerprint: nextFingerprint });
+    const changed = before !== JSON.stringify(reconciled);
+    if (changed) DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'reconciliation' });
+    logPerf('Notification inbox reconciliation', startedAt, {
+      source: options.force ? 'forced' : 'reconciled',
+      ownerKey,
+      reason: options.reason || 'normal',
+      count: reconciled.length,
+      changed,
+    });
+    return reconciled;
+  })().finally(() => {
+    const state = notificationInboxReconcileState.get(ownerKey);
+    if (state?.promise) notificationInboxReconcileState.set(ownerKey, { completedAt: state.completedAt, fingerprint: state.fingerprint });
   });
 
-  await writeLocalNotificationInbox(owner, next);
-  return readLocalNotificationInbox(owner);
+  notificationInboxReconcileState.set(ownerKey, {
+    completedAt: existingState?.completedAt || 0,
+    fingerprint: existingState?.fingerprint || '',
+    promise,
+  });
+  return promise;
 }
 
 async function writeScheduledNotificationRefs(refs: ScheduledNotificationRef[], owner?: CacheOwner | null) {
@@ -2410,7 +2614,7 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
       );
     }
     await validateScheduledNotificationRefs(owner, { force: true });
-    await reconcileNotificationInbox(owner);
+    await reconcileNotificationInbox(owner, { force: true, reason: 'bootstrap' });
   } catch (error) {
     console.log('Notification bootstrap error:', error);
   }

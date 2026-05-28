@@ -107,7 +107,11 @@ export default function PrivacySecurity() {
     try {
       setLoading(true);
       if (!authToken) {
-        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
+        return;
+      }
+      if (!(await api.checkBackendReachability(authToken, true))) {
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
         return;
       }
       const context = await captureAuthSessionContext(authToken);
@@ -126,7 +130,7 @@ export default function PrivacySecurity() {
       setNotice({ type: 'success', title: 'Password updated', message: 'Password changed.' });
     } catch (error: any) {
       if (api.isNetworkError(error)) {
-        setNotice({ type: 'warning', title: 'Internet Required', message: 'You need to connect to the internet to change your password.' });
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
       } else {
         setNotice({ type: 'error', title: 'Update Failed', message: error?.data?.message || 'We could not change your password. Please try again.' });
       }
@@ -144,7 +148,11 @@ export default function PrivacySecurity() {
   const handleDeleteAccount = async () => {
     if (deleteConfirmation !== 'DELETEACCOUNT' || deletingAccount) return;
     if (!authToken) {
-      setNotice({ type: 'warning', title: 'Internet Required', message: 'Account deletion requires an internet connection.' });
+      setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
+      return;
+    }
+    if (!(await api.checkBackendReachability(authToken, true))) {
+      setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
       return;
     }
 
@@ -168,7 +176,7 @@ export default function PrivacySecurity() {
       router.replace('/login');
     } catch (error: any) {
       if (api.isNetworkError(error)) {
-        setNotice({ type: 'warning', title: 'Internet Required', message: 'Account deletion requires an internet connection.' });
+        setNotice({ type: 'warning', title: 'Internet Required', message: 'Internet connection is required for this function.' });
       } else {
         setNotice({ type: 'error', title: 'Delete Failed', message: error?.data?.message || 'We could not delete the account. Please try again.' });
       }

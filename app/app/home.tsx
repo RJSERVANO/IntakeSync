@@ -24,13 +24,12 @@ import {
   updateCachedUser,
   writeHydrationCache,
   writeMedicationCache,
-  writeMedicationHistoryCache,
   writeOwnedOfflineCache,
   writeOtcSearchCache,
 } from '../services/offlineStorage';
 import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT, subscribeHomeRefresh } from '../services/homeEvents';
-import { getUnreadActionableNotificationCount, reconcileNotificationInbox } from '../services/notificationService';
+import { getUnreadActionableNotificationCount } from '../services/notificationService';
 import { performLocalLogout } from '../services/logoutSession';
 import { deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
@@ -38,8 +37,11 @@ import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
 import InlineNotice from './components/common/InlineNotice';
 import InlineSyncNotice from './components/common/InlineSyncNotice';
+import { deriveTopNotice } from './components/common/topNotice';
 import { FONT_SCALE } from '../utils/fontScaling';
 import { useFontScaleVersion } from './accessibility/FontScaleProvider';
+import { useConnectionStatus } from '../hooks/useConnectionStatus';
+import { logPerf, perfNow } from '../utils/perf';
 
 const { width } = Dimensions.get('window');
 const HOME_GOAL_COMPLETION_SHOWN_PREFIX = 'intakesync.home.goalCompletionShown';
@@ -240,7 +242,7 @@ export default function Home() {
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
   const [upcomingMedications, setUpcomingMedications] = useState<any[]>([]);
   const [localUnreadNotificationCount, setLocalUnreadNotificationCount] = useState(0);
-  const [offlineMode, setOfflineMode] = useState(offline === '1');
+  const [, setOfflineMode] = useState(offline === '1');
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
@@ -264,13 +266,21 @@ export default function Home() {
   const refreshFromCacheInFlightRef = useRef(false);
   const backgroundRefreshInFlightRef = useRef(false);
   const homeRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHomeCacheLoadRef = useRef<{ ownerKey: string; completedAt: number } | null>(null);
+  const lastHomeCacheCallerRef = useRef<Map<string, number>>(new Map());
+  const notificationBadgeInFlightRef = useRef(false);
+  const lastNotificationBadgeLoadRef = useRef<{ ownerKey: string; completedAt: number } | null>(null);
   const beverageAddInFlightRef = useRef(false);
+  const userRef = useRef<any>(null);
+  const hydrationGoalRef = useRef(DEFAULT_QUICK_STATUS.hydrationGoal);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const remoteAvatarUri = getUserRemoteAvatarUri(user);
   const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
+  const connection = useConnectionStatus(routeToken);
 
   const applyVisibleUser = useCallback(async (nextUser: any) => {
     const withAvatar = await mergeLocalAvatarIntoUser(nextUser);
+    userRef.current = withAvatar;
     setUser(withAvatar);
     setSelectedAvatar(getUserSelectedAvatar(withAvatar));
     return withAvatar;
@@ -278,6 +288,7 @@ export default function Home() {
 
   const clearVisibleHomeState = useCallback(() => {
     setUser(null);
+    userRef.current = null;
     setTimeline([]);
     setQuickStatus(DEFAULT_QUICK_STATUS);
     setMedicationSummary(EMPTY_MEDICATION_SUMMARY);
@@ -340,15 +351,37 @@ export default function Home() {
     loadHeaderUserFromCache();
   }, [loadHeaderUserFromCache]);
 
-  const applyCacheFirstHomeSummary = useCallback(async (visibleUser?: any | null) => {
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    hydrationGoalRef.current = quickStatus.hydrationGoal;
+  }, [quickStatus.hydrationGoal]);
+
+  const applyCacheFirstHomeSummary = useCallback(async (visibleUser?: any | null, source = 'home:unknown', force = false) => {
     if (refreshFromCacheInFlightRef.current) return;
     refreshFromCacheInFlightRef.current = true;
+    const startedAt = perfNow();
+    let cacheHit = false;
+    let didReadCache = false;
     try {
       const session = await getCachedSession();
       const sessionUser = visibleUser || session?.user || null;
       if (!sessionUser || !hasValidCachedSession(session)) return;
       if (routeToken && session.token !== routeToken) return;
+      const owner = getCacheOwner(sessionUser);
+      const ownerKey = String(owner.owner_id || owner.owner_email || session.token || 'unknown');
+      const callerKey = `${ownerKey}:${source}`;
+      const lastCallerAt = lastHomeCacheCallerRef.current.get(callerKey) || 0;
+      if (!force && Date.now() - lastCallerAt < 3000) return;
+      lastHomeCacheCallerRef.current.set(callerKey, Date.now());
+      const lastLoad = lastHomeCacheLoadRef.current;
+      if (lastLoad?.ownerKey === ownerKey && Date.now() - lastLoad.completedAt < 7500) {
+        return;
+      }
 
+      didReadCache = true;
       const [hydrationCache, cachedMedsRaw, medicationHistoryRaw, deletedKeysRaw, homeCache] = await Promise.all([
         readHydrationCache<any>(),
         readMedicationCache<any[]>(sessionUser),
@@ -356,6 +389,7 @@ export default function Home() {
         readDeletedMedicationTombstones(sessionUser),
         readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser),
       ]);
+      cacheHit = Boolean(hydrationCache || cachedMedsRaw?.length || medicationHistoryRaw?.length || homeCache);
 
       const deletedKeys = new Set(deletedKeysRaw || []);
       const cachedMeds = (cachedMedsRaw || []).filter((med) => (
@@ -386,7 +420,14 @@ export default function Home() {
         medicationsTotal: todayMedication.total,
         medicationsLeft: todayMedication.remaining,
       }));
+      lastHomeCacheLoadRef.current = { ownerKey, completedAt: Date.now() };
     } finally {
+      if (didReadCache) {
+        logPerf('Home cache load', startedAt, {
+          cacheHit,
+          source,
+        });
+      }
       refreshFromCacheInFlightRef.current = false;
     }
   }, [routeToken]);
@@ -400,23 +441,33 @@ export default function Home() {
     if (!(await isAuthSessionContextCurrent(context))) return;
     const owner = getCacheOwner(sessionUser);
     if (!owner.owner_id && !owner.owner_email) return;
-    await reconcileNotificationInbox(owner);
+    const ownerKey = String(owner.owner_id || owner.owner_email);
+    const lastLoad = lastNotificationBadgeLoadRef.current;
+    if (notificationBadgeInFlightRef.current) return;
+    if (lastLoad?.ownerKey === ownerKey && Date.now() - lastLoad.completedAt < 3000) return;
+    notificationBadgeInFlightRef.current = true;
     if (!(await isAuthSessionContextCurrent(context))) return;
-    setLocalUnreadNotificationCount(await getUnreadActionableNotificationCount(owner));
+    try {
+      setLocalUnreadNotificationCount(await getUnreadActionableNotificationCount(owner));
+      lastNotificationBadgeLoadRef.current = { ownerKey, completedAt: Date.now() };
+    } finally {
+      notificationBadgeInFlightRef.current = false;
+    }
   }, [routeToken, user]);
 
   useFocusEffect(
     useCallback(() => {
       loadHeaderUserFromCache();
-      void applyCacheFirstHomeSummary(user);
-      void refreshHomeNotificationBadge(user);
+      const currentUser = userRef.current;
+      void applyCacheFirstHomeSummary(currentUser, 'home:focus');
+      void refreshHomeNotificationBadge(currentUser);
       const syncToken = routeToken;
       (async () => {
         const context = await captureAuthSessionContext(syncToken);
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
         const before = await getSyncQueueSummary();
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
-        setPendingSyncCount(offlineMode ? before.pending : 0);
+        setPendingSyncCount(before.pending);
         if (syncToken && before.pending > 0) {
           setSyncing(true);
           try {
@@ -432,30 +483,43 @@ export default function Home() {
         }
         const summary = await getSyncQueueSummary();
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
-        setPendingSyncCount(offlineMode ? summary.pending : 0);
+        setPendingSyncCount(summary.pending);
       })();
-    }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, offlineMode, refreshHomeNotificationBadge, routeToken, user])
+    }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, refreshHomeNotificationBadge, routeToken])
   );
 
   useEffect(() => {
-    const subscription = subscribeHomeRefresh(() => {
+    const subscription = subscribeHomeRefresh((event) => {
       if (homeRefreshDebounceRef.current) clearTimeout(homeRefreshDebounceRef.current);
       homeRefreshDebounceRef.current = setTimeout(() => {
-        void applyCacheFirstHomeSummary(user);
+        if (event.reason === 'notifications') {
+          void refreshHomeNotificationBadge(userRef.current);
+          return;
+        }
+        const source = event.reason === 'hydration'
+          ? 'home:hydration_event'
+          : event.reason === 'medication' || event.reason === 'medication-history'
+            ? 'home:medication_event'
+            : event.reason === 'sync'
+              ? 'home:sync_event'
+              : event.reason === 'profile'
+                ? 'home:profile_event'
+                : 'home:event';
+        void applyCacheFirstHomeSummary(userRef.current, source);
       }, 100);
     });
     return () => subscription.remove();
-  }, [applyCacheFirstHomeSummary, user]);
+  }, [applyCacheFirstHomeSummary, refreshHomeNotificationBadge]);
 
   useEffect(() => {
-    const refresh = () => refreshHomeNotificationBadge(user).catch(() => {});
+    const refresh = () => refreshHomeNotificationBadge(userRef.current).catch(() => {});
     const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
     const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, refresh);
     return () => {
       notificationSub.remove();
       reminderSub.remove();
     };
-  }, [refreshHomeNotificationBadge, user]);
+  }, [refreshHomeNotificationBadge]);
 
   // Debounce medicine search
   useEffect(() => {
@@ -563,7 +627,7 @@ export default function Home() {
             const homeCache = await readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(cachedUser), 'home_summary'), cachedUser);
             if (homeCache?.data?.quickStatus) setQuickStatus((prev) => ({ ...prev, ...homeCache.data.quickStatus }));
             if (Array.isArray(homeCache?.data?.timeline)) setTimeline(homeCache.data.timeline);
-            await applyCacheFirstHomeSummary(cachedUser);
+            await applyCacheFirstHomeSummary(cachedUser, 'home:mount');
             setOfflineMode(true);
             setLoading(false);
             return;
@@ -597,7 +661,7 @@ export default function Home() {
               }));
             }
             await applyVisibleUser(sessionUser);
-            await applyCacheFirstHomeSummary(sessionUser);
+            await applyCacheFirstHomeSummary(sessionUser, 'home:mount');
             setLoading(false);
           }
           const me = await Promise.race([
@@ -655,17 +719,16 @@ export default function Home() {
         // These run after loading is already set to false
         setTimeout(() => {
           // Load quick status data (non-blocking with timeouts)
+          const backendStartedAt = perfNow();
           Promise.allSettled([
             api.get('/hydration', activeToken, 3000).catch(() => null),
             api.get('/medications/upcoming', activeToken, 3000).catch(() => null),
             api.get('/medications/stats', activeToken, 3000).catch(() => null),
             api.get('/medications', activeToken, 3000).catch(() => null),
-            api.get('/medications/history/all', activeToken, 3000).catch(() => null),
           ]).then((results) => {
             const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
             const medicationsData = results[3].status === 'fulfilled' ? results[3].value : null;
-            const historyData = results[4].status === 'fulfilled' ? results[4].value : null;
             
             const hydrationGoal = resolveHydrationGoal(hydrationData);
             const writeHydration = async () => {
@@ -693,12 +756,7 @@ export default function Home() {
                 if (current) writeMedicationCache(backgroundUser, medicationsData).catch(() => {});
               });
             }
-            if (backgroundUser && Array.isArray(historyData)) {
-              void isAuthSessionContextCurrent(context).then((current) => {
-                if (current) writeMedicationHistoryCache(backgroundUser, historyData).catch(() => {});
-              });
-            }
-            void writeHydration().then(() => applyCacheFirstHomeSummary(backgroundUser)).catch(() => undefined);
+            void writeHydration().then(() => applyCacheFirstHomeSummary(backgroundUser, 'home:hydration_event')).catch(() => undefined);
             const owner = getCacheOwner(backgroundUser);
             if ((owner.owner_id || owner.owner_email) && hydrationData) {
               void isAuthSessionContextCurrent(context).then((current) => {
@@ -716,9 +774,22 @@ export default function Home() {
             void isAuthSessionContextCurrent(context).then((current) => {
               if (current) void markHomeBackgroundRefreshed();
             });
+            logPerf('Home backend refresh', backendStartedAt, {
+              trigger: 'startup_background',
+              endpointCount: 4,
+            });
           }).catch(() => {
             void isAuthSessionContextCurrent(context).then((current) => {
-              if (current) void applyCacheFirstHomeSummary(backgroundUser);
+              if (current) void applyCacheFirstHomeSummary(backgroundUser, 'home:connection_event');
+            });
+            logPerf('Home backend refresh', backendStartedAt, {
+              trigger: 'startup_background',
+              endpointCount: 4,
+              failed: true,
+            });
+          }).finally(() => {
+            void isAuthSessionContextCurrent(context).then((current) => {
+              if (current) backgroundRefreshInFlightRef.current = false;
             });
           });
           
@@ -738,13 +809,6 @@ export default function Home() {
               void isAuthSessionContextCurrent(context).then((current) => current && setTimeline([]));
             });
 
-          api.get('/notifications/stats', activeToken, 3000)
-            .catch(() => null)
-            .finally(() => {
-              void isAuthSessionContextCurrent(context).then((current) => {
-                if (current) backgroundRefreshInFlightRef.current = false;
-              });
-            });
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
         console.log('Home load error:', err);
@@ -809,19 +873,21 @@ export default function Home() {
 
       const refreshHydrationData = async () => {
         let ownsRefresh = false;
+        let refreshStartedAt = 0;
         try {
           const context = await captureAuthSessionContext(routeToken);
           if (!(await isAuthSessionContextCurrent(context))) return;
-          await applyCacheFirstHomeSummary(user);
+          await applyCacheFirstHomeSummary(userRef.current, 'home:focus');
           if (!await shouldRunHomeBackgroundRefresh() || backgroundRefreshInFlightRef.current) return;
           backgroundRefreshInFlightRef.current = true;
           ownsRefresh = true;
+          refreshStartedAt = perfNow();
           const hydrationRes = await api.get('/hydration', routeToken, 3000).catch(() => null);
           if (!(await isAuthSessionContextCurrent(context))) return;
           
           if (hydrationRes) {
             const currentHydration = await readHydrationCache<any>();
-            const mergedHydration = buildMergedHydrationPayload(hydrationRes, currentHydration, quickStatus.hydrationGoal || 2000);
+            const mergedHydration = buildMergedHydrationPayload(hydrationRes, currentHydration, hydrationGoalRef.current || 2000);
             setHydrationEntries(Array.isArray(mergedHydration.entries) ? mergedHydration.entries : null);
             
             setQuickStatus(prev => ({
@@ -833,16 +899,22 @@ export default function Home() {
             await writeHydrationCache(mergedHydration);
             await markHomeBackgroundRefreshed();
           }
-          await applyCacheFirstHomeSummary(user);
+          await applyCacheFirstHomeSummary(userRef.current, 'home:hydration_event');
         } catch (err) {
           console.log('Data refresh error', err);
         } finally {
+          if (ownsRefresh) {
+            logPerf('Home backend refresh', refreshStartedAt, {
+              trigger: 'focus',
+              endpointCount: 1,
+            });
+          }
           if (ownsRefresh) backgroundRefreshInFlightRef.current = false;
         }
       };
       
       refreshHydrationData();
-    }, [applyCacheFirstHomeSummary, markHomeBackgroundRefreshed, routeToken, loading, quickStatus.hydrationGoal, shouldRunHomeBackgroundRefresh, user])
+    }, [applyCacheFirstHomeSummary, markHomeBackgroundRefreshed, routeToken, loading, shouldRunHomeBackgroundRefresh])
   );
 
   // Use nickname if available, otherwise fall back to first name
@@ -1235,13 +1307,12 @@ export default function Home() {
   };
 
   const topSystemNotice = !inlineNotice && !menuVisible && !noticeModal && !selectedMedicineResult
-    ? offlineMode
-      ? { message: 'Offline mode', iconName: 'cloud-offline-outline' as const }
-      : syncing
-        ? { message: 'Syncing...', iconName: 'sync-outline' as const }
-        : pendingSyncCount > 0
-          ? { message: `${pendingSyncCount} change${pendingSyncCount === 1 ? '' : 's'} waiting to sync.`, iconName: 'sync-outline' as const }
-          : null
+    ? deriveTopNotice({
+      isDeviceOffline: connection.isDeviceOffline,
+      backendReachable: connection.backendReachable,
+      syncing,
+      pendingCount: pendingSyncCount,
+    })
     : null;
 
   if (loading || !user) {
@@ -1296,6 +1367,7 @@ export default function Home() {
         visible={Boolean(topSystemNotice)}
         message={topSystemNotice?.message || ''}
         iconName={topSystemNotice?.iconName || 'sync-outline'}
+        variant={topSystemNotice?.variant}
         top={Math.max(insets.top, 8) + 54}
       />
 

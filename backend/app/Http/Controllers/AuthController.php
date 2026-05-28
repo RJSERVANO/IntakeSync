@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Validation\Rules\Password as PasswordRule;
+use Illuminate\Database\QueryException;
 use Carbon\Carbon;
 
 class AuthController extends Controller
@@ -200,7 +201,19 @@ class AuthController extends Controller
                 $userData['avatar_url'] = $googleUser['picture'] ?? null;
             }
 
-            $user = User::create($userData);
+            try {
+                $user = User::create($userData);
+            } catch (QueryException $exception) {
+                $user = $hasGoogleId
+                    ? User::where('google_id', $googleUser['sub'])->first()
+                    : null;
+                if (!$user && !empty($googleUser['email'])) {
+                    $user = User::where('email', $googleUser['email'])->first();
+                }
+                if (!$user) {
+                    throw $exception;
+                }
+            }
         }
 
         return $this->issueToken($user);

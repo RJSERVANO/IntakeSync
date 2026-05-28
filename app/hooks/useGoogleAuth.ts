@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { Platform } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import * as api from '../app/api';
@@ -39,6 +40,21 @@ function makeGoogleAuthError(type: GoogleAuthErrorType, message: string, source?
     responseFormat: source?.responseFormat,
     isStaleSessionError: type === 'google_stale_session',
   });
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientBackendExchangeError(error: any) {
+  const status = Number(error?.status || 0);
+  const responseFormat = error?.responseFormat || error?.data?.response_format;
+  return (
+    api.isBackendReachabilityError(error) ||
+    responseFormat === 'html' ||
+    responseFormat === 'text' ||
+    [500, 502, 503, 504].includes(status)
+  );
 }
 
 function configureNativeGoogleSignIn() {
@@ -160,22 +176,59 @@ export function useGoogleAuth() {
           logGoogleAuth('stale-session-ignored', { stage: 'before-backend' });
           throw makeGoogleAuthError('google_stale_session', 'Stale Google sign-in ignored.');
         }
-        logGoogleAuth('backend-request-started', {
-          hasIdToken: Boolean(idToken),
-          hasAccessToken: Boolean(accessToken),
-          timeoutMs: 12000,
+        const netState = await NetInfo.fetch();
+        const deviceOnline = Boolean(netState.isConnected && netState.isInternetReachable !== false);
+        logGoogleAuth('backend-url-ready', {
+          route: '/oauth/google',
+          deviceOnline,
         });
-        const responseMeta = await api.postWithMeta(
-          '/oauth/google',
-          idToken ? { id_token: idToken } : { access_token: accessToken },
-          undefined,
-          12000
-        );
+        if (!deviceOnline) {
+          throw makeGoogleAuthError('google_backend_request_failed', 'Internet connection is required for this function.');
+        }
+
+        const reachableBeforeExchange = await api.checkBackendReachability(undefined, true);
+        logGoogleAuth('backend-reachability-before-exchange', { reachable: reachableBeforeExchange });
+        if (!reachableBeforeExchange) {
+          throw makeGoogleAuthError('google_backend_request_failed', 'Google sign-in could not connect to the server. Please try again.');
+        }
+
+        const backendPayload = idToken ? { id_token: idToken } : { access_token: accessToken };
+        let responseMeta: Awaited<ReturnType<typeof api.postWithMeta>> | null = null;
+        let backendError: any = null;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            logGoogleAuth('backend-request-started', {
+              hasIdToken: Boolean(idToken),
+              hasAccessToken: Boolean(accessToken),
+              timeoutMs: 12000,
+              attempt: attempt + 1,
+            });
+            responseMeta = await api.postWithMeta('/oauth/google', backendPayload, undefined, 12000);
+            logGoogleAuth('backend-status', {
+              status: responseMeta.status,
+              responseFormat: responseMeta.responseFormat,
+              retryUsed: attempt > 0,
+            });
+            backendError = null;
+            break;
+          } catch (exchangeError: any) {
+            backendError = exchangeError;
+            logGoogleAuth('backend-attempt-failed', {
+              status: exchangeError?.status,
+              type: exchangeError?.type,
+              responseFormat: exchangeError?.responseFormat || exchangeError?.data?.response_format,
+              retryEligible: attempt === 0 && isTransientBackendExchangeError(exchangeError),
+            });
+            if (attempt === 0 && isTransientBackendExchangeError(exchangeError)) {
+              logGoogleAuth('backend-safe-retry-scheduled', { delayMs: 700 });
+              await wait(700);
+              continue;
+            }
+            break;
+          }
+        }
+        if (backendError || !responseMeta) throw backendError;
         const response = responseMeta.data;
-        logGoogleAuth('backend-status', {
-          status: responseMeta.status,
-          responseFormat: responseMeta.responseFormat,
-        });
         if (!(await isAuthSessionContextCurrent(authContext))) {
           logGoogleAuth('stale-session-ignored', { stage: 'after-backend', status: responseMeta.status });
           throw makeGoogleAuthError('google_stale_session', 'Stale Google sign-in ignored.');

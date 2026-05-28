@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import Login from './login';
 import * as api from './api';
 import CustomSplash from './components/branding/CustomSplash';
+import { logPerf, perfNow } from '../utils/perf';
 import {
   getCachedSession,
   hasCompletedOnboarding,
@@ -23,22 +24,29 @@ export default function Index() {
     let mounted = true;
 
     async function checkStartupState() {
+      const startedAt = perfNow();
+      let outcome = 'unknown';
+      let cachedSessionFound = false;
+      let checkedRemoteUser = false;
       try {
         const seenStartupSplash = await hasSeenStartupSplash();
         const cached = await getCachedSession();
+        const cachedSession = hasValidCachedSession(cached) ? cached : null;
+        cachedSessionFound = Boolean(cachedSession);
         if (!mounted) return;
 
-        if (hasValidCachedSession(cached)) {
-          const context = await captureAuthSessionContext(cached.token, cached.user);
-          let user = cached.user;
+        if (cachedSession) {
+          const context = await captureAuthSessionContext(cachedSession.token, cachedSession.user);
+          let user = cachedSession.user;
           let completed = await hasCompletedOnboarding(user);
 
           if (!completed) {
             try {
-              const remoteUser: any = await api.get('/me', cached.token, 3500);
+              checkedRemoteUser = true;
+              const remoteUser: any = await api.get('/me', cachedSession.token, 3500);
               if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
               user = { ...(user || {}), ...(remoteUser || {}) };
-              await updateCachedUser(user, cached.token);
+              await updateCachedUser(user, cachedSession.token);
               completed = await hasCompletedOnboarding(user);
             } catch (err: any) {
               if (api.isAuthError(err)) {
@@ -46,9 +54,11 @@ export default function Index() {
                 if (!mounted) return;
                 if (!cleared) return;
                 if (seenStartupSplash) {
+                  outcome = 'auth_failed_login';
                   setStartupState('redirecting');
                   router.replace({ pathname: '/login' } as any);
                 } else {
+                  outcome = 'auth_failed_guest_splash';
                   setStartupState('guestSplash');
                 }
                 return;
@@ -59,31 +69,42 @@ export default function Index() {
           if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
 
           if (completed) {
+            outcome = 'home';
             setStartupState('redirecting');
-            router.replace({ pathname: '/home', params: { token: cached.token, offline: '1' } } as any);
+            router.replace({ pathname: '/home', params: { token: cachedSession.token, offline: '1' } } as any);
             return;
           }
 
+          outcome = 'onboarding';
           setStartupState('redirecting');
           router.replace({
             pathname: '/onboarding',
-            params: { token: cached.token, name: user?.name || '' },
+            params: { token: cachedSession.token, name: user?.name || '' },
           } as any);
           return;
         }
 
         if (seenStartupSplash) {
+          outcome = 'login';
           setStartupState('redirecting');
           router.replace({ pathname: '/login' } as any);
           return;
         }
 
+        outcome = 'guest_splash';
         setStartupState('guestSplash');
       } catch {
         if (mounted) {
+          outcome = 'error_login';
           setStartupState('redirecting');
           router.replace({ pathname: '/login' } as any);
         }
+      } finally {
+        logPerf('Startup auth/session hydration', startedAt, {
+          outcome,
+          cachedSessionFound,
+          checkedRemoteUser,
+        });
       }
     }
 

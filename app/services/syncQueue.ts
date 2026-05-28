@@ -12,8 +12,9 @@ import {
 } from './offlineStorage';
 import { emitSyncCompleted } from './homeEvents';
 import { captureAuthSessionContext, getCurrentAuthSessionVersion, isAuthSessionContextCurrent, isCurrentAuthSessionVersion } from './authSession';
+import { logPerf, perfNow } from '../utils/perf';
 
-export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
+export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed' | 'failed_non_retryable';
 export type SyncQueueAction =
   | 'LOG_BEVERAGE'
   | 'DELETE_BEVERAGE'
@@ -74,6 +75,25 @@ type EnqueueInput = Partial<SyncQueueItem> & {
 };
 
 let isProcessing = false;
+const SYNC_ITEM_TIMEOUT_MS = 10 * 1000;
+const MAX_SYNC_RETRY_COUNT = 4;
+const OFFLINE_SUPPORTED_ACTIONS = new Set<SyncQueueAction>([
+  'LOG_BEVERAGE',
+  'CREATE_MEDICATION',
+  'UPDATE_MEDICATION',
+  'MARK_MEDICATION_TAKEN',
+  'MARK_MEDICATION_MISSED',
+  'SNOOZE_MEDICATION',
+  'MARK_NOTIFICATION_READ',
+  'SNOOZE_NOTIFICATION',
+  'COMPLETE_NOTIFICATION',
+  'UPDATE_PROFILE',
+  'UPDATE_SETTINGS',
+  'SUBMIT_ONBOARDING',
+  'NOTIFICATION_OPENED',
+  'NOTIFICATION_COMPLETED',
+  'NOTIFICATION_SNOOZED',
+]);
 
 function queueId(actionType: SyncQueueAction, localId: string) {
   return `queue_${actionType}_${localId}`;
@@ -93,7 +113,15 @@ function normalizeItem(raw: any): SyncQueueItem | null {
     endpoint: raw.endpoint,
     method: raw.method || (actionType === 'DELETE_MEDICATION' || actionType === 'CLEAR_NOTIFICATION' ? 'DELETE' : 'POST'),
     payload: raw.payload || {},
-    status: raw.status === 'synced' ? 'synced' : raw.status === 'syncing' ? 'syncing' : raw.status === 'failed' ? 'failed' : 'pending',
+    status: raw.status === 'synced'
+      ? 'synced'
+      : raw.status === 'syncing'
+        ? 'syncing'
+        : raw.status === 'failed_non_retryable'
+          ? 'failed_non_retryable'
+          : raw.status === 'failed'
+            ? 'failed'
+            : 'pending',
     retry_count: Number(raw.retry_count ?? raw.attempts ?? 0),
     attempts: Number(raw.retry_count ?? raw.attempts ?? 0),
     created_at: raw.created_at || new Date().toISOString(),
@@ -205,6 +233,72 @@ function itemBelongsToUser(item: SyncQueueItem, user?: any | null) {
   return cacheOwnerMatches(item, user);
 }
 
+function isOfflineSyncActionSupported(actionType: SyncQueueAction) {
+  return OFFLINE_SUPPORTED_ACTIONS.has(actionType);
+}
+
+function isActiveQueueItem(item: SyncQueueItem, user?: any | null) {
+  return item.status !== 'synced'
+    && item.status !== 'failed_non_retryable'
+    && item.retry_count < MAX_SYNC_RETRY_COUNT
+    && isOfflineSyncActionSupported(item.action_type)
+    && itemBelongsToUser(item, user);
+}
+
+function validateQueueItem(item: SyncQueueItem): string | null {
+  if (!isOfflineSyncActionSupported(item.action_type)) return 'unsupported_action';
+  if (!item.local_id || !String(item.local_id).trim()) return 'missing_local_id';
+
+  const payload = item.payload || {};
+  if (item.action_type === 'LOG_BEVERAGE') {
+    if (!payload.client_uuid && !payload.local_id && !item.local_id) return 'missing_beverage_id';
+    if (!Number.isFinite(Number(payload.amount_ml)) || Number(payload.amount_ml) <= 0) return 'invalid_beverage_amount';
+  }
+  if (item.action_type === 'CREATE_MEDICATION' && (!payload.name || !Array.isArray(payload.times))) {
+    return 'invalid_medication_payload';
+  }
+  if (item.action_type === 'UPDATE_MEDICATION' && !isServerMedicationId(payload.server_id || payload.id)) {
+    return 'missing_server_medication_id';
+  }
+  if (['MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item.action_type)) {
+    if (!isServerMedicationId(payload.server_id || payload.medication_id)) return 'missing_server_medication_id';
+    if (!payload.time) return 'missing_medication_history_time';
+  }
+  if (['MARK_NOTIFICATION_READ', 'SNOOZE_NOTIFICATION', 'COMPLETE_NOTIFICATION', 'NOTIFICATION_OPENED', 'NOTIFICATION_COMPLETED', 'NOTIFICATION_SNOOZED'].includes(item.action_type)) {
+    if (!payload.notification_id && !payload.id && !item.local_id) return 'missing_notification_id';
+  }
+  return null;
+}
+
+function isServerMedicationId(value: any) {
+  const text = String(value ?? '').trim();
+  return Boolean(text && /^\d+$/.test(text));
+}
+
+function isNonRetryableSyncError(error: any, item: SyncQueueItem) {
+  const status = Number(error?.status || 0);
+  if (status === 400 || status === 422) return true;
+  if (status === 404) {
+    return ['MARK_NOTIFICATION_READ', 'COMPLETE_NOTIFICATION', 'SNOOZE_NOTIFICATION', 'NOTIFICATION_OPENED', 'NOTIFICATION_COMPLETED', 'NOTIFICATION_SNOOZED'].includes(item.action_type);
+  }
+  const message = String(error?.data?.message || error?.message || '').toLowerCase();
+  return message.includes('unsupported action') || message.includes('no endpoint');
+}
+
+function withSyncItemTimeout<T>(promise: Promise<T>, item: SyncQueueItem): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject({
+        status: 408,
+        type: 'timeout',
+        isNetworkError: true,
+        message: `Sync item timed out: ${item.action_type}`,
+      }), SYNC_ITEM_TIMEOUT_MS);
+    }),
+  ]);
+}
+
 async function updateMedicationServerId(localId: string, serverId: string, user?: any | null) {
   try {
     const ownerKey = getUserCacheIdentifier(user);
@@ -235,14 +329,10 @@ async function updateMedicationServerId(localId: string, serverId: string, user?
 }
 
 async function sendItem(item: SyncQueueItem, token: string) {
-  if (item.action_type === 'CLEAR_MEDICATION_HISTORY') {
-    return { local_only: true };
-  }
-
   const request = buildRequest(item);
   if (!request.endpoint) throw new Error(`No endpoint for ${item.action_type}`);
 
-  if ((item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'MARK_MEDICATION_TAKEN' || item.action_type === 'MARK_MEDICATION_MISSED' || item.action_type === 'SNOOZE_MEDICATION') && !request.endpoint.match(/\/\d+/)) {
+  if ((item.action_type === 'UPDATE_MEDICATION' || item.action_type === 'MARK_MEDICATION_TAKEN' || item.action_type === 'MARK_MEDICATION_MISSED' || item.action_type === 'SNOOZE_MEDICATION') && !isServerMedicationId(item.payload.server_id || item.payload.medication_id || item.payload.id)) {
     throw new Error('Waiting for medication create to sync first');
   }
 
@@ -277,6 +367,15 @@ export async function enqueueSyncAction(action: EnqueueInput) {
     updated_at: now,
     last_error: null,
   };
+  if (!isOfflineSyncActionSupported(item.action_type)) {
+    console.warn(`Unsupported offline sync action skipped: ${item.action_type}`);
+    return { ...item, status: 'failed_non_retryable', last_error: 'unsupported_action' };
+  }
+  const invalidReason = validateQueueItem(item);
+  if (invalidReason) {
+    console.warn(`Invalid offline sync action skipped: ${item.action_type}:${invalidReason}`);
+    return { ...item, status: 'failed_non_retryable', last_error: invalidReason };
+  }
   const existingIndex = queue.findIndex((queued) => queued.id === item.id || (queued.action_type === item.action_type && queued.local_id === item.local_id));
   const next = [...queue];
   if (existingIndex >= 0) next[existingIndex] = { ...next[existingIndex], ...item, created_at: next[existingIndex].created_at };
@@ -288,7 +387,7 @@ export async function enqueueSyncAction(action: EnqueueInput) {
 export async function getPendingSyncActions() {
   const session = await getCachedSession();
   const queue = await readQueue(session?.user);
-  return queue.filter((item) => item.status !== 'synced' && itemBelongsToUser(item, session?.user));
+  return queue.filter((item) => isActiveQueueItem(item, session?.user));
 }
 
 export async function markSyncActionSynced(id: string) {
@@ -363,11 +462,12 @@ export async function getSyncQueueSummary() {
   const session = await getCachedSession();
   const queue = await readQueue(session?.user);
   const pending = queue.filter((item) => item.status !== 'synced' && itemBelongsToUser(item, session?.user));
+  const active = pending.filter((item) => isActiveQueueItem(item, session?.user));
   return {
     total: queue.length,
-    pending: pending.length,
-    failed: pending.filter((item) => item.status === 'failed').length,
-    syncing: pending.filter((item) => item.status === 'syncing').length,
+    pending: active.length,
+    failed: active.filter((item) => item.status === 'failed').length,
+    syncing: active.filter((item) => item.status === 'syncing').length,
   };
 }
 
@@ -379,7 +479,23 @@ export async function processSyncQueue(
   token: string | undefined,
   onSynced?: (item: SyncQueueItem, response: any) => Promise<void> | void,
 ) {
-  if (!token || isProcessing) return { synced: 0, failed: 0 };
+  const startedAt = perfNow();
+  if (!token) {
+    logPerf('Sync queue processing', startedAt, {
+      skipped: 'missing_token',
+      synced: 0,
+      failed: 0,
+    });
+    return { synced: 0, failed: 0 };
+  }
+  if (isProcessing) {
+    logPerf('Sync queue processing', startedAt, {
+      skipped: 'already_processing',
+      synced: 0,
+      failed: 0,
+    });
+    return { synced: 0, failed: 0 };
+  }
   isProcessing = true;
   const session = await getCachedSession();
   const sessionContext = await captureAuthSessionContext(token, session?.user ?? null);
@@ -387,12 +503,18 @@ export async function processSyncQueue(
   const currentUser = session?.user;
   if (!currentUser || session?.token !== token || !(await isAuthSessionContextCurrent(sessionContext))) {
     isProcessing = false;
+    logPerf('Sync queue processing', startedAt, {
+      skipped: 'stale_session',
+      synced: 0,
+      failed: 0,
+    });
     return { synced: 0, failed: 0 };
   }
   const queue = await readQueue(currentUser);
   const nextQueue = [...queue];
   let synced = 0;
   let failed = 0;
+  let processed = 0;
 
   try {
     for (const item of queue) {
@@ -402,12 +524,39 @@ export async function processSyncQueue(
         if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: item.status === 'syncing' ? 'pending' : item.status };
         continue;
       }
+      const invalidReason = validateQueueItem(item);
+      if (invalidReason) {
+        if (index >= 0) {
+          nextQueue[index] = {
+            ...nextQueue[index],
+            status: 'failed_non_retryable',
+            updated_at: new Date().toISOString(),
+            last_error: invalidReason,
+          };
+        }
+        console.warn(`Dropped offline sync action: ${item.action_type}:${invalidReason}`);
+        failed += 1;
+        continue;
+      }
+      if (item.retry_count >= MAX_SYNC_RETRY_COUNT) {
+        if (index >= 0) {
+          nextQueue[index] = {
+            ...nextQueue[index],
+            status: 'failed_non_retryable',
+            updated_at: new Date().toISOString(),
+            last_error: 'max_retries_exceeded',
+          };
+        }
+        failed += 1;
+        continue;
+      }
       if (!isCurrentAuthSessionVersion(sessionVersion) || !(await isAuthSessionContextCurrent(sessionContext))) {
         return { synced, failed };
       }
       try {
         if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: 'syncing', updated_at: new Date().toISOString() };
-        const response = await sendItem(item, token);
+        processed += 1;
+        const response = await withSyncItemTimeout(sendItem(item, token), item);
         if (item.action_type === 'CREATE_MEDICATION') {
           const serverId = response?.id?.toString();
           if (serverId) {
@@ -438,14 +587,16 @@ export async function processSyncQueue(
           synced += 1;
           continue;
         }
+        const nextRetryCount = index >= 0 ? nextQueue[index].retry_count + 1 : item.retry_count + 1;
+        const nonRetryable = isNonRetryableSyncError(error, item) || nextRetryCount >= MAX_SYNC_RETRY_COUNT;
         if (index >= 0) {
           nextQueue[index] = {
             ...nextQueue[index],
-            status: 'failed',
-            retry_count: nextQueue[index].retry_count + 1,
-            attempts: nextQueue[index].retry_count + 1,
+            status: nonRetryable ? 'failed_non_retryable' : 'failed',
+            retry_count: nextRetryCount,
+            attempts: nextRetryCount,
             updated_at: new Date().toISOString(),
-            last_error: error?.data?.message || error?.message || 'Sync failed',
+            last_error: error?.data?.message || error?.message || (nonRetryable ? 'Non-retryable sync failure' : 'Sync failed'),
           };
         }
         failed += 1;
@@ -456,10 +607,16 @@ export async function processSyncQueue(
     }
     await writeQueue(nextQueue, currentUser);
     const latestQueue = await readQueue(currentUser);
-    await writeQueue(latestQueue.filter((item) => item.status !== 'synced'), currentUser);
+    await writeQueue(latestQueue.filter((item) => item.status !== 'synced' && item.status !== 'failed_non_retryable'), currentUser);
     if (synced > 0 || failed > 0) emitSyncCompleted({ synced, failed });
     return { synced, failed };
   } finally {
+    logPerf('Sync queue processing', startedAt, {
+      queued: queue.length,
+      processed,
+      synced,
+      failed,
+    });
     isProcessing = false;
   }
 }

@@ -4,7 +4,16 @@ import { useFonts } from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useRef } from 'react';
 import Toast from 'react-native-toast-message';
-import { bootstrapNotificationSchedules, getLastNotificationResponse, notificationService, recordNotificationResponse } from '../services/notificationService';
+import {
+  bootstrapNotificationSchedules,
+  clearLastNotificationResponseIfSupported,
+  getLastNotificationResponse,
+  getNotificationResponseKey,
+  hasConsumedNotificationResponse,
+  markNotificationResponseConsumed,
+  notificationService,
+  recordNotificationResponse,
+} from '../services/notificationService';
 import { initializeOfflineSync } from '../services/offlineSyncManager';
 import { LogBox, Text, TextInput } from 'react-native';
 import { FONT_SCALE } from '../utils/fontScaling';
@@ -67,11 +76,13 @@ export default function RootLayout() {
   }, []);
 
   const handleNotificationNavigation = useCallback(async (response: any) => {
-    const notificationId = response?.notification?.request?.identifier || '';
-    const actionId = response?.actionIdentifier || 'default';
-    const handledKey = `${notificationId}:${actionId}`;
-    if (notificationId && handledNotificationResponses.current.has(handledKey)) return;
-    if (notificationId) handledNotificationResponses.current.add(handledKey);
+    const handledKey = getNotificationResponseKey(response);
+    if (!handledKey) return;
+    if (handledNotificationResponses.current.has(handledKey)) return;
+    if (await hasConsumedNotificationResponse(handledKey)) return;
+    handledNotificationResponses.current.add(handledKey);
+    await markNotificationResponseConsumed(handledKey);
+    void clearLastNotificationResponseIfSupported();
 
     const data: any = await recordNotificationResponse(response);
     const session = await getCachedSession();
