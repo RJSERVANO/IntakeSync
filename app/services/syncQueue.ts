@@ -16,6 +16,7 @@ import { captureAuthSessionContext, getCurrentAuthSessionVersion, isAuthSessionC
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 export type SyncQueueAction =
   | 'LOG_BEVERAGE'
+  | 'DELETE_BEVERAGE'
   | 'CREATE_MEDICATION'
   | 'UPDATE_MEDICATION'
   | 'DELETE_MEDICATION'
@@ -153,6 +154,8 @@ function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQue
           timestamp: item.payload.timestamp,
         },
       };
+    case 'DELETE_BEVERAGE':
+      return { endpoint: '/hydration/delete', method: 'POST', payload: { timestamp: item.payload.timestamp } };
     case 'CREATE_MEDICATION':
       return { endpoint: '/medications', method: 'POST', payload: { ...item.payload, local_id: item.local_id, client_uuid: item.local_id } };
     case 'UPDATE_MEDICATION':

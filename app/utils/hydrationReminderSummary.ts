@@ -38,6 +38,11 @@ function localMinuteKey(date: Date) {
   return `${localDateKey(date)}:${hour}:${minute}`;
 }
 
+function localHourKey(date: Date) {
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  return `${localDateKey(date)}:${hour}`;
+}
+
 function reminderKey(item: HydrationReminderSource, scheduledAt: Date) {
   const explicitKey = item.scheduleKey || item.doseKey;
   if (explicitKey && explicitKey.includes(localDateKey(scheduledAt))) return explicitKey;
@@ -103,9 +108,10 @@ export function deriveHydrationReminderSummary({
       scheduledTime + RESPONSE_WINDOW_MS,
       nextReminderTime && nextReminderTime > scheduledTime ? nextReminderTime : Number.POSITIVE_INFINITY,
     );
+    const reminderHour = localHourKey(reminder.scheduledAt);
     const responded = entryTimes.some((entryTime) => {
       const time = entryTime.getTime();
-      return time >= scheduledTime && time <= responseWindowEnd;
+      return (time >= scheduledTime && time <= responseWindowEnd) || localHourKey(entryTime) === reminderHour;
     });
 
     if (responded) respondedTimes.push(formatTime(reminder.scheduledAt));

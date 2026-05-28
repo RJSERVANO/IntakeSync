@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
+import { DeviceEventEmitter, View, Text, TouchableOpacity, StyleSheet, TextInput, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
@@ -7,13 +7,13 @@ import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
-import { enqueueBeverageLog, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
+import { enqueueBeverageLog, enqueueSyncAction, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, processSyncQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { cancelHydrationSlotNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, markHydrationGoalCompleted, notificationService, readLocalNotificationInbox, reconcileNotificationInbox, rescheduleHydrationNotifications, upsertHydrationLogNotification } from '../../../../services/notificationService';
+import { cancelHydrationSlotNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, hideHydrationLogNotifications, isNotificationRecordHidden, markHydrationGoalCompleted, notificationService, readLocalNotificationInbox, reconcileNotificationInbox, rescheduleHydrationNotifications, upsertHydrationLogNotification } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
   calculatePersonalizedHydrationGoal,
@@ -28,6 +28,7 @@ import {
   HYDRATION_REMINDER_RESPONSE_WINDOW_MINUTES,
   type HydrationReminderSummary,
 } from '../../../../utils/hydrationReminderSummary';
+import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from '../../../../services/homeEvents';
 
 interface UserDetails {
   weight?: number;
@@ -130,6 +131,10 @@ async function markHydrationBackgroundRefreshed() {
   await AsyncStorage.setItem(LAST_HYDRATION_REFRESH_KEY, String(Date.now()));
 }
 
+function isBeverageSyncAction(item: any) {
+  return item?.action_type === 'LOG_BEVERAGE' || item?.action_type === 'DELETE_BEVERAGE';
+}
+
 const DRINK_OPTIONS: {
   value: string;
   label: string;
@@ -158,6 +163,7 @@ const LEVEL_OPTIONS: { value: BeverageLevel; label: string }[] = [
 const ALCOHOL_ALLOWED_PHRASES = [
   'root beer',
   'ginger beer',
+  'apple cider',
   'beer shampoo',
   'virgin mojito',
   'virgin margarita',
@@ -174,13 +180,20 @@ const ALCOHOL_ALLOWED_PHRASES = [
 
 const ALCOHOL_KEYWORDS = [
   'pale pilsen',
+  'palepilsen',
   'san miguel',
+  'sanmiguel',
   'san mig light',
+  'sanmiglight',
   'red horse',
+  'redhorse',
   'cerveza negra',
+  'cervezanegra',
   'ginebra',
   'gsm blue',
+  'gsmblue',
   'gin bilog',
+  'ginbilog',
   'tanduay',
   'emperador',
   'fundador',
@@ -205,6 +218,13 @@ const ALCOHOL_KEYWORDS = [
   'sparkling wine',
   'whiskey',
   'whisky',
+  'beer',
+  'lager',
+  'ale',
+  'stout',
+  'porter',
+  'pilsner',
+  'wine',
   'bourbon',
   'scotch',
   'rum',
@@ -215,7 +235,7 @@ const ALCOHOL_KEYWORDS = [
   'brandy',
   'cognac',
   'sake',
-  'cider',
+  'soju',
   'hard cider',
   'hard seltzer',
   'liqueur',
@@ -255,8 +275,6 @@ const ALCOHOL_KEYWORDS = [
   'grey goose',
   'jose cuervo',
   'hennessy',
-  'beer',
-  'wine',
   'cocktail',
 ];
 
@@ -271,15 +289,27 @@ function normalizeBeverageText(text: string) {
     .replace(/\s+/g, ' ');
 }
 
+function compactBeverageText(text: string) {
+  return text.replace(/\s+/g, '');
+}
+
 function textHasPhrase(text: string, phrase: string) {
   return new RegExp(`(^|\\s)${phrase.replace(/\s+/g, '\\s+')}(\\s|$)`).test(text);
+}
+
+function textHasKeyword(normalized: string, compact: string, keyword: string) {
+  const normalizedKeyword = normalizeBeverageText(keyword);
+  const compactKeyword = compactBeverageText(normalizedKeyword);
+  return textHasPhrase(normalized, normalizedKeyword) || (compactKeyword.length > 2 && compact.includes(compactKeyword));
 }
 
 function isAlcoholicBeverageText(text: string): boolean {
   const normalized = normalizeBeverageText(text);
   if (!normalized) return false;
-  if (ALCOHOL_ALLOWED_PHRASES.some((phrase) => textHasPhrase(normalized, normalizeBeverageText(phrase)))) return false;
-  return ALCOHOL_KEYWORDS.some((keyword) => textHasPhrase(normalized, normalizeBeverageText(keyword)));
+  const compact = compactBeverageText(normalized);
+  if (textHasKeyword(normalized, compact, 'hard cider') || textHasKeyword(normalized, compact, 'alcoholic cider')) return true;
+  if (ALCOHOL_ALLOWED_PHRASES.some((phrase) => textHasKeyword(normalized, compact, phrase))) return false;
+  return ALCOHOL_KEYWORDS.some((keyword) => textHasKeyword(normalized, compact, keyword));
 }
 
 function getLevelLabel(value?: string) {
@@ -463,9 +493,17 @@ export default function Hydration() {
     const timer = setInterval(() => {
       void refreshHydrationReminderSummary(entriesRef.current);
     }, 60 * 1000);
-    return () => clearInterval(timer);
-  // Keeps the missed reminder card current while the screen is open.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, () => {
+      void refreshHydrationReminderSummary(entriesRef.current);
+    });
+    const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, () => {
+      void refreshHydrationReminderSummary(entriesRef.current);
+    });
+    return () => {
+      clearInterval(timer);
+      notificationSub.remove();
+      reminderSub.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -521,6 +559,7 @@ export default function Hydration() {
         }));
       const notificationRecords = (Array.isArray(cachedNotifications) ? cachedNotifications : [])
         .filter((item: any) => item?.type === 'hydration' && String(item?.metadata?.source || '').includes('hydration_reminder'))
+        .filter((item: any) => !isNotificationRecordHidden(item))
         .map((item: any) => ({
           type: 'hydration',
           scheduleKey: item?.metadata?.scheduleKey || item?.metadata?.schedule_key,
@@ -710,7 +749,7 @@ export default function Hydration() {
         const activeToken = token as string | undefined;
         const context = await captureAuthSessionContext(activeToken);
         if (activeToken && !(await isAuthSessionContextCurrent(context))) return;
-        const tokenChanged = previousTokenRef.current !== activeToken;
+        const tokenChanged = Boolean(previousTokenRef.current && previousTokenRef.current !== activeToken);
         previousTokenRef.current = activeToken;
 
         if (tokenChanged) {
@@ -750,7 +789,7 @@ export default function Hydration() {
         }
 
         setCacheReady(true);
-        const pendingLocalBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+        const pendingLocalBeverages = (await getPendingSyncActions()).filter(isBeverageSyncAction);
         setPendingSyncCount(offlineMode ? pendingLocalBeverages.length : 0);
 
         if (token) {
@@ -760,7 +799,7 @@ export default function Hydration() {
           const shouldRefresh = cachedEntries.length === 0 || await shouldRunHydrationBackgroundRefresh();
           if (!shouldRefresh || hydrationRefreshInFlightRef.current) return;
           hydrationRefreshInFlightRef.current = true;
-          if (cachedEntries.length === 0) setSyncing(true);
+          setSyncing(true);
           const res = await api.get('/hydration', token as string, cachedEntries.length > 0 ? 5000 : 10000);
           if (cancelled || !(await isAuthSessionContextCurrent(context))) return;
           if (res) {
@@ -820,7 +859,7 @@ export default function Hydration() {
         if (api.isStaleSessionError(err)) return;
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
-          setPendingSyncCount((await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE').length);
+          setPendingSyncCount((await getPendingSyncActions()).filter(isBeverageSyncAction).length);
           showInlineNotice('Offline mode');
         }
       } finally {
@@ -844,10 +883,10 @@ export default function Hydration() {
     if (!token) return;
     const context = await captureAuthSessionContext(token as string);
     if (!(await isAuthSessionContextCurrent(context))) return;
-    const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
-    setPendingSyncCount(offlineMode ? pendingBeverages.length : 0);
-    const shouldShowSync = showResult || pendingBeverages.length > 0;
-    if (pendingBeverages.length === 0 && !showResult) return;
+    const pendingActions = (await getPendingSyncActions()).filter(isBeverageSyncAction);
+    setPendingSyncCount(offlineMode ? pendingActions.length : 0);
+    const shouldShowSync = showResult || pendingActions.length > 0;
+    if (pendingActions.length === 0 && !showResult) return;
     if (shouldShowSync) setSyncing(true);
     try {
       const result = await processBeverageQueue(token as string, async (localId, response) => {
@@ -867,14 +906,17 @@ export default function Hydration() {
           return next;
         });
       });
-      if (result.synced > 0) {
+      const pendingDeletes = (await getPendingSyncActions()).some((item) => item.action_type === 'DELETE_BEVERAGE');
+      if (pendingDeletes) await processSyncQueue(token as string).catch(() => {});
+      const remainingBeverageActions = (await getPendingSyncActions()).filter(isBeverageSyncAction).length;
+      setPendingSyncCount(remainingBeverageActions);
+      if (result.synced > 0 || remainingBeverageActions === 0) {
         setOfflineMode(false);
-        setPendingSyncCount(0);
         if (showResult) showInlineNotice('Sync complete');
       }
     } catch {
       setOfflineMode(true);
-      setPendingSyncCount((await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE').length);
+      setPendingSyncCount((await getPendingSyncActions()).filter(isBeverageSyncAction).length);
       if (showResult) showInlineNotice('Still offline');
     } finally {
       if (shouldShowSync && await isAuthSessionContextCurrent(context)) setSyncing(false);
@@ -1046,7 +1088,7 @@ export default function Hydration() {
           console.log('Hydration sync error', err);
           if (api.isNetworkError(err)) {
             await enqueueBeverageLog(queuePayload);
-            const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+            const pendingBeverages = (await getPendingSyncActions()).filter(isBeverageSyncAction);
             setPendingSyncCount(pendingBeverages.length);
             setOfflineMode(true);
             showInlineNotice('Will sync later');
@@ -1058,7 +1100,7 @@ export default function Hydration() {
         }
       } else {
         await enqueueBeverageLog(queuePayload);
-        const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+        const pendingBeverages = (await getPendingSyncActions()).filter(isBeverageSyncAction);
         setPendingSyncCount(pendingBeverages.length);
         setOfflineMode(true);
         showInlineNotice('Will sync later');
@@ -1199,12 +1241,19 @@ export default function Hydration() {
     entriesRef.current = newEntries;
     setEntries(newEntries);
     await refreshHydrationReminderSummary(newEntries);
+    const owner = getCacheOwner((await getCachedSession())?.user ?? null);
+    await hideHydrationLogNotifications(owner, deletedEntry);
 
     // Persist to AsyncStorage to prevent restoration on refresh
     if (canUseHydrationCacheRef.current) {
       try {
+        const existingCache = await readHydrationCache<any>();
+        const todayTotal = totalForLocalDay(newEntries);
         await writeHydrationCache({
+          ...(existingCache || {}),
           goal,
+          today_total: todayTotal,
+          percentage: goal > 0 ? Math.round((todayTotal / goal) * 100) : 0,
           entries: newEntries
         });
         console.log('Entry deleted from AsyncStorage');
@@ -1237,14 +1286,31 @@ export default function Hydration() {
           await refreshHydrationReminderSummary(filteredEntries);
           // Update AsyncStorage with server data
           if (canUseHydrationCacheRef.current) {
+            const existingCache = await readHydrationCache<any>();
+            const todayTotal = totalForLocalDay(filteredEntries);
             await writeHydrationCache({
+              ...(existingCache || {}),
+              ...refreshedData,
               goal,
+              today_total: todayTotal,
+              percentage: goal > 0 ? Math.round((todayTotal / goal) * 100) : 0,
               entries: filteredEntries
             });
           }
         }
       } catch (err: any) {
         console.error('Server delete sync error:', err);
+        await enqueueSyncAction({
+          action_type: 'DELETE_BEVERAGE',
+          method: 'POST',
+          local_id: deletedEntry.local_id || deletedEntry.client_uuid || targetKey,
+          payload: {
+            timestamp: deletedEntry.timestamp,
+            local_id: deletedEntry.local_id,
+            client_uuid: deletedEntry.client_uuid || deletedEntry.local_id,
+          },
+        });
+        setPendingSyncCount((await getPendingSyncActions()).filter(isBeverageSyncAction).length);
         // Keep local deletion even if server sync fails
         syncWarning = 'Entry deleted locally but server sync failed. It will be removed on next sync.';
       }

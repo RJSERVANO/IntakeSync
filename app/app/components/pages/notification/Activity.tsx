@@ -19,7 +19,10 @@ import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionCon
 import {
   getCachedSession,
   getCacheOwner,
+  getMedicationClearedHistoryCacheKey,
+  getUserCacheIdentifier,
   getUserScopedKey,
+  readDeletedMedicationTombstones,
   readHydrationCache,
   readMedicationCache,
   readMedicationHistoryCache,
@@ -30,6 +33,8 @@ import {
 import { enqueueSyncAction, getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
 import {
   getScheduledNotificationRefs,
+  isNotificationRecordHidden,
+  isUnreadActionableNotificationRecord,
   markLocalNotificationCleared,
   markLocalNotificationRead,
   reconcileNotificationInbox,
@@ -69,6 +74,9 @@ interface NotificationItem {
   delivered_at?: string | null;
   opened_at?: string | null;
   read_at?: string | null;
+  hidden_at?: string | null;
+  cleared_at?: string | null;
+  deleted_at?: string | null;
   metadata?: Record<string, any> | null;
 }
 
@@ -134,17 +142,7 @@ const isMissingBackendRoute = (error: any) => (
 
 const isScheduledStatus = (status: NotificationStatus) => status === 'scheduled' || status === 'upcoming';
 const isLocalActivity = (item: NotificationItem) => Boolean(item.metadata?.local_activity);
-const unreadStatuses: NotificationStatus[] = ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'];
-const isFutureScheduled = (item: NotificationItem) => (
-  isScheduledStatus(item.status) && getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at) > Date.now()
-);
-const isUnread = (item: NotificationItem) => (
-  unreadStatuses.includes(item.status) &&
-  !item.opened_at &&
-  !item.read_at &&
-  !isLocalActivity(item) &&
-  !isFutureScheduled(item)
-);
+const isUnread = (item: NotificationItem) => isUnreadActionableNotificationRecord(item as any);
 const isAlertStatus = (status: NotificationStatus) =>
   status === 'missed' || status === 'skipped' || status === 'failed' || status === 'needs_attention';
 
@@ -186,6 +184,12 @@ const formatBeverageLabel = (entry: any) => {
   const type = String(entry?.beverage_type || 'beverage').replace(/_/g, ' ');
   return type.charAt(0).toUpperCase() + type.slice(1);
 };
+
+const medicationHistoryCompositeKey = (entry: any) => [
+  entry?.medId ?? entry?.medication_id ?? entry?.medicationId ?? '',
+  entry?.time ?? entry?.scheduled_at ?? entry?.scheduled_time ?? '',
+  entry?.status ?? '',
+].map((value) => String(value)).join('|');
 
 const getReminderKey = (item: ReminderItem) => `${item.type}:${item.id || item.title}:${formatSafeTime(item.time)}`;
 
@@ -249,7 +253,7 @@ const hiddenRecentKey = (user: any) => {
 };
 
 const isHiddenRecent = (item: NotificationItem, hiddenIds: Set<string>) => (
-  hiddenIds.has(String(item.id)) || item.status === 'cleared' || item.metadata?.recent_hidden === true || item.metadata?.hidden === true
+  hiddenIds.has(String(item.id)) || isNotificationRecordHidden(item as any)
 );
 
 const isLocalReminderRecord = (item: NotificationItem) => {
@@ -261,7 +265,7 @@ const backendNotificationId = (item: NotificationItem) => item.metadata?.backend
 
 const hasHappenedOrWasActioned = (item: NotificationItem) => {
   const when = getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at);
-  if (item.status === 'cleared') return false;
+  if (isNotificationRecordHidden(item as any)) return false;
   if (isLocalActivity(item)) return true;
   if (item.delivered_at || item.opened_at || item.read_at) return true;
   if (['delivered', 'completed', 'missed', 'skipped', 'failed', 'needs_attention'].includes(item.status)) return when <= Date.now();
@@ -503,9 +507,12 @@ export default function Activity() {
         delivered_at: raw?.delivered_at ?? null,
         opened_at: raw?.opened_at ?? raw?.read_at ?? null,
         read_at: raw?.read_at ?? null,
+        hidden_at: raw?.hidden_at ?? null,
+        cleared_at: raw?.cleared_at ?? null,
+        deleted_at: raw?.deleted_at ?? null,
         metadata: raw?.metadata ?? raw?.data ?? null,
       }))
-      .filter((item: NotificationItem) => item.status !== 'cleared');
+      .filter((item: NotificationItem) => !isNotificationRecordHidden(item as any));
   }, []);
 
   const normalizeMedicationFallbacks = useCallback((payload: any): ReminderItem[] => {
@@ -530,12 +537,25 @@ export default function Activity() {
 
   const buildLocalActivityRecords = useCallback(async (sessionUser: any): Promise<NotificationItem[]> => {
     if (!sessionUser) return [];
-    const [hydrationCache, medicationCache, medicationHistory, pendingActions] = await Promise.all([
+    const ownerKey = getUserCacheIdentifier(sessionUser);
+    const clearedHistoryKey = ownerKey ? getMedicationClearedHistoryCacheKey(ownerKey) : null;
+    const [hydrationCache, medicationCache, medicationHistory, pendingActions, deletedMedicationKeys, clearedHistoryRaw] = await Promise.all([
       readHydrationCache<any>(),
       readMedicationCache<any[]>(sessionUser),
       readMedicationHistoryCache<any[]>(sessionUser),
       getPendingSyncActions(),
+      readDeletedMedicationTombstones(sessionUser),
+      clearedHistoryKey ? AsyncStorage.getItem(clearedHistoryKey).catch(() => null) : Promise.resolve(null),
     ]);
+    const deletedMedicationKeySet = new Set((deletedMedicationKeys || []).map(String));
+    let parsedClearedHistoryKeys: string[] = [];
+    try {
+      const parsed = JSON.parse(clearedHistoryRaw || '[]');
+      parsedClearedHistoryKeys = Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      parsedClearedHistoryKeys = [];
+    }
+    const clearedHistoryKeys = new Set<string>(parsedClearedHistoryKeys);
 
     const medicationById = new Map<string, any>();
     (Array.isArray(medicationCache) ? medicationCache : []).forEach((med) => {
@@ -567,6 +587,8 @@ export default function Activity() {
       });
 
     const medicationRecords: NotificationItem[] = (Array.isArray(medicationHistory) ? medicationHistory : [])
+      .filter((entry: any) => !clearedHistoryKeys.has(String(entry?.id)) && !clearedHistoryKeys.has(medicationHistoryCompositeKey(entry)))
+      .filter((entry: any) => !deletedMedicationKeySet.has(String(entry?.medId || entry?.medication_id || entry?.medicationId || '')))
       .map((entry: any) => {
         const med = medicationById.get(String(entry?.medId || entry?.medication_id || entry?.medicationId || ''));
         const status = (entry?.status === 'skipped' ? 'skipped' : entry?.status === 'missed' ? 'missed' : entry?.status === 'snoozed' ? 'snoozed' : 'completed') as NotificationStatus;
@@ -710,25 +732,30 @@ export default function Activity() {
     await writeNotificationsCache({ notifications: nextNotifications, stats: nextStats, medicationFallbacks }, currentUser);
   }, [currentUser, medicationFallbacks, stats]);
 
+  const hydrateLocalNotifications = useCallback(async () => {
+    const session = await getCachedSession();
+    const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
+    if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
+    const sessionUser = currentUser || session?.user || null;
+    if (sessionUser) setCurrentUser(sessionUser);
+    const prefs = await loadReminderPreferences(sessionUser);
+    await loadHiddenRecentIds(sessionUser);
+    const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
+    if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
+    const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
+    const localActivity = await buildLocalActivityRecords(sessionUser);
+    const localReminderItems = await loadLocalReminderItems(prefs);
+    setNotifications(mergeNotificationRecords([...(cached?.notifications || []), ...localInbox, ...localActivity]));
+    setStats(cached?.stats || null);
+    setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
+  }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadReminderPreferences, token]);
+
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
       const run = async () => {
-        const session = await getCachedSession();
-        const context = await captureAuthSessionContext(token || session?.token, session?.user ?? null);
-        if ((token || session?.token) && !(await isAuthSessionContextCurrent(context))) return;
-        const sessionUser = currentUser || session?.user || null;
-        if (sessionUser && mounted) setCurrentUser(sessionUser);
-        const prefs = await loadReminderPreferences(sessionUser);
-        await loadHiddenRecentIds(sessionUser);
-        const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
-        if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
-        const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
-        const localActivity = await buildLocalActivityRecords(sessionUser);
-        const localReminderItems = await loadLocalReminderItems(prefs);
-        setNotifications(mergeNotificationRecords([...(cached?.notifications || []), ...localInbox, ...localActivity]));
-        setStats(cached?.stats || null);
-        setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
+        await hydrateLocalNotifications();
+        if (!mounted) return;
         await loadNotifications(false);
       };
       run();
@@ -736,7 +763,7 @@ export default function Activity() {
         mounted = false;
         setSyncing(false);
       };
-    }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadNotifications, loadReminderPreferences, token])
+    }, [hydrateLocalNotifications, loadNotifications])
   );
 
   const onRefresh = useCallback(async () => {
@@ -748,6 +775,7 @@ export default function Activity() {
   useEffect(() => {
     const refresh = (event?: { source?: string }) => {
       if (event?.source === 'cache') return;
+      hydrateLocalNotifications().catch(() => {});
       loadNotifications(false).catch(() => {});
     };
     const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
@@ -756,7 +784,7 @@ export default function Activity() {
       notificationSub.remove();
       reminderSub.remove();
     };
-  }, [loadNotifications]);
+  }, [hydrateLocalNotifications, loadNotifications]);
 
   const markOneRead = useCallback(async (item: NotificationItem) => {
     const openedAt = new Date().toISOString();
@@ -835,7 +863,8 @@ export default function Activity() {
     nextHidden.add(String(item.id));
     setHiddenRecentIds(nextHidden);
     await persistHiddenRecentIds(currentUser, nextHidden);
-    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'cleared' as const, metadata: { ...(current.metadata || {}), recent_hidden: true } } : current);
+    const now = new Date().toISOString();
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'cleared' as const, opened_at: current.opened_at || now, read_at: current.read_at || now, hidden_at: current.hidden_at || now, cleared_at: current.cleared_at || now, metadata: { ...(current.metadata || {}), recent_hidden: true } } : current);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
@@ -895,7 +924,7 @@ export default function Activity() {
     const readAt = new Date().toISOString();
     const nextNotifications = notifications.map((item) => (
       nextHidden.has(String(item.id))
-        ? { ...item, status: 'cleared' as const, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt, metadata: { ...(item.metadata || {}), recent_hidden: true } }
+        ? { ...item, status: 'cleared' as const, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt, hidden_at: item.hidden_at || readAt, cleared_at: item.cleared_at || readAt, metadata: { ...(item.metadata || {}), recent_hidden: true } }
         : item
     ));
     setHiddenRecentIds(nextHidden);
@@ -960,7 +989,7 @@ export default function Activity() {
         .filter(Boolean)
     );
     const records = notifications
-      .filter((item) => item.status !== 'cleared')
+      .filter((item) => !isNotificationRecordHidden(item as any))
       .filter((item) => !isLocalActivity(item))
       .filter((item) => item.type === 'hydration' || item.type === 'medication')
       .filter((item) => ['scheduled', 'upcoming', 'delivered'].includes(item.status))
@@ -1216,12 +1245,12 @@ export default function Activity() {
             <Ionicons name="notifications-off-outline" size={32} color="#94A3B8" />
             <Text style={styles.emptyTitle}>
               {filter === 'unread'
-                ? 'No unread notifications'
+                ? 'No unread notifications.'
                 : filter === 'medication'
-                  ? 'No recent medication notifications'
+                  ? 'No recent medication notifications.'
                   : filter === 'hydration'
-                    ? 'No recent beverage notifications'
-                    : 'No recent notifications'}
+                    ? 'No recent beverage notifications.'
+                    : 'No recent notifications.'}
             </Text>
             <Text style={styles.emptyText}>Delivered reminders and recent activity will appear here.</Text>
           </View>

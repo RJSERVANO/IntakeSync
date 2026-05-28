@@ -46,7 +46,7 @@ export default function Settings() {
     setNotice({
       type: 'info',
       title: 'IntakeSync',
-      message: 'Version 1.0.0\nBuild 2024.12.10\n\nBeverage tracking and medication adherence support.',
+      message: 'Version 1.0.0\nBuild 2024.12.10\n\nBeverage consumption and medication adherence support.',
     });
   };
 
@@ -135,7 +135,7 @@ export default function Settings() {
           <InfoRow
             icon="cloud-done-outline"
             title="Offline Cache"
-            subtitle="Profile, hydration, medication, and reminder data can load from this device when available."
+            subtitle="Profile, beverage, medication, and reminder data can load from this device when available."
           />
         </SettingGroup>
 

@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import { DeviceEventEmitter, Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, readMedicationHistoryCache, writeMedicationCache } from './offlineStorage';
+import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, readMedicationHistoryCache, readNotificationsCache, writeMedicationCache, writeNotificationsCache } from './offlineStorage';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from './homeEvents';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
@@ -165,6 +165,9 @@ export interface LocalNotificationRecord {
   delivered_at?: string | null;
   opened_at?: string | null;
   read_at?: string | null;
+  hidden_at?: string | null;
+  cleared_at?: string | null;
+  deleted_at?: string | null;
   metadata?: Record<string, any> | null;
 }
 
@@ -1163,6 +1166,58 @@ function localInboxIdentity(record: Pick<LocalNotificationRecord, 'id' | 'metada
   );
 }
 
+function normalizeMatchValue(value: any) {
+  return value === null || value === undefined ? '' : String(value).trim().toLowerCase();
+}
+
+function localInboxIdentityValues(record: Partial<LocalNotificationRecord>) {
+  const metadata = record.metadata || {};
+  return [
+    record.id,
+    metadata.local_id,
+    metadata.client_uuid,
+    metadata.server_id,
+    metadata.hydration_log_id,
+    metadata.hydrationLogId,
+    metadata.scheduleKey,
+    metadata.schedule_key,
+    metadata.hydrationSlotKey,
+    metadata.hydration_slot_key,
+    metadata.respondedScheduleKey,
+    metadata.responded_schedule_key,
+    metadata.doseKey,
+    metadata.dose_key,
+    metadata.notificationId,
+    metadata.notification_id,
+    metadata.medicationId,
+    metadata.medication_id,
+    metadata.medication_server_id,
+    metadata.medication_local_id,
+    metadata.historyId,
+    metadata.history_id,
+    metadata.doseTime,
+    metadata.dose_time,
+    metadata.baseDoseTime,
+    metadata.base_dose_time,
+  ].map(normalizeMatchValue).filter(Boolean);
+}
+
+export function isNotificationRecordHidden(record: Pick<LocalNotificationRecord, 'status' | 'hidden_at' | 'cleared_at' | 'deleted_at' | 'metadata'> & Record<string, any>) {
+  const status = String(record.status || '').toLowerCase();
+  const metadata = record.metadata || {};
+  return Boolean(
+    record.hidden_at ||
+    record.cleared_at ||
+    record.deleted_at ||
+    metadata.deleted_source === true ||
+    metadata.recent_hidden === true ||
+    metadata.hidden === true ||
+    status === 'cleared' ||
+    status === 'hidden' ||
+    status === 'deleted'
+  );
+}
+
 function localInboxRecordFromRef(ref: ScheduledNotificationRef, status: LocalNotificationStatus = 'scheduled'): LocalNotificationRecord {
   const scheduleKey = refSlot(ref);
   const scheduledAt = ref.scheduledAt || ref.doseTime || new Date().toISOString();
@@ -1232,6 +1287,9 @@ function mergeLocalNotificationRecord(existing: LocalNotificationRecord | undefi
     delivered_at: incoming.delivered_at || existing.delivered_at || null,
     opened_at: incoming.opened_at || existing.opened_at || null,
     read_at: incoming.read_at || existing.read_at || null,
+    hidden_at: incoming.hidden_at || existing.hidden_at || null,
+    cleared_at: incoming.cleared_at || existing.cleared_at || null,
+    deleted_at: incoming.deleted_at || existing.deleted_at || null,
     metadata: { ...(existing.metadata || {}), ...(incoming.metadata || {}) },
     ...(incomingTime >= existingTime ? { title: incoming.title || existing.title, message: incoming.message || existing.message } : {}),
   };
@@ -1258,6 +1316,9 @@ export async function readLocalNotificationInbox(ownerArg?: CacheOwner | null): 
         delivered_at: item.delivered_at || null,
         opened_at: item.opened_at || null,
         read_at: item.read_at || null,
+        hidden_at: item.hidden_at || null,
+        cleared_at: item.cleared_at || null,
+        deleted_at: item.deleted_at || null,
         metadata: item.metadata || item.data || null,
       }));
   } catch {
@@ -1270,6 +1331,7 @@ export function isUnreadActionableNotificationRecord(record: Pick<LocalNotificat
   const when = getSafeRecordTime(record.scheduled_at || record.scheduled_time || record.created_at);
   const isFutureScheduled = (record.status === 'scheduled' || record.status === 'upcoming') && when > Date.now();
   return (
+    !isNotificationRecordHidden(record as any) &&
     unreadStatuses.includes(record.status as LocalNotificationStatus) &&
     !record.opened_at &&
     !record.read_at &&
@@ -1307,12 +1369,14 @@ export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | 
     const next = sortedRecords
       .filter((record) => {
         const when = new Date(record.scheduled_at || record.scheduled_time || record.created_at || 0).getTime();
-        const isUnreadRecord = !record.read_at && !record.opened_at && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'].includes(record.status);
+        const isHiddenRecord = isNotificationRecordHidden(record as any);
+        const isUnreadRecord = !isHiddenRecord && !record.read_at && !record.opened_at && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'].includes(record.status);
         const isAlertRecord = alertStatuses.has(record.status);
-        const isTodayScheduledRecord = (record.status === 'scheduled' || record.status === 'upcoming') && getLocalDateKey(record.scheduled_at || record.scheduled_time || record.created_at || '') === todayKey;
-        const isRecentDeliveredOrRead = Number.isFinite(when) && when >= recentCutoff && record.status !== 'cleared';
+        const isTodayScheduledRecord = !isHiddenRecord && (record.status === 'scheduled' || record.status === 'upcoming') && getLocalDateKey(record.scheduled_at || record.scheduled_time || record.created_at || '') === todayKey;
+        const isRecentDeliveredOrRead = !isHiddenRecord && Number.isFinite(when) && when >= recentCutoff;
+        const isRecentHiddenTombstone = isHiddenRecord && Number.isFinite(when) && when >= recentCutoff;
+        if (isRecentHiddenTombstone) return true;
         if (isUnreadRecord || isAlertRecord || isTodayScheduledRecord || isRecentDeliveredOrRead) return true;
-        if (record.status === 'cleared') return false;
         if (record.read_at || record.opened_at) {
           if (keptReadNonCritical.length >= 100) return false;
           keptReadNonCritical.push(record);
@@ -1347,6 +1411,9 @@ export async function upsertLocalNotificationRecord(ownerArg: CacheOwner | null 
     delivered_at: record.delivered_at || null,
     opened_at: record.opened_at || null,
     read_at: record.read_at || null,
+    hidden_at: record.hidden_at || null,
+    cleared_at: record.cleared_at || null,
+    deleted_at: record.deleted_at || null,
     metadata: record.metadata || null,
   };
   await writeLocalNotificationInbox(owner, [...current, incoming]);
@@ -1387,10 +1454,140 @@ export async function markLocalNotificationCleared(ownerArg: CacheOwner | null |
   const current = await readLocalNotificationInbox(owner);
   await writeLocalNotificationInbox(owner, current.map((record) => (
     matchesLocalNotificationRecord(record, recordIdOrScheduleKey)
-      ? { ...record, status: 'cleared', opened_at: record.opened_at || now, read_at: record.read_at || now, metadata: { ...(record.metadata || {}), recent_hidden: true } }
+      ? { ...record, status: 'cleared', opened_at: record.opened_at || now, read_at: record.read_at || now, cleared_at: record.cleared_at || now, hidden_at: record.hidden_at || now, metadata: { ...(record.metadata || {}), recent_hidden: true } }
       : record
   )));
   DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
+}
+
+function safeNumber(value: any) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function sameMinute(left?: string | null, right?: string | null) {
+  const leftTime = getSafeRecordTime(left);
+  const rightTime = getSafeRecordTime(right);
+  return leftTime > 0 && rightTime > 0 && Math.abs(leftTime - rightTime) < 60 * 1000;
+}
+
+function sameLocalHour(left?: string | null, right?: string | null) {
+  return localHourKey(left) !== '' && localHourKey(left) === localHourKey(right);
+}
+
+function matchesHydrationSource(record: Partial<LocalNotificationRecord>, entry: any) {
+  if (record.type && record.type !== 'hydration') return false;
+  const metadata = record.metadata || {};
+  const values = new Set(localInboxIdentityValues(record));
+  const entryValues = [
+    entry?.id,
+    entry?.server_id,
+    entry?.local_id,
+    entry?.client_uuid,
+    entry?.hydrationSlotKey,
+    entry?.hydration_slot_key,
+    entry?.respondedScheduleKey,
+    entry?.responded_schedule_key,
+    entry?.scheduleKey,
+    entry?.schedule_key,
+  ].map(normalizeMatchValue).filter(Boolean);
+  if (entryValues.some((value) => values.has(value))) return true;
+
+  const entryTime = entry?.timestamp || entry?.created_at || entry?.date || entry?.time || null;
+  const recordTime = record.scheduled_at || record.scheduled_time || record.created_at || null;
+  const entryAmount = safeNumber(entry?.amount_ml ?? entry?.logged_ml);
+  const recordAmount = safeNumber(metadata.amount ?? metadata.amount_ml ?? metadata.logged_ml ?? String(record.message || '').match(/(\d+(?:\.\d+)?)\s*ml/i)?.[1]);
+  const entryLabel = normalizeMatchValue(entry?.drink_label || entry?.beverage_type || 'water');
+  const recordLabel = normalizeMatchValue(record.title || metadata.drink_label || metadata.beverage_type || '');
+  return Boolean(
+    entryTime &&
+    recordTime &&
+    (sameMinute(entryTime, recordTime) || sameLocalHour(entryTime, recordTime)) &&
+    (!entryAmount || !recordAmount || entryAmount === recordAmount) &&
+    (!entryLabel || !recordLabel || recordLabel.includes(entryLabel) || entryLabel.includes(recordLabel.replace(/\s+logged$/, '')))
+  );
+}
+
+function matchesMedicationSource(record: Partial<LocalNotificationRecord>, input: any) {
+  if (record.type && record.type !== 'medication') return false;
+  const metadata = record.metadata || {};
+  const values = new Set(localInboxIdentityValues(record));
+  const inputValues = [
+    input?.id,
+    input?.server_id,
+    input?.local_id,
+    input?.client_uuid,
+    input?.medicationId,
+    input?.medication_id,
+    input?.medId,
+    input?.historyId,
+    input?.history_id,
+    input?.doseKey,
+    input?.dose_key,
+    input?.scheduleKey,
+    input?.schedule_key,
+  ].map(normalizeMatchValue).filter(Boolean);
+  if (inputValues.some((value) => values.has(value))) return true;
+
+  const inputDoseTime = input?.doseTime || input?.dose_time || input?.baseDoseTime || input?.base_dose_time || input?.time || input?.scheduled_at || input?.scheduled_time || null;
+  const recordDoseTime = metadata.doseTime || metadata.dose_time || metadata.baseDoseTime || metadata.base_dose_time || record.scheduled_at || record.scheduled_time || null;
+  const inputName = normalizeMatchValue(input?.medicationName || input?.medication_name || input?.name);
+  const recordName = normalizeMatchValue(metadata.medicationName || metadata.medication_name || record.title);
+  return Boolean(
+    inputDoseTime &&
+    recordDoseTime &&
+    sameMinute(inputDoseTime, recordDoseTime) &&
+    (!inputName || !recordName || recordName.includes(inputName) || inputName.includes(recordName.replace(/\s+(taken|missed|skipped|snoozed).*$/, '')))
+  );
+}
+
+async function hideMatchingCachedNotifications(owner: CacheOwner, matcher: (record: Partial<LocalNotificationRecord>) => boolean, now: string) {
+  const cache = await readNotificationsCache<any>({ id: owner.owner_id ?? owner.id, email: owner.owner_email ?? owner.email });
+  if (!cache?.notifications || !Array.isArray(cache.notifications)) return;
+  const nextNotifications = cache.notifications.map((record: any) => (
+    matcher(record)
+      ? {
+          ...record,
+          status: 'cleared',
+          opened_at: record.opened_at || now,
+          read_at: record.read_at || now,
+          hidden_at: record.hidden_at || now,
+          cleared_at: record.cleared_at || now,
+          metadata: { ...(record.metadata || record.data || {}), deleted_source: true, recent_hidden: true },
+        }
+      : record
+  ));
+  await writeNotificationsCache({ ...cache, notifications: nextNotifications }, { id: owner.owner_id ?? owner.id, email: owner.owner_email ?? owner.email });
+}
+
+async function hideLocalNotificationSources(ownerArg: CacheOwner | null | undefined, matcher: (record: Partial<LocalNotificationRecord>) => boolean, source: string) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const now = new Date().toISOString();
+  const inbox = await readLocalNotificationInbox(owner);
+  await writeLocalNotificationInbox(owner, inbox.map((record) => (
+    matcher(record)
+      ? {
+          ...record,
+          status: 'cleared' as const,
+          opened_at: record.opened_at || now,
+          read_at: record.read_at || now,
+          hidden_at: record.hidden_at || now,
+          cleared_at: record.cleared_at || now,
+          metadata: { ...(record.metadata || {}), deleted_source: true, recent_hidden: true },
+        }
+      : record
+  )));
+  await hideMatchingCachedNotifications(owner, matcher, now);
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source });
+}
+
+export async function hideHydrationLogNotifications(ownerArg: CacheOwner | null | undefined, entry: any) {
+  await hideLocalNotificationSources(ownerArg, (record) => matchesHydrationSource(record, entry), 'hydration-delete');
+}
+
+export async function hideMedicationSourceNotifications(ownerArg: CacheOwner | null | undefined, input: any) {
+  await hideLocalNotificationSources(ownerArg, (record) => matchesMedicationSource(record, input), 'medication-delete');
 }
 
 function localHourKey(value?: string | null) {

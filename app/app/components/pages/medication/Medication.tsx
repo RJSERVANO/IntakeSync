@@ -23,7 +23,7 @@ import {
   writeOtcSearchCache,
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, getPendingSyncActions, mergeLatestPendingAction, removePendingMedicationActionsForDelete, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
-import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService, reconcileNotificationInbox, upsertMedicationTakenNotification } from '../../../../services/notificationService';
+import { cancelMedicationDoseNotifications, cancelMedicationNotifications, hideMedicationSourceNotifications, notificationService, reconcileNotificationInbox, upsertMedicationTakenNotification } from '../../../../services/notificationService';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
@@ -798,7 +798,7 @@ export default function Medication() {
           return;
         }
 
-        if (cachedMeds.length === 0) setSyncing(true);
+        setSyncing(true);
 
         if (token) {
           // load from backend
@@ -1414,6 +1414,14 @@ export default function Medication() {
     try {
       await writeMedicationCache(currentUser, newMeds);
       await writeMedicationHistoryCache(currentUser, newHistory);
+      const owner = getCacheOwner(currentUser);
+      await hideMedicationSourceNotifications(owner, {
+        ...deleteTarget,
+        medicationId: deleteTarget.id,
+        medication_id: deleteTarget.id,
+        medicationName: deleteTarget.name,
+        medication_name: deleteTarget.name,
+      });
     } catch {
       await removeDeletedMedicationTombstones(currentUser, deleteTarget);
       setMeds(previous);
@@ -1925,6 +1933,18 @@ export default function Medication() {
             await AsyncStorage.setItem(clearedHistoryCacheKey, JSON.stringify(nextClearedKeys));
           }
           await writeMedicationHistoryCache(currentUser, history);
+          const owner = getCacheOwner(currentUser);
+          await Promise.all(visibleEntries.map((entry) => hideMedicationSourceNotifications(owner, {
+            ...entry,
+            historyId: entry.id,
+            history_id: entry.id,
+            medicationId: entry.medId,
+            medication_id: entry.medId,
+            medicationName: entry.medicationName,
+            medication_name: entry.medicationName,
+            doseTime: entry.time,
+            dose_time: entry.time,
+          })));
           setLastClearedTime(now);
           setClearedHistoryKeys(nextClearedKeys);
           setHistoryExpanded(false);
