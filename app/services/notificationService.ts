@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import { DeviceEventEmitter, Platform } from 'react-native';
 import { notificationSettings } from './notificationSettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, writeMedicationCache } from './offlineStorage';
+import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, readMedicationHistoryCache, writeMedicationCache } from './offlineStorage';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from './homeEvents';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
@@ -26,10 +26,14 @@ const HYDRATION_SOUND = 'hydration_reminder.wav';
 const MEDICATION_SOUND = 'medication_reminder.wav';
 const MEDICATION_REMINDER_OFFSETS = [15, 5, 0];
 const MIN_SCHEDULE_BUFFER_MS = 10 * 1000;
+const HYDRATION_RESPONSE_WINDOW_MS = 30 * 60 * 1000;
+const MEDICATION_MISSED_GRACE_MS = 30 * 60 * 1000;
 export const HYDRATION_REMINDER_INTERVAL_MINUTES = 60;
 const HYDRATION_LOOKAHEAD_HOURS = 14;
 let schedulingHydration = false;
 const schedulingMedicationIds = new Set<string>();
+const VALIDATE_SCHEDULED_REFS_INTERVAL_MS = 25 * 1000;
+const lastScheduledRefValidationByOwner = new Map<string, number>();
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
 const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
@@ -123,6 +127,7 @@ export interface ScheduledNotificationRef {
   owner_email?: string | null;
   medicationId?: string;
   medicationName?: string;
+  dosage?: string;
   suggestedAmount?: number;
   amount?: number;
   doseKey?: string;
@@ -133,6 +138,34 @@ export interface ScheduledNotificationRef {
   reminderOffsetMinutes?: number;
   scheduledAt: string;
   createdAt?: string;
+}
+
+export type LocalNotificationType = 'hydration' | 'medication' | 'general';
+export type LocalNotificationStatus =
+  | 'scheduled'
+  | 'upcoming'
+  | 'delivered'
+  | 'completed'
+  | 'missed'
+  | 'skipped'
+  | 'snoozed'
+  | 'failed'
+  | 'needs_attention'
+  | 'cleared';
+
+export interface LocalNotificationRecord {
+  id: string;
+  type: LocalNotificationType;
+  title: string;
+  message: string;
+  status: LocalNotificationStatus;
+  scheduled_at?: string | null;
+  scheduled_time?: string | null;
+  created_at?: string | null;
+  delivered_at?: string | null;
+  opened_at?: string | null;
+  read_at?: string | null;
+  metadata?: Record<string, any> | null;
 }
 
 export type HydrationReminderHistoryEvent = {
@@ -484,15 +517,19 @@ class NotificationService {
             ? `${medicationName} in ${offsetMinutes} minutes`
             : `Time to take ${medicationName}`;
           const body = offsetMinutes > 0
-            ? `Dose scheduled at ${doseTimeLabel}.`
-            : `${dosage ? `${dosage} scheduled for now.` : 'Dose scheduled for now.'}`;
+            ? `Dose at ${doseTimeLabel}`
+            : `${dosage ? dosage : 'Dose'} scheduled now`;
           const notificationId = await this.scheduleNotification(
             title,
             body,
             triggerDate,
             {
               type: 'medication',
+              owner_id: owner.owner_id,
+              owner_email: owner.owner_email,
               medicationId,
+              medicationName,
+              dosage,
               doseKey: scheduleKey,
               scheduleKey,
               doseTime: doseTimeIso,
@@ -511,6 +548,7 @@ class NotificationService {
               type: 'medication',
               medicationId,
               medicationName,
+              dosage,
               doseKey: scheduleKey,
               scheduleKey,
               doseTime: doseTimeIso,
@@ -519,6 +557,21 @@ class NotificationService {
               scheduledAt: triggerDate.toISOString(),
               createdAt: new Date().toISOString(),
             });
+            await upsertLocalNotificationRecord(owner, localInboxRecordFromRef({
+              ...owner,
+              id: scheduleKey,
+              type: 'medication',
+              medicationId,
+              medicationName,
+              dosage,
+              doseKey: scheduleKey,
+              scheduleKey,
+              doseTime: doseTimeIso,
+              reminderOffsetMinutes: offsetMinutes,
+              notificationId,
+              scheduledAt: triggerDate.toISOString(),
+              createdAt: new Date().toISOString(),
+            }, 'scheduled'));
           }
         }
       }
@@ -557,16 +610,17 @@ class NotificationService {
       if (nextReminder.getTime() <= Date.now() + MIN_SCHEDULE_BUFFER_MS) return;
       const scheduleKey = getHydrationScheduleKey(cacheOwner, nextReminder);
       if (await ensureUniqueScheduledSlot(cacheOwner, 'hydration', scheduleKey)) return;
-      const body = Number.isFinite(progressPercent)
-        ? `You are at ${Math.max(0, Math.min(100, Math.round(progressPercent || 0)))}%. Drink water to stay on track with your daily goal.`
-        : 'Drink water to stay on track with your daily goal.';
+      void progressPercent;
+      const body = `${amountMl} ml suggested`;
 
       const notificationId = await this.scheduleNotification(
-        'Time to hydrate 💧',
+        'Time to hydrate',
         body,
         nextReminder,
         {
           type: 'hydration',
+          owner_id: cacheOwner.owner_id,
+          owner_email: cacheOwner.owner_email,
           amount: amountMl,
           suggestedAmount: amountMl,
           doseKey: scheduleKey,
@@ -590,6 +644,18 @@ class NotificationService {
           scheduledAt: nextReminder.toISOString(),
           createdAt: new Date().toISOString(),
         });
+        await upsertLocalNotificationRecord(cacheOwner, localInboxRecordFromRef({
+          ...cacheOwner,
+          id: scheduleKey,
+          type: 'hydration',
+          doseKey: scheduleKey,
+          scheduleKey,
+          amount: amountMl,
+          suggestedAmount: amountMl,
+          notificationId,
+          scheduledAt: nextReminder.toISOString(),
+          createdAt: new Date().toISOString(),
+        }, 'scheduled'));
         await validateScheduledNotificationRefs(cacheOwner);
       }
     } catch (error) {
@@ -725,6 +791,13 @@ class NotificationService {
 
     // Handle notification received while app is in foreground
     const receivedListener = Notifications.addNotificationReceivedListener((notification) => {
+      void (async () => {
+        const data = notification.request.content.data || {};
+        const owner = await resolveOwnerFromNotificationData(data);
+        if (owner) {
+          await upsertLocalNotificationRecord(owner, notificationRecordFromDeliveredNotification(notification, 'delivered'));
+        }
+      })();
       DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'foreground' });
       if (onNotificationReceived) {
         onNotificationReceived(notification);
@@ -733,6 +806,7 @@ class NotificationService {
 
     // Handle notification tapped/opened
     const responseListener = Notifications.addNotificationResponseReceivedListener((response) => {
+      void recordNotificationResponse(response);
       DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'tap' });
       if (onNotificationTapped) {
         onNotificationTapped(response);
@@ -782,6 +856,10 @@ function notificationRefsKey(owner: CacheOwner) {
 
 function hydrationReminderHistoryKey(owner: CacheOwner) {
   return getUserScopedKey(owner, 'hydration_reminder_history');
+}
+
+export function getNotificationInboxKey(owner: CacheOwner) {
+  return getUserScopedKey(owner, 'notification_inbox');
 }
 
 function refSlot(ref: ScheduledNotificationRef) {
@@ -1071,6 +1149,498 @@ function getRefScheduledTime(ref: ScheduledNotificationRef) {
   return date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
 }
 
+function localInboxIdentity(record: Pick<LocalNotificationRecord, 'id' | 'metadata'>) {
+  const metadata = record.metadata || {};
+  return String(
+    metadata.scheduleKey ||
+    metadata.schedule_key ||
+    metadata.doseKey ||
+    metadata.dose_key ||
+    metadata.notificationId ||
+    metadata.notification_id ||
+    record.id ||
+    ''
+  );
+}
+
+function localInboxRecordFromRef(ref: ScheduledNotificationRef, status: LocalNotificationStatus = 'scheduled'): LocalNotificationRecord {
+  const scheduleKey = refSlot(ref);
+  const scheduledAt = ref.scheduledAt || ref.doseTime || new Date().toISOString();
+  const offset = Number(ref.reminderOffsetMinutes || 0);
+  const doseLabel = ref.doseTime
+    ? new Date(ref.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })
+    : new Date(scheduledAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  const amount = Number(ref.suggestedAmount || ref.amount || 0);
+  return {
+    id: scheduleKey,
+    type: ref.type,
+    title: ref.type === 'hydration'
+      ? 'Time to hydrate'
+      : offset > 0
+        ? `${ref.medicationName || 'Medication'} in ${offset} minutes`
+        : `Time to take ${ref.medicationName || 'Medication'}`,
+    message: ref.type === 'hydration'
+      ? `${amount > 0 ? amount : 200} ml suggested`
+      : offset > 0
+        ? `Dose at ${doseLabel}`
+        : `${ref.dosage ? ref.dosage : 'Dose'} scheduled now`,
+    status,
+    scheduled_at: scheduledAt,
+    scheduled_time: scheduledAt,
+    created_at: ref.createdAt || new Date().toISOString(),
+    delivered_at: status === 'delivered' || status === 'missed' ? new Date().toISOString() : null,
+    opened_at: null,
+    read_at: null,
+    metadata: {
+      notificationId: ref.notificationId,
+      notification_id: ref.notificationId,
+      scheduleKey,
+      schedule_key: scheduleKey,
+      doseKey: ref.doseKey || scheduleKey,
+      dose_key: ref.doseKey || scheduleKey,
+      doseTime: ref.doseTime,
+      dose_time: ref.doseTime,
+      scheduledAt,
+      medicationId: ref.medicationId,
+      medicationName: ref.medicationName,
+      dosage: ref.dosage,
+      reminderOffsetMinutes: ref.reminderOffsetMinutes,
+      suggestedAmount: ref.suggestedAmount,
+      amount: ref.amount,
+      source: ref.type === 'hydration' ? 'scheduled_hydration_reminder' : 'scheduled_medication_reminder',
+    },
+  };
+}
+
+function mergeLocalNotificationRecord(existing: LocalNotificationRecord | undefined, incoming: LocalNotificationRecord): LocalNotificationRecord {
+  if (!existing) return incoming;
+  const existingTime = Math.max(getRefScheduledTime({ scheduledAt: existing.scheduled_at || existing.scheduled_time || existing.created_at || '', notificationId: '', type: 'hydration' }), 0);
+  const incomingTime = Math.max(getRefScheduledTime({ scheduledAt: incoming.scheduled_at || incoming.scheduled_time || incoming.created_at || '', notificationId: '', type: 'hydration' }), 0);
+  const keepStatus = existing.status === 'cleared'
+    ? existing.status
+    : incoming.status === 'scheduled' && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed', 'completed'].includes(existing.status)
+      ? existing.status
+      : incoming.status || existing.status;
+  return {
+    ...existing,
+    ...incoming,
+    id: existing.id || incoming.id,
+    status: keepStatus,
+    scheduled_at: incoming.scheduled_at || existing.scheduled_at || null,
+    scheduled_time: incoming.scheduled_time || existing.scheduled_time || null,
+    created_at: existing.created_at || incoming.created_at || new Date().toISOString(),
+    delivered_at: incoming.delivered_at || existing.delivered_at || null,
+    opened_at: incoming.opened_at || existing.opened_at || null,
+    read_at: incoming.read_at || existing.read_at || null,
+    metadata: { ...(existing.metadata || {}), ...(incoming.metadata || {}) },
+    ...(incomingTime >= existingTime ? { title: incoming.title || existing.title, message: incoming.message || existing.message } : {}),
+  };
+}
+
+export async function readLocalNotificationInbox(ownerArg?: CacheOwner | null): Promise<LocalNotificationRecord[]> {
+  try {
+    const owner = await resolveNotificationOwner(ownerArg);
+    if (!owner) return [];
+    const raw = await AsyncStorage.getItem(getNotificationInboxKey(owner));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item && typeof item === 'object')
+      .map((item): LocalNotificationRecord => ({
+        id: String(item.id || localInboxIdentity(item)),
+        type: item.type === 'hydration' || item.type === 'medication' ? item.type : 'general',
+        title: String(item.title || 'Notification'),
+        message: String(item.message || item.body || ''),
+        status: (item.status || 'scheduled') as LocalNotificationStatus,
+        scheduled_at: item.scheduled_at || item.scheduled_time || null,
+        scheduled_time: item.scheduled_time || item.scheduled_at || null,
+        created_at: item.created_at || new Date().toISOString(),
+        delivered_at: item.delivered_at || null,
+        opened_at: item.opened_at || null,
+        read_at: item.read_at || null,
+        metadata: item.metadata || item.data || null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | undefined, records: LocalNotificationRecord[]) {
+  try {
+    const owner = await resolveNotificationOwner(ownerArg);
+    if (!owner) return;
+    const byIdentity = new Map<string, LocalNotificationRecord>();
+    records.forEach((record) => {
+      if (!record?.id) return;
+      const key = localInboxIdentity(record) || String(record.id);
+      byIdentity.set(key, mergeLocalNotificationRecord(byIdentity.get(key), record));
+    });
+    const now = new Date();
+    const todayKey = getLocalDateKey(now);
+    const recentCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const alertStatuses = new Set(['missed', 'skipped', 'failed', 'needs_attention']);
+    const sortedRecords = Array.from(byIdentity.values())
+      .sort((a, b) => {
+        const aTime = new Date(a.scheduled_at || a.scheduled_time || a.created_at || 0).getTime();
+        const bTime = new Date(b.scheduled_at || b.scheduled_time || b.created_at || 0).getTime();
+        return bTime - aTime;
+      });
+    const keptReadNonCritical: LocalNotificationRecord[] = [];
+    const next = sortedRecords
+      .filter((record) => {
+        const when = new Date(record.scheduled_at || record.scheduled_time || record.created_at || 0).getTime();
+        const isUnreadRecord = !record.read_at && !record.opened_at && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'].includes(record.status);
+        const isAlertRecord = alertStatuses.has(record.status);
+        const isTodayScheduledRecord = (record.status === 'scheduled' || record.status === 'upcoming') && getLocalDateKey(record.scheduled_at || record.scheduled_time || record.created_at || '') === todayKey;
+        const isRecentDeliveredOrRead = Number.isFinite(when) && when >= recentCutoff && record.status !== 'cleared';
+        if (isUnreadRecord || isAlertRecord || isTodayScheduledRecord || isRecentDeliveredOrRead) return true;
+        if (record.status === 'cleared') return false;
+        if (record.read_at || record.opened_at) {
+          if (keptReadNonCritical.length >= 100) return false;
+          keptReadNonCritical.push(record);
+          return true;
+        }
+        return false;
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.scheduled_at || a.scheduled_time || a.created_at || 0).getTime();
+        const bTime = new Date(b.scheduled_at || b.scheduled_time || b.created_at || 0).getTime();
+        return bTime - aTime;
+      });
+    await AsyncStorage.setItem(getNotificationInboxKey(owner), JSON.stringify(next));
+  } catch {}
+}
+
+export async function upsertLocalNotificationRecord(ownerArg: CacheOwner | null | undefined, record: Partial<LocalNotificationRecord> & { id?: string; metadata?: Record<string, any> | null }) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const id = String(record.id || localInboxIdentity(record as LocalNotificationRecord));
+  if (!id) return;
+  const current = await readLocalNotificationInbox(owner);
+  const incoming: LocalNotificationRecord = {
+    id,
+    type: record.type || 'general',
+    title: record.title || 'Notification',
+    message: record.message || '',
+    status: record.status || 'scheduled',
+    scheduled_at: record.scheduled_at || record.scheduled_time || null,
+    scheduled_time: record.scheduled_time || record.scheduled_at || null,
+    created_at: record.created_at || new Date().toISOString(),
+    delivered_at: record.delivered_at || null,
+    opened_at: record.opened_at || null,
+    read_at: record.read_at || null,
+    metadata: record.metadata || null,
+  };
+  await writeLocalNotificationInbox(owner, [...current, incoming]);
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
+}
+
+function matchesLocalNotificationRecord(record: LocalNotificationRecord, recordIdOrScheduleKey: string) {
+  const metadata = record.metadata || {};
+  const values = [
+    record.id,
+    metadata.scheduleKey,
+    metadata.schedule_key,
+    metadata.doseKey,
+    metadata.dose_key,
+    metadata.notificationId,
+    metadata.notification_id,
+  ].filter(Boolean).map(String);
+  return values.includes(String(recordIdOrScheduleKey));
+}
+
+export async function markLocalNotificationRead(ownerArg: CacheOwner | null | undefined, recordIdOrScheduleKey: string) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner || !recordIdOrScheduleKey) return;
+  const now = new Date().toISOString();
+  const current = await readLocalNotificationInbox(owner);
+  await writeLocalNotificationInbox(owner, current.map((record) => (
+    matchesLocalNotificationRecord(record, recordIdOrScheduleKey)
+      ? { ...record, opened_at: record.opened_at || now, read_at: record.read_at || now }
+      : record
+  )));
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
+}
+
+export async function markLocalNotificationCleared(ownerArg: CacheOwner | null | undefined, recordIdOrScheduleKey: string) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner || !recordIdOrScheduleKey) return;
+  const now = new Date().toISOString();
+  const current = await readLocalNotificationInbox(owner);
+  await writeLocalNotificationInbox(owner, current.map((record) => (
+    matchesLocalNotificationRecord(record, recordIdOrScheduleKey)
+      ? { ...record, status: 'cleared', opened_at: record.opened_at || now, read_at: record.read_at || now, metadata: { ...(record.metadata || {}), recent_hidden: true } }
+      : record
+  )));
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
+}
+
+function localHourKey(value?: string | null) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  return `${year}-${month}-${day}:${hour}`;
+}
+
+export async function upsertMedicationTakenNotification(ownerArg: CacheOwner | null | undefined, input: {
+  medicationId: string | number;
+  medicationName?: string | null;
+  doseTime: string;
+  takenAt?: string;
+  dosage?: string | null;
+  scheduleKey?: string | null;
+  doseKey?: string | null;
+}) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const takenAt = input.takenAt || new Date().toISOString();
+  const id = `medication-history:${input.medicationId}:${input.doseTime}:completed`;
+  await upsertLocalNotificationRecord(owner, {
+    id,
+    type: 'medication',
+    title: `${input.medicationName || 'Medication'} taken`,
+    message: `Scheduled for ${new Date(input.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`,
+    status: 'completed',
+    scheduled_at: input.doseTime,
+    scheduled_time: input.doseTime,
+    created_at: takenAt,
+    delivered_at: takenAt,
+    opened_at: takenAt,
+    read_at: takenAt,
+    metadata: {
+      local_activity: true,
+      source: 'medication_history',
+      medicationId: String(input.medicationId),
+      medication_id: String(input.medicationId),
+      medicationName: input.medicationName || null,
+      dosage: input.dosage || null,
+      doseTime: input.doseTime,
+      dose_time: input.doseTime,
+      scheduleKey: input.scheduleKey || null,
+      schedule_key: input.scheduleKey || null,
+      doseKey: input.doseKey || input.scheduleKey || null,
+      dose_key: input.doseKey || input.scheduleKey || null,
+    },
+  });
+}
+
+export async function upsertHydrationLogNotification(ownerArg: CacheOwner | null | undefined, entry: any) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const loggedAt = entry?.timestamp || entry?.created_at || new Date().toISOString();
+  const slotKey = `hydration:${getOwnerSchedulePart(owner)}:${localHourKey(loggedAt)}`;
+  const amount = Number(entry?.amount_ml || entry?.logged_ml || 0);
+  const label = entry?.drink_label || (String(entry?.beverage_type || 'water').replace(/_/g, ' '));
+  const title = `${String(label || 'Water').charAt(0).toUpperCase()}${String(label || 'Water').slice(1)} logged`;
+  await upsertLocalNotificationRecord(owner, {
+    id: `hydration-log:${entry?.local_id || entry?.id || loggedAt}`,
+    type: 'hydration',
+    title,
+    message: `${amount} ml beverage log`,
+    status: 'completed',
+    scheduled_at: loggedAt,
+    scheduled_time: loggedAt,
+    created_at: loggedAt,
+    delivered_at: loggedAt,
+    opened_at: loggedAt,
+    read_at: loggedAt,
+    metadata: {
+      local_activity: true,
+      source: 'hydration_log',
+      local_id: entry?.local_id || entry?.id || null,
+      client_uuid: entry?.client_uuid || entry?.local_id || null,
+      hydrationSlotKey: slotKey,
+      hydration_slot_key: slotKey,
+      respondedScheduleKey: slotKey,
+      responded_schedule_key: slotKey,
+      amount,
+    },
+  });
+}
+
+export async function markHydrationGoalCompleted(ownerArg?: CacheOwner | null) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  await cancelHydrationNotifications(owner);
+  const today = getLocalDateKey(new Date());
+  const now = new Date().toISOString();
+  const inbox = await readLocalNotificationInbox(owner);
+  await writeLocalNotificationInbox(owner, inbox.map((record) => {
+    const when = record.scheduled_at || record.scheduled_time || record.created_at || '';
+    if (record.type !== 'hydration' || getLocalDateKey(when) !== today || getSafeRecordTime(when) <= Date.now()) return record;
+    return {
+      ...record,
+      status: 'cleared' as const,
+      opened_at: record.opened_at || now,
+      read_at: record.read_at || now,
+      metadata: { ...(record.metadata || {}), goal_completed: true, recent_hidden: true },
+    };
+  }));
+  DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'hydration-goal' });
+}
+
+function getSafeRecordTime(value?: string | null) {
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+export async function recordNotificationResponse(response: ExpoNotifications.NotificationResponse): Promise<NotificationData | null> {
+  try {
+    const notification = response.notification;
+    const data = (notification.request.content.data || {}) as NotificationData;
+    const owner = await resolveOwnerFromNotificationData(data);
+    const key = data.scheduleKey || data.doseKey || notification.request.identifier;
+    if (owner) {
+      await upsertLocalNotificationRecord(owner, notificationRecordFromDeliveredNotification(notification, 'delivered'));
+      await markLocalNotificationRead(owner, String(key));
+      await reconcileNotificationInbox(owner);
+    }
+    DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'tap' });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function getLastNotificationResponse(): Promise<ExpoNotifications.NotificationResponse | null> {
+  const Notifications = getNotifications();
+  if (!Notifications?.getLastNotificationResponseAsync) return null;
+  try {
+    return await Notifications.getLastNotificationResponseAsync();
+  } catch {
+    return null;
+  }
+}
+
+async function resolveOwnerFromNotificationData(data: any): Promise<CacheOwner | null> {
+  const explicit = getCacheOwner({
+    id: data?.owner_id ?? data?.ownerId ?? data?.user_id ?? data?.userId,
+    email: data?.owner_email ?? data?.ownerEmail ?? data?.user_email ?? data?.userEmail,
+  });
+  if (explicit.owner_id || explicit.owner_email) return explicit;
+  return resolveNotificationOwner();
+}
+
+function notificationRecordFromDeliveredNotification(notification: ExpoNotifications.Notification, status: LocalNotificationStatus): LocalNotificationRecord {
+  const data = (notification.request.content.data || {}) as NotificationData;
+  const scheduleKey = data.scheduleKey || data.doseKey || String(data.id || notification.request.identifier);
+  const now = new Date().toISOString();
+  return {
+    id: scheduleKey,
+    type: data.type === 'hydration' || data.type === 'medication' ? data.type : 'general',
+    title: notification.request.content.title || (data.type === 'hydration' ? 'Time to hydrate' : 'Notification'),
+    message: notification.request.content.body || '',
+    status,
+    scheduled_at: data.scheduledAt || now,
+    scheduled_time: data.scheduledAt || now,
+    created_at: now,
+    delivered_at: status === 'delivered' ? now : null,
+    opened_at: null,
+    read_at: null,
+    metadata: {
+      ...data,
+      notificationId: notification.request.identifier,
+      notification_id: notification.request.identifier,
+      scheduleKey,
+      schedule_key: scheduleKey,
+      doseKey: data.doseKey || scheduleKey,
+      dose_key: data.doseKey || scheduleKey,
+    },
+  };
+}
+
+function isHydrationResponded(scheduledAt: string, nextScheduledAt: string | null, entries: any[]) {
+  const scheduledTime = new Date(scheduledAt).getTime();
+  if (!Number.isFinite(scheduledTime)) return true;
+  const nextTime = nextScheduledAt ? new Date(nextScheduledAt).getTime() : Number.POSITIVE_INFINITY;
+  const windowEnd = Math.min(scheduledTime + HYDRATION_RESPONSE_WINDOW_MS, Number.isFinite(nextTime) && nextTime > scheduledTime ? nextTime : Number.POSITIVE_INFINITY);
+  return (entries || []).some((entry) => {
+    if (entry?.deleted_at || Number(entry?.amount_ml || entry?.logged_ml || 0) <= 0) return false;
+    const time = new Date(entry?.timestamp || entry?.created_at || entry?.date || entry?.time || 0).getTime();
+    return Number.isFinite(time) && time >= scheduledTime && time <= windowEnd;
+  });
+}
+
+function sameDoseTime(left?: string | null, right?: string | null) {
+  const leftTime = left ? new Date(left).getTime() : 0;
+  const rightTime = right ? new Date(right).getTime() : 0;
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && Math.abs(leftTime - rightTime) < 60 * 1000;
+}
+
+function medicationDoseHasOutcome(ref: ScheduledNotificationRef, history: any[]) {
+  return (history || []).some((entry) => {
+    const status = entry?.status;
+    if (status !== 'completed' && status !== 'skipped' && status !== 'missed' && status !== 'snoozed') return false;
+    const medId = String(entry?.medId ?? entry?.medication_id ?? entry?.medicationId ?? '');
+    if (ref.medicationId && medId && medId !== String(ref.medicationId)) return false;
+    return sameDoseTime(entry?.time || entry?.scheduled_at || entry?.scheduled_time, ref.doseTime);
+  });
+}
+
+export async function reconcileNotificationInbox(ownerArg?: CacheOwner | null): Promise<LocalNotificationRecord[]> {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return [];
+  const [inbox, refs, hydrationCache, medicationHistory] = await Promise.all([
+    readLocalNotificationInbox(owner),
+    getScheduledNotificationRefs(owner),
+    readHydrationCache<any>(),
+    getCachedSession().then((session) => readMedicationHistoryCache<any[]>(session?.user ?? null)),
+  ]);
+  const now = Date.now();
+  const next = [...inbox];
+  const hydrationRefs = refs
+    .filter((ref) => ref.type === 'hydration')
+    .sort((a, b) => getRefScheduledTime(a) - getRefScheduledTime(b));
+
+  refs.forEach((ref) => {
+    const scheduledTime = getRefScheduledTime(ref);
+    const existing = next.find((record) => matchesLocalNotificationRecord(record, refSlot(ref)) || matchesLocalNotificationRecord(record, ref.notificationId));
+    const baseStatus: LocalNotificationStatus = scheduledTime > now ? 'scheduled' : 'delivered';
+    const record = localInboxRecordFromRef(ref, baseStatus);
+    if (scheduledTime <= now) record.delivered_at = existing?.delivered_at || new Date().toISOString();
+    next.push(record);
+  });
+
+  refs.forEach((ref) => {
+    const scheduledTime = getRefScheduledTime(ref);
+    const scheduleKey = refSlot(ref);
+    if (!scheduleKey || scheduledTime <= 0) return;
+
+    if (ref.type === 'hydration' && scheduledTime + HYDRATION_RESPONSE_WINDOW_MS < now) {
+      const index = hydrationRefs.findIndex((item) => refSlot(item) === scheduleKey);
+      const nextHydrationRef = index >= 0 ? hydrationRefs[index + 1] : null;
+      const responded = isHydrationResponded(ref.scheduledAt, nextHydrationRef?.scheduledAt || null, hydrationCache?.entries || []);
+      if (!responded) {
+        next.push({
+          ...localInboxRecordFromRef(ref, 'missed'),
+          title: 'Hydration reminder missed',
+          message: 'No beverage log was recorded after this reminder.',
+          delivered_at: new Date().toISOString(),
+          metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_hydration_reminder' },
+        });
+      }
+    }
+
+    if (ref.type === 'medication' && ref.doseTime && new Date(ref.doseTime).getTime() + MEDICATION_MISSED_GRACE_MS < now) {
+      if (!medicationDoseHasOutcome(ref, medicationHistory || [])) {
+        next.push({
+          ...localInboxRecordFromRef(ref, 'missed'),
+          title: `${ref.medicationName || 'Medication'} missed`,
+          message: ref.doseTime ? `Dose at ${new Date(ref.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}` : 'Dose was not recorded.',
+          delivered_at: new Date().toISOString(),
+          metadata: { ...localInboxRecordFromRef(ref, 'missed').metadata, source: 'missed_medication_reminder' },
+        });
+      }
+    }
+  });
+
+  await writeLocalNotificationInbox(owner, next);
+  return readLocalNotificationInbox(owner);
+}
+
 async function writeScheduledNotificationRefs(refs: ScheduledNotificationRef[], owner?: CacheOwner | null) {
   try {
     const cacheOwner = await resolveNotificationOwner(owner);
@@ -1172,6 +1742,7 @@ export async function saveScheduledNotificationRef(ref: ScheduledNotificationRef
   }
   next.push(ref);
   await writeScheduledNotificationRefs(next, owner);
+  await upsertLocalNotificationRecord(owner, localInboxRecordFromRef(ref, 'scheduled'));
   if (ref.type === 'hydration') await saveHydrationReminderHistoryEvent(ref);
 }
 
@@ -1237,13 +1808,52 @@ export async function cancelHydrationNotifications(ownerArg?: CacheOwner | null)
   DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'hydration', at: Date.now() });
 }
 
-export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | null) {
+export async function cancelHydrationSlotNotifications(ownerArg: CacheOwner | null | undefined, slotTimeIso: string) {
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
+  const slotHour = localHourKey(slotTimeIso);
+  if (!slotHour) return;
+  const refs = await getScheduledNotificationRefs(owner);
+  const matching = refs.filter((ref) => (
+    ref.type === 'hydration' &&
+    localHourKey(ref.scheduledAt) === slotHour &&
+    getRefScheduledTime(ref) > Date.now()
+  ));
+  const Notifications = getNotifications();
+  if (Notifications) {
+    await Promise.all(matching.map((ref) => Notifications.cancelScheduledNotificationAsync(ref.notificationId).catch(() => undefined)));
+  }
+  if (matching.length > 0) {
+    await writeScheduledNotificationRefs(refs.filter((ref) => !matching.some((item) => item.notificationId === ref.notificationId)), owner);
+    await markHydrationReminderHistoryCanceled(owner, new Set(matching.map((ref) => refSlot(ref))));
+    DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'hydration', at: Date.now() });
+  }
+}
+
+export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | null, options?: { force?: boolean }) {
+  const owner = await resolveNotificationOwner(ownerArg);
+  if (!owner) return;
+  const ownerKey = getOwnerSchedulePart(owner);
+  const lastValidated = lastScheduledRefValidationByOwner.get(ownerKey) || 0;
+  if (!options?.force && Date.now() - lastValidated < VALIDATE_SCHEDULED_REFS_INTERVAL_MS) return;
+  lastScheduledRefValidationByOwner.set(ownerKey, Date.now());
   const Notifications = getNotifications();
   if (!Notifications) return;
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   const refs = await getScheduledNotificationRefs(owner);
+  const medicationScheduledCount = scheduled.filter((item) => getScheduledRequestData(item).type === 'medication').length;
+  const hydrationScheduledCount = scheduled.filter((item) => getScheduledRequestData(item).type === 'hydration').length;
+  const nextScheduledTime = scheduled
+    .map(getRequestScheduledTime)
+    .filter((time) => time > Date.now())
+    .sort((a, b) => a - b)[0];
+  console.log('Notification schedule validation', {
+    total: scheduled.length,
+    medication: medicationScheduledCount,
+    hydration: hydrationScheduledCount,
+    refs: refs.length,
+    next: nextScheduledTime ? new Date(nextScheduledTime).toISOString() : null,
+  });
   const scheduledById = new Map(scheduled.map((item) => [item.identifier, item]));
   const refByNotificationId = new Map(refs.map((ref) => [ref.notificationId, ref]));
   const groups = new Map<string, { request?: NotificationRequestLike; ref?: ScheduledNotificationRef }[]>();
@@ -1306,6 +1916,13 @@ export async function validateScheduledNotificationRefs(ownerArg?: CacheOwner | 
   });
 
   await Promise.all(Array.from(idsToCancel).map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  if (idsToCancel.size > 0 || cleanedRefs.length !== refs.length) {
+    console.log('Notification schedule reconciliation', {
+      staleOrDuplicateCount: idsToCancel.size,
+      previousRefs: refs.length,
+      nextRefs: cleanedRefs.filter((ref) => !idsToCancel.has(ref.notificationId)).length,
+    });
+  }
   await writeScheduledNotificationRefs(cleanedRefs.filter((ref) => !idsToCancel.has(ref.notificationId)), owner);
 }
 
@@ -1479,7 +2096,7 @@ export async function rescheduleHydrationNotifications(goalOrOptions: number | H
     for (const slot of slots) {
       await notificationService.scheduleHydrationReminder(intervalMinutes, amount, undefined, owner, slot, progressPercent);
     }
-    await validateScheduledNotificationRefs(owner);
+    await validateScheduledNotificationRefs(owner, { force: true });
     DeviceEventEmitter.emit(REMINDERS_RESCHEDULED_EVENT, { type: 'hydration', at: Date.now() });
   } finally {
     schedulingHydration = false;
@@ -1545,7 +2162,8 @@ export async function bootstrapNotificationSchedules(ownerArg?: CacheOwner | nul
         }
       );
     }
-    await validateScheduledNotificationRefs(owner);
+    await validateScheduledNotificationRefs(owner, { force: true });
+    await reconcileNotificationInbox(owner);
   } catch (error) {
     console.log('Notification bootstrap error:', error);
   }

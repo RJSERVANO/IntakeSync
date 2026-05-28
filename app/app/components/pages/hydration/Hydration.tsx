@@ -6,14 +6,14 @@ import Constants from 'expo-constants';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
-import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, readNotificationsCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
+import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
 import { enqueueBeverageLog, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { cancelHydrationNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, notificationService, rescheduleHydrationNotifications } from '../../../../services/notificationService';
+import { cancelHydrationSlotNotifications, getHydrationReminderHistory, getScheduledNotificationRefs, markHydrationGoalCompleted, notificationService, readLocalNotificationInbox, reconcileNotificationInbox, rescheduleHydrationNotifications, upsertHydrationLogNotification } from '../../../../services/notificationService';
 import { calculateHydrationPace } from '../../../../hooks/useHydrationGoal';
 import {
   calculatePersonalizedHydrationGoal,
@@ -338,10 +338,12 @@ export default function Hydration() {
       const permission = await notificationService.getPermissionStatus();
       setNotificationsEnabled(permission.granted);
       const session = await getCachedSession();
+      const owner = getCacheOwner(session?.user ?? null);
+      if (owner.owner_id || owner.owner_email) await reconcileNotificationInbox(owner);
       const [history, refs, cachedNotifications] = await Promise.all([
         getHydrationReminderHistory(),
         getScheduledNotificationRefs(),
-        readNotificationsCache<any>(session?.user ?? null),
+        readLocalNotificationInbox(owner),
       ]);
       const scheduledRefs = refs
         .filter((ref) => ref.type === 'hydration')
@@ -352,11 +354,11 @@ export default function Hydration() {
           scheduledAt: ref.scheduledAt,
           notificationId: ref.notificationId,
         }));
-      const notificationRecords = (Array.isArray(cachedNotifications?.notifications) ? cachedNotifications.notifications : [])
-        .filter((item: any) => item?.type === 'hydration' && item?.metadata?.source === 'scheduled_reminder')
+      const notificationRecords = (Array.isArray(cachedNotifications) ? cachedNotifications : [])
+        .filter((item: any) => item?.type === 'hydration' && String(item?.metadata?.source || '').includes('hydration_reminder'))
         .map((item: any) => ({
           type: 'hydration',
-          scheduleKey: item?.metadata?.schedule_key,
+          scheduleKey: item?.metadata?.scheduleKey || item?.metadata?.schedule_key,
           scheduledAt: item?.scheduled_at || item?.scheduled_time || item?.created_at,
         }));
       const summary = deriveHydrationReminderSummary({
@@ -793,6 +795,10 @@ export default function Hydration() {
     setEntries(newEntries);
     try {
       await persistLocal({ goal, entries: newEntries });
+      const session = await getCachedSession();
+      const owner = getCacheOwner(session?.user ?? null);
+      await upsertHydrationLogNotification(owner, entry);
+      await cancelHydrationSlotNotifications(owner, entry.timestamp);
     } catch {
       entriesRef.current = previousEntries;
       setEntries(previousEntries);
@@ -811,7 +817,8 @@ export default function Hydration() {
       await showGoalReachedOnce();
     }
     if (newTotal >= goal) {
-      await cancelHydrationNotifications();
+      const session = await getCachedSession();
+      await markHydrationGoalCompleted(getCacheOwner(session?.user ?? null));
     } else {
       await syncHydrationReminderLifecycle(newTotal, goal);
     }

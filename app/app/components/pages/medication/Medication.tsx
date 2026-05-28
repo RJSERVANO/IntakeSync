@@ -9,6 +9,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import {
   filterOtcReferenceMedicines,
+  getCacheOwner,
   getCachedSession,
   getMedicationClearedHistoryCacheKey,
   getUserCacheIdentifier,
@@ -22,7 +23,7 @@ import {
   writeOtcSearchCache,
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, getPendingSyncActions, mergeLatestPendingAction, removePendingMedicationActionsForDelete, removePendingActionByLocalId, processSyncQueue } from '../../../../services/syncQueue';
-import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService } from '../../../../services/notificationService';
+import { cancelMedicationDoseNotifications, cancelMedicationNotifications, notificationService, reconcileNotificationInbox, upsertMedicationTakenNotification } from '../../../../services/notificationService';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
 import InlineSyncNotice from '../../common/InlineSyncNotice';
@@ -989,6 +990,7 @@ export default function Medication() {
     newMissed.forEach((entry) => {
       syncMissedDose(entry);
     });
+    void reconcileNotificationInbox(getCacheOwner(currentUser));
   // Dose reconciliation is intentionally keyed to state snapshots; helper identities change every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, history, meds, nowTick]);
@@ -1728,6 +1730,15 @@ export default function Medication() {
     };
     try {
       if (currentUser) await writeMedicationHistoryCache(currentUser, optimisticHistory);
+      if (currentUser) {
+        await upsertMedicationTakenNotification(getCacheOwner(currentUser), {
+          medicationId: getNotificationMedicationId(med),
+          medicationName: med.name,
+          dosage: med.dosage,
+          doseTime: scheduledTime,
+          takenAt: loggedAt,
+        });
+      }
     } catch {
       setHistory(previousHistory);
       showInlineNotice('Save failed');

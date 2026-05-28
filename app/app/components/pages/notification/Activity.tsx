@@ -28,7 +28,12 @@ import {
   writeNotificationsCache,
 } from '../../../../services/offlineStorage';
 import { enqueueSyncAction, getPendingSyncActions, processSyncQueue } from '../../../../services/syncQueue';
-import { getScheduledNotificationRefs } from '../../../../services/notificationService';
+import {
+  getScheduledNotificationRefs,
+  markLocalNotificationCleared,
+  markLocalNotificationRead,
+  reconcileNotificationInbox,
+} from '../../../../services/notificationService';
 import { notificationSettings } from '../../../../services/notificationSettings';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from '../../../../services/homeEvents';
 import { FONT_SCALE } from '../../../../utils/fontScaling';
@@ -50,6 +55,7 @@ type NotificationStatus =
   | 'needs_attention'
   | 'cleared';
 type InboxFilter = 'all' | 'unread' | 'medication' | 'hydration';
+type CounterKey = 'unread' | 'scheduled' | 'alerts';
 
 interface NotificationItem {
   id: number | string;
@@ -60,6 +66,7 @@ interface NotificationItem {
   scheduled_at?: string | null;
   scheduled_time?: string | null;
   created_at?: string | null;
+  delivered_at?: string | null;
   opened_at?: string | null;
   read_at?: string | null;
   metadata?: Record<string, any> | null;
@@ -119,11 +126,27 @@ const getErrorMessage = (error: any, fallback: string) => {
   return typeof message === 'string' && message.trim() ? message : fallback;
 };
 
-const isUnread = (item: NotificationItem) => !item.opened_at && !item.read_at;
-const isAlertStatus = (status: NotificationStatus) =>
-  status === 'missed' || status === 'skipped' || status === 'failed' || status === 'needs_attention';
+const isMissingBackendRoute = (error: any) => (
+  error?.status === 404 ||
+  error?.response?.status === 404 ||
+  String(error?.data?.message || error?.message || error?.data || '').toLowerCase().includes('route not found')
+);
+
 const isScheduledStatus = (status: NotificationStatus) => status === 'scheduled' || status === 'upcoming';
 const isLocalActivity = (item: NotificationItem) => Boolean(item.metadata?.local_activity);
+const unreadStatuses: NotificationStatus[] = ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'];
+const isFutureScheduled = (item: NotificationItem) => (
+  isScheduledStatus(item.status) && getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at) > Date.now()
+);
+const isUnread = (item: NotificationItem) => (
+  unreadStatuses.includes(item.status) &&
+  !item.opened_at &&
+  !item.read_at &&
+  !isLocalActivity(item) &&
+  !isFutureScheduled(item)
+);
+const isAlertStatus = (status: NotificationStatus) =>
+  status === 'missed' || status === 'skipped' || status === 'failed' || status === 'needs_attention';
 
 const getTone = (item: Pick<NotificationItem | ReminderItem, 'type' | 'status'>) => {
   if (isAlertStatus(item.status)) {
@@ -166,6 +189,47 @@ const formatBeverageLabel = (entry: any) => {
 
 const getReminderKey = (item: ReminderItem) => `${item.type}:${item.id || item.title}:${formatSafeTime(item.time)}`;
 
+const getNotificationIdentity = (item: NotificationItem) => String(
+  item.metadata?.scheduleKey ||
+  item.metadata?.schedule_key ||
+  item.metadata?.doseKey ||
+  item.metadata?.dose_key ||
+  item.metadata?.notificationId ||
+  item.metadata?.notification_id ||
+  item.id ||
+  `${item.type}:${item.title}:${activityDate(item)}`
+);
+
+const mergeNotificationRecords = (items: NotificationItem[]) => {
+  const byKey = new Map<string, NotificationItem>();
+  items.forEach((item) => {
+    const key = getNotificationIdentity(item);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, item);
+      return;
+    }
+    const status = item.status === 'cleared' || existing.status === 'cleared'
+      ? 'cleared'
+      : item.status === 'scheduled' && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed', 'completed'].includes(existing.status)
+        ? existing.status
+        : item.status;
+    byKey.set(key, {
+      ...existing,
+      ...item,
+      id: existing.id || item.id,
+      status,
+      scheduled_at: item.scheduled_at || existing.scheduled_at || null,
+      scheduled_time: item.scheduled_time || existing.scheduled_time || null,
+      created_at: existing.created_at || item.created_at || null,
+      opened_at: item.opened_at || existing.opened_at || null,
+      read_at: item.read_at || existing.read_at || null,
+      metadata: { ...(existing.metadata || {}), ...(item.metadata || {}) },
+    });
+  });
+  return Array.from(byKey.values());
+};
+
 const dedupeReminders = (items: ReminderItem[]) => {
   const seen = new Set<string>();
   return items
@@ -188,6 +252,140 @@ const isHiddenRecent = (item: NotificationItem, hiddenIds: Set<string>) => (
   hiddenIds.has(String(item.id)) || item.status === 'cleared' || item.metadata?.recent_hidden === true || item.metadata?.hidden === true
 );
 
+const isLocalReminderRecord = (item: NotificationItem) => {
+  const source = String(item.metadata?.source || '');
+  return source.includes('reminder') || Boolean(item.metadata?.scheduleKey || item.metadata?.schedule_key || item.metadata?.notificationId || item.metadata?.notification_id);
+};
+
+const backendNotificationId = (item: NotificationItem) => item.metadata?.backendNotificationId || item.metadata?.backend_notification_id || (!isLocalReminderRecord(item) ? item.id : null);
+
+const hasHappenedOrWasActioned = (item: NotificationItem) => {
+  const when = getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at);
+  if (item.status === 'cleared') return false;
+  if (isLocalActivity(item)) return true;
+  if (item.delivered_at || item.opened_at || item.read_at) return true;
+  if (['delivered', 'completed', 'missed', 'skipped', 'failed', 'needs_attention'].includes(item.status)) return when <= Date.now();
+  if (item.status === 'snoozed') return when <= Date.now();
+  return false;
+};
+
+const getMedicationDoseGroupKey = (item: NotificationItem) => {
+  const metadata = item.metadata || {};
+  const scheduleKey = String(metadata.scheduleKey || metadata.schedule_key || metadata.doseKey || metadata.dose_key || item.id || '');
+  const match = scheduleKey.match(/^medication:([^:]+):([^:]+):(\d{4}-\d{2}-\d{2}):(\d{2}):(\d{2})(?::\d+)?$/);
+  if (match) return `medication:${match[2]}:${match[3]}:${match[4]}:${match[5]}`;
+  const medicationId = metadata.medicationId || metadata.medication_id || 'medication';
+  const doseTime = getMedicationBaseDoseTime(item) || item.scheduled_at || item.scheduled_time || item.created_at || '';
+  return `medication:${medicationId}:${formatSafeTime(doseTime)}`;
+};
+
+const getMedicationBaseDoseTime = (item: NotificationItem) => {
+  const metadata = item.metadata || {};
+  if (metadata.doseTime || metadata.dose_time) return String(metadata.doseTime || metadata.dose_time);
+  const scheduleKey = String(metadata.scheduleKey || metadata.schedule_key || metadata.doseKey || metadata.dose_key || item.id || '');
+  const match = scheduleKey.match(/^medication:([^:]+):([^:]+):(\d{4}-\d{2}-\d{2}):(\d{2}):(\d{2})(?::\d+)?$/);
+  if (match) {
+    const parsed = new Date(`${match[3]}T${match[4]}:${match[5]}:00`);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  const offset = Number(metadata.reminderOffsetMinutes ?? metadata.reminder_offset_minutes);
+  const triggerTime = getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at);
+  if (Number.isFinite(offset) && triggerTime > 0) {
+    return new Date(triggerTime + offset * 60 * 1000).toISOString();
+  }
+  return item.scheduled_at || item.scheduled_time || item.created_at || '';
+};
+
+const getMedicationReminderOffset = (item: NotificationItem) => {
+  const metadata = item.metadata || {};
+  const direct = Number(metadata.reminderOffsetMinutes ?? metadata.reminder_offset_minutes);
+  if (Number.isFinite(direct)) return direct;
+  const scheduleKey = String(metadata.scheduleKey || metadata.schedule_key || metadata.doseKey || metadata.dose_key || item.id || '');
+  const match = scheduleKey.match(/^medication:[^:]+:[^:]+:\d{4}-\d{2}-\d{2}:\d{2}:\d{2}:(\d+)$/);
+  return match ? Number(match[1]) : NaN;
+};
+
+const getLocalHourKey = (value?: string | null) => {
+  const date = parseSafeDate(value);
+  if (!date) return '';
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  return `${year}-${month}-${day}:${hour}`;
+};
+
+const getHydrationSlotGroupKey = (item: NotificationItem) => {
+  const metadata = item.metadata || {};
+  return String(metadata.scheduleKey || metadata.schedule_key || item.id || `hydration:${formatSafeTime(item.scheduled_at || item.scheduled_time || item.created_at)}`);
+};
+
+const getScheduledGroupKey = (item: NotificationItem) => (
+  item.type === 'medication' ? getMedicationDoseGroupKey(item) : getHydrationSlotGroupKey(item)
+);
+
+const groupScheduledTodayRecords = (items: NotificationItem[]) => {
+  const groups = new Map<string, NotificationItem & { triggerOffsets?: number[] }>();
+  items.forEach((item) => {
+    let key = getScheduledGroupKey(item);
+    const metadata = item.metadata || {};
+    if (item.type === 'medication' && metadata.source === 'scheduled_ref_fallback') {
+      const itemTime = formatSafeTime(item.scheduled_at || item.scheduled_time || item.created_at);
+      const existingSameTime = Array.from(groups.entries()).find(([, record]) => (
+        record.type === 'medication' &&
+        formatSafeTime(record.scheduled_at || record.scheduled_time || record.created_at) === itemTime
+      ));
+      if (existingSameTime) key = existingSameTime[0];
+    }
+    const existing = groups.get(key);
+    const offset = getMedicationReminderOffset(item);
+    const triggerOffsets = new Set<number>([...(existing?.triggerOffsets || [])]);
+    if (Number.isFinite(offset)) triggerOffsets.add(offset);
+
+    if (item.type === 'medication') {
+      const doseTime = getMedicationBaseDoseTime(item);
+      const medicationName = metadata.medicationName || metadata.medication_name || String(item.title || '').replace(/^Take\s+/i, '').replace(/^Time to take\s+/i, '').replace(/\s+in\s+\d+\s+minutes$/i, '');
+      const existingName = existing?.title?.replace(/^Take\s+/i, '');
+      const displayName = String(medicationName || existingName || '').trim();
+      const existingTrigger = getSafeTime(existing?.metadata?.nextTriggerAt || existing?.metadata?.next_trigger_at || existing?.scheduled_at || existing?.scheduled_time || existing?.created_at);
+      const itemTrigger = getSafeTime(item.scheduled_at || item.scheduled_time || item.created_at);
+      const nextTriggerAt = existingTrigger > 0 && itemTrigger > 0
+        ? new Date(Math.min(existingTrigger, itemTrigger)).toISOString()
+        : item.scheduled_at || item.scheduled_time || item.created_at;
+      const next: NotificationItem & { triggerOffsets?: number[] } = {
+        ...(existing || item),
+        ...item,
+        id: key,
+        title: displayName && displayName !== 'Medication reminder' ? `Take ${displayName.replace(/^Take\s+/i, '')}` : 'Medication reminder',
+        message: `Dose at ${formatSafeTime(doseTime)}`,
+        scheduled_at: doseTime || item.scheduled_at || item.scheduled_time || item.created_at,
+        scheduled_time: doseTime || item.scheduled_time || item.scheduled_at || item.created_at,
+        status: existing?.status === 'delivered' || item.status === 'delivered' ? 'delivered' : item.status,
+        metadata: { ...(existing?.metadata || {}), ...metadata, grouped_schedule: true, doseTime, nextTriggerAt },
+        triggerOffsets: Array.from(triggerOffsets).sort((a, b) => b - a),
+      };
+      const offsets = next.triggerOffsets || [];
+      if (offsets.length > 0) {
+        const labels = offsets.map((value) => value > 0 ? `${value} min` : 'due time').join(', ');
+        next.message = `${next.message} | Alerts: ${labels}`;
+      }
+      groups.set(key, next);
+      return;
+    }
+
+    groups.set(key, {
+      ...(existing || item),
+      ...item,
+      id: key,
+      metadata: { ...(existing?.metadata || {}), ...metadata, grouped_schedule: true },
+      triggerOffsets: Array.from(triggerOffsets).sort((a, b) => b - a),
+    });
+  });
+  return Array.from(groups.values()).sort(
+    (a, b) => getSafeTime(a.scheduled_at || a.scheduled_time || a.created_at) - getSafeTime(b.scheduled_at || b.scheduled_time || b.created_at)
+  );
+};
+
 export default function Activity() {
   const params = useLocalSearchParams();
   const router = useRouter();
@@ -200,7 +398,6 @@ export default function Activity() {
   const [stats, setStats] = useState<NotificationStats | null>(null);
   const [medicationFallbacks, setMedicationFallbacks] = useState<ReminderItem[]>([]);
   const [filter, setFilter] = useState<InboxFilter>('all');
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
@@ -211,6 +408,7 @@ export default function Activity() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [showAllRecent, setShowAllRecent] = useState(false);
   const [hiddenRecentIds, setHiddenRecentIds] = useState<Set<string>>(new Set());
+  const [recordListModal, setRecordListModal] = useState<{ title: string; records: NotificationItem[] } | null>(null);
   const [localReminderPrefs, setLocalReminderPrefs] = useState({
     allowNotifications: false,
     medicationReminders: true,
@@ -302,6 +500,7 @@ export default function Activity() {
         scheduled_at: raw?.scheduled_at ?? raw?.scheduled_time ?? null,
         scheduled_time: raw?.scheduled_time ?? raw?.scheduled_at ?? null,
         created_at: raw?.created_at ?? null,
+        delivered_at: raw?.delivered_at ?? null,
         opened_at: raw?.opened_at ?? raw?.read_at ?? null,
         read_at: raw?.read_at ?? null,
         metadata: raw?.metadata ?? raw?.data ?? null,
@@ -331,11 +530,10 @@ export default function Activity() {
 
   const buildLocalActivityRecords = useCallback(async (sessionUser: any): Promise<NotificationItem[]> => {
     if (!sessionUser) return [];
-    const [hydrationCache, medicationCache, medicationHistory, scheduledRefs, pendingActions] = await Promise.all([
+    const [hydrationCache, medicationCache, medicationHistory, pendingActions] = await Promise.all([
       readHydrationCache<any>(),
       readMedicationCache<any[]>(sessionUser),
       readMedicationHistoryCache<any[]>(sessionUser),
-      getScheduledNotificationRefs(),
       getPendingSyncActions(),
     ]);
 
@@ -359,7 +557,12 @@ export default function Activity() {
           scheduled_at: when,
           read_at: when,
           opened_at: when,
-          metadata: { local_activity: true, source: 'hydration', local_id: entry?.local_id || entry?.id },
+          metadata: {
+            local_activity: true,
+            source: 'hydration_log',
+            local_id: entry?.local_id || entry?.id,
+            hydrationSlotKey: `hydration:${getLocalHourKey(when)}`,
+          },
         };
       });
 
@@ -379,25 +582,16 @@ export default function Activity() {
           scheduled_at: entry?.time || when,
           read_at: when,
           opened_at: when,
-          metadata: { local_activity: true, source: 'medication_history', medication_id: med?.id || entry?.medId || entry?.medication_id },
+          metadata: {
+            local_activity: true,
+            source: 'medication_history',
+            medicationId: med?.id || entry?.medId || entry?.medication_id,
+            medication_id: med?.id || entry?.medId || entry?.medication_id,
+            medicationName: medName,
+            doseTime: entry?.time || when,
+          },
         };
       });
-
-    const reminderRecords: NotificationItem[] = scheduledRefs.filter((ref) => getSafeTime(ref.scheduledAt) <= Date.now()).map((ref) => {
-      const when = ref.scheduledAt || ref.createdAt || new Date().toISOString();
-      return {
-        id: `scheduled-ref:${ref.scheduleKey || ref.doseKey || ref.notificationId}`,
-        type: ref.type === 'medication' ? 'medication' : 'hydration',
-        title: ref.type === 'medication' ? `${ref.medicationName || 'Medication'} reminder` : 'Beverage reminder',
-        message: `Reminder was scheduled for ${formatSafeTime(when)}`,
-        status: 'delivered',
-        scheduled_at: when,
-        created_at: ref.createdAt || when,
-        read_at: ref.createdAt || when,
-        opened_at: ref.createdAt || when,
-        metadata: { local_activity: true, source: 'scheduled_reminder', schedule_key: ref.scheduleKey || ref.doseKey },
-      };
-    });
 
     const syncRecords: NotificationItem[] = pendingActions.map((item) => ({
       id: `sync:${item.id || item.local_id}`,
@@ -412,7 +606,7 @@ export default function Activity() {
       metadata: { local_activity: true, source: 'sync_queue', action_type: item.action_type },
     }));
 
-    return dedupeNotifications([...beverageRecords, ...medicationRecords, ...reminderRecords, ...syncRecords]);
+    return dedupeNotifications([...beverageRecords, ...medicationRecords, ...syncRecords]);
   }, []);
 
   const loadLocalReminderItems = useCallback(async (prefs = localReminderPrefs): Promise<ReminderItem[]> => {
@@ -462,6 +656,7 @@ export default function Activity() {
       const prefs = await loadReminderPreferences(sessionUser);
       await loadHiddenRecentIds(sessionUser);
       if (pendingActions.length > 0) await processSyncQueue(token);
+      const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
       const [notificationRes, statsRes, medicationRes] = await Promise.all([
         get('/notifications', token, 5000),
         get('/notifications/stats', token, 5000).catch(() => null),
@@ -469,7 +664,7 @@ export default function Activity() {
       ]);
       if (!(await isAuthSessionContextCurrent(context))) return;
       const localActivity = await buildLocalActivityRecords(sessionUser);
-      const normalized = dedupeNotifications([...normalizeNotifications(notificationRes), ...localActivity]);
+      const normalized = mergeNotificationRecords([...normalizeNotifications(notificationRes), ...localInbox, ...localActivity]);
       const localReminderItems = await loadLocalReminderItems(prefs);
       const fallback = dedupeReminders([...localReminderItems, ...normalizeMedicationFallbacks(medicationRes)]);
       setNotifications(normalized);
@@ -489,16 +684,18 @@ export default function Activity() {
         setError('Offline mode');
         const cached = await readNotificationsCache<any>(currentUser);
         const session = await getCachedSession();
-        const localActivity = await buildLocalActivityRecords(currentUser || session?.user || null);
-        const prefs = await loadReminderPreferences(currentUser || session?.user || null);
-        await loadHiddenRecentIds(currentUser || session?.user || null);
+        const fallbackUser = currentUser || session?.user || null;
+        const localInbox = fallbackUser ? await reconcileNotificationInbox(getCacheOwner(fallbackUser)) : [];
+        const localActivity = await buildLocalActivityRecords(fallbackUser);
+        const prefs = await loadReminderPreferences(fallbackUser);
+        await loadHiddenRecentIds(fallbackUser);
         const localReminderItems = await loadLocalReminderItems(prefs);
         if (cached) {
-          setNotifications(dedupeNotifications([...(cached.notifications || []), ...localActivity]));
+          setNotifications(mergeNotificationRecords([...(cached.notifications || []), ...localInbox, ...localActivity]));
           setStats(cached.stats || null);
           setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached.medicationFallbacks || [])]));
         } else {
-          setNotifications(localActivity);
+          setNotifications(mergeNotificationRecords([...localInbox, ...localActivity]));
           setMedicationFallbacks(localReminderItems);
         }
         return;
@@ -526,20 +723,20 @@ export default function Activity() {
         await loadHiddenRecentIds(sessionUser);
         const cached = sessionUser ? await readNotificationsCache<any>(sessionUser) : null;
         if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
+        const localInbox = sessionUser ? await reconcileNotificationInbox(getCacheOwner(sessionUser)) : [];
         const localActivity = await buildLocalActivityRecords(sessionUser);
         const localReminderItems = await loadLocalReminderItems(prefs);
-        setNotifications(dedupeNotifications([...(cached?.notifications || []), ...localActivity]));
+        setNotifications(mergeNotificationRecords([...(cached?.notifications || []), ...localInbox, ...localActivity]));
         setStats(cached?.stats || null);
         setMedicationFallbacks(dedupeReminders([...localReminderItems, ...(cached?.medicationFallbacks || [])]));
         await loadNotifications(false);
-        if (mounted) setLoading(false);
       };
       run();
       return () => {
         mounted = false;
         setSyncing(false);
       };
-    }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadNotifications, loadReminderPreferences])
+    }, [buildLocalActivityRecords, currentUser, loadHiddenRecentIds, loadLocalReminderItems, loadNotifications, loadReminderPreferences, token])
   );
 
   const onRefresh = useCallback(async () => {
@@ -566,55 +763,69 @@ export default function Activity() {
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, opened_at: openedAt, read_at: current.read_at || openedAt } : current);
     setNotifications(nextNotifications);
     await cacheCurrentNotifications(nextNotifications);
+    if (currentUser) await markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item));
+    const backendId = backendNotificationId(item);
+    if (!backendId) {
+      setSelectedNotification(prev => (prev?.id === item.id ? { ...prev, opened_at: openedAt, read_at: prev.read_at || openedAt } : prev));
+      return;
+    }
     try {
-      await put(`/notifications/${item.id}`, { opened_at: openedAt }, token);
+      await put(`/notifications/${backendId}`, { opened_at: openedAt }, token);
       setSelectedNotification(prev => (prev?.id === item.id ? { ...prev, opened_at: openedAt } : prev));
       await loadNotifications();
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueueSyncAction({ action_type: 'MARK_NOTIFICATION_READ', method: 'PUT', local_id: String(item.id), payload: { notification_id: item.id, opened_at: openedAt } });
+      if (isMissingBackendRoute(err)) {
+        console.log('Notification read route unavailable; kept local update.');
+        setInlineNotice('Marked read');
+      } else if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'MARK_NOTIFICATION_READ', method: 'PUT', local_id: String(backendId), payload: { notification_id: backendId, opened_at: openedAt } });
         setOfflineMode(true);
         setInlineNotice('Will sync later');
       } else {
-        setNoticeModal({ title: 'Could not mark read', message: getErrorMessage(err, 'Please try again.') });
+        setNoticeModal({ title: 'Could not update', message: getErrorMessage(err, 'Please try again.') });
       }
     }
-  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
+  }, [cacheCurrentNotifications, currentUser, loadNotifications, notifications, token]);
 
   const completeNotification = useCallback(async (item: NotificationItem) => {
-    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'completed' as const } : current);
+    const readAt = new Date().toISOString();
+    const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, opened_at: current.opened_at || readAt, read_at: current.read_at || readAt } : current);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
-    try {
-      await post(`/notifications/${item.id}/complete`, {}, token);
-      await loadNotifications();
-    } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueueSyncAction({ action_type: 'COMPLETE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id } });
-        setOfflineMode(true);
-        setInlineNotice('Will sync later');
-      } else {
-        setNoticeModal({ title: 'Could not complete', message: getErrorMessage(err, 'Please try again.') });
-      }
+    if (currentUser) await markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item));
+    setInlineNotice('Marked read');
+
+    if (item.type === 'medication') {
+      router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any);
+    } else if (item.type === 'hydration') {
+      router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any);
     }
-  }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
+  }, [cacheCurrentNotifications, currentUser, notifications, router, token]);
 
   const snoozeNotification = useCallback(async (item: NotificationItem) => {
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'snoozed' as const } : current);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
+    const backendId = backendNotificationId(item);
+    if (!backendId) {
+      setInlineNotice('Updated');
+      return;
+    }
     try {
-      await post(`/notifications/${item.id}/snooze`, { minutes: 10 }, token);
+      await post(`/notifications/${backendId}/snooze`, { minutes: 10 }, token);
       await loadNotifications();
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueueSyncAction({ action_type: 'SNOOZE_NOTIFICATION', method: 'POST', local_id: String(item.id), payload: { notification_id: item.id, minutes: 10 } });
+      if (isMissingBackendRoute(err)) {
+        console.log('Notification snooze route unavailable; kept local update.');
+        setInlineNotice('Updated');
+      } else if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'SNOOZE_NOTIFICATION', method: 'POST', local_id: String(backendId), payload: { notification_id: backendId, minutes: 10 } });
         setOfflineMode(true);
         setInlineNotice('Will sync later');
       } else {
-        setNoticeModal({ title: 'Could not snooze', message: getErrorMessage(err, 'Please try again.') });
+        setNoticeModal({ title: 'Could not update', message: getErrorMessage(err, 'Please try again.') });
       }
     }
   }, [cacheCurrentNotifications, loadNotifications, notifications, token]);
@@ -628,37 +839,59 @@ export default function Activity() {
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
+    if (currentUser) await markLocalNotificationCleared(getCacheOwner(currentUser), getNotificationIdentity(item));
+    const backendId = backendNotificationId(item);
+    if (!backendId) {
+      setInlineNotice('Cleared');
+      return;
+    }
     try {
-      await del(`/notifications/${item.id}`, token);
+      await del(`/notifications/${backendId}`, token);
       await loadNotifications();
     } catch (err) {
-      if (isNetworkError(err)) {
-        await enqueueSyncAction({ action_type: 'CLEAR_NOTIFICATION', method: 'DELETE', local_id: String(item.id), payload: { notification_id: item.id } });
+      if (isMissingBackendRoute(err)) {
+        console.log('Notification clear route unavailable; kept local update.');
+        setInlineNotice('Cleared');
+      } else if (isNetworkError(err)) {
+        await enqueueSyncAction({ action_type: 'CLEAR_NOTIFICATION', method: 'DELETE', local_id: String(backendId), payload: { notification_id: backendId } });
         setOfflineMode(true);
         setInlineNotice('Will sync later');
       } else {
-        setNoticeModal({ title: 'Could not clear', message: getErrorMessage(err, 'Please try again.') });
+        setNoticeModal({ title: 'Could not update', message: getErrorMessage(err, 'Please try again.') });
       }
     }
   }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, loadNotifications, notifications, persistHiddenRecentIds, token]);
 
   const markAllRead = useCallback(async () => {
     const readAt = new Date().toISOString();
+    const targets = notifications
+      .filter((item) => !isHiddenRecent(item, hiddenRecentIds))
+      .filter(hasHappenedOrWasActioned)
+      .filter((item) => filter === 'unread' ? isUnread(item) : filter === 'medication' || filter === 'hydration' ? item.type === filter : true);
+    const targetIds = new Set(targets.map((item) => String(item.id)));
     const nextNotifications = notifications.map((item) => (
-      isHiddenRecent(item, hiddenRecentIds)
+      !targetIds.has(String(item.id))
         ? item
         : { ...item, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt }
     ));
     setNotifications(nextNotifications);
     await cacheCurrentNotifications(nextNotifications);
+    if (currentUser) {
+      await Promise.all(notifications
+        .filter((item) => targetIds.has(String(item.id)) && !isLocalActivity(item))
+        .map((item) => markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item))));
+    }
     setInlineNotice('Marked read');
-  }, [cacheCurrentNotifications, hiddenRecentIds, notifications]);
+  }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications]);
 
   const clearRecent = useCallback(async () => {
+    const targets = notifications
+      .filter((item) => !isHiddenRecent(item, hiddenRecentIds))
+      .filter(hasHappenedOrWasActioned)
+      .filter((item) => filter === 'unread' ? isUnread(item) : filter === 'medication' || filter === 'hydration' ? item.type === filter : true);
     const nextHidden = new Set(hiddenRecentIds);
-    notifications.forEach((item) => {
-      if (!isHiddenRecent(item, hiddenRecentIds)) nextHidden.add(String(item.id));
-    });
+    targets.forEach((item) => nextHidden.add(String(item.id)));
+    const targetIds = new Set(targets.map((item) => String(item.id)));
     const readAt = new Date().toISOString();
     const nextNotifications = notifications.map((item) => (
       nextHidden.has(String(item.id))
@@ -669,9 +902,14 @@ export default function Activity() {
     setNotifications(nextNotifications);
     await persistHiddenRecentIds(currentUser, nextHidden);
     await cacheCurrentNotifications(nextNotifications);
+    if (currentUser) {
+      await Promise.all(notifications
+        .filter((item) => targetIds.has(String(item.id)) && !isLocalActivity(item))
+        .map((item) => markLocalNotificationCleared(getCacheOwner(currentUser), getNotificationIdentity(item))));
+    }
     setShowAllRecent(false);
     setInlineNotice('Recent hidden');
-  }, [cacheCurrentNotifications, currentUser, hiddenRecentIds, notifications, persistHiddenRecentIds]);
+  }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications, persistHiddenRecentIds]);
 
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
     const today = new Date();
@@ -692,42 +930,104 @@ export default function Activity() {
     return dedupeReminders([...notificationReminders, ...medicationFallbacks]);
   }, [medicationFallbacks, notifications]);
 
+  const visibleNotifications = useMemo(
+    () => notifications.filter((item) => !isHiddenRecent(item, hiddenRecentIds)),
+    [hiddenRecentIds, notifications]
+  );
+
+  const recentNotifications = useMemo(
+    () => visibleNotifications.filter(hasHappenedOrWasActioned),
+    [visibleNotifications]
+  );
+
+  const unreadRecords = useMemo(
+    () => recentNotifications.filter(isUnread),
+    [recentNotifications]
+  );
+
+  const scheduledTodayRecords = useMemo(() => {
+    const today = new Date();
+    const completedMedicationDoseKeys = new Set(
+      notifications
+        .filter((item) => item.type === 'medication' && item.status === 'completed')
+        .map(getMedicationDoseGroupKey)
+        .filter(Boolean)
+    );
+    const respondedHydrationHours = new Set(
+      notifications
+        .filter((item) => item.type === 'hydration' && item.status === 'completed')
+        .map((item) => String(item.metadata?.hydrationSlotKey || item.metadata?.hydration_slot_key || getLocalHourKey(item.created_at || item.scheduled_at || item.scheduled_time)))
+        .filter(Boolean)
+    );
+    const records = notifications
+      .filter((item) => item.status !== 'cleared')
+      .filter((item) => !isLocalActivity(item))
+      .filter((item) => item.type === 'hydration' || item.type === 'medication')
+      .filter((item) => ['scheduled', 'upcoming', 'delivered'].includes(item.status))
+      .filter((item) => isSameLocalDay(item.type === 'medication' ? getMedicationBaseDoseTime(item) : item.scheduled_at || item.scheduled_time || item.created_at, today))
+      .filter((item) => item.type !== 'medication' || !completedMedicationDoseKeys.has(getMedicationDoseGroupKey(item)))
+      .filter((item) => {
+        if (item.type !== 'hydration') return true;
+        const hourKey = String(item.metadata?.hydrationSlotKey || item.metadata?.hydration_slot_key || getLocalHourKey(item.scheduled_at || item.scheduled_time || item.created_at));
+        return !respondedHydrationHours.has(hourKey);
+      });
+    return groupScheduledTodayRecords(mergeNotificationRecords(records));
+  }, [notifications]);
+
+  const alertRecords = useMemo(
+    () => mergeNotificationRecords(recentNotifications.filter((item) => !isLocalActivity(item) && isAlertStatus(item.status))),
+    [recentNotifications]
+  );
+
   const filteredNotifications = useMemo(() => {
-    const visible = notifications.filter((item) => !isHiddenRecent(item, hiddenRecentIds));
-    const sorted = [...visible].sort(
+    const sorted = [...recentNotifications].sort(
       (a, b) => getSafeTime(b.scheduled_at || b.scheduled_time || b.created_at) - getSafeTime(a.scheduled_at || a.scheduled_time || a.created_at)
     );
     if (filter === 'unread') return sorted.filter(isUnread);
     if (filter === 'medication' || filter === 'hydration') return sorted.filter(item => item.type === filter);
     return sorted;
-  }, [filter, hiddenRecentIds, notifications]);
+  }, [filter, recentNotifications]);
 
   const displayedNotifications = useMemo(() => (
     showAllRecent ? filteredNotifications : filteredNotifications.slice(0, 5)
   ), [filteredNotifications, showAllRecent]);
 
-  const todayNotifications = displayedNotifications.filter(item => isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
-  const earlierNotifications = displayedNotifications.filter(item => !isSameLocalDay(item.scheduled_at || item.scheduled_time || item.created_at, new Date()));
   const hasMoreRecent = filteredNotifications.length > 5;
-  const nextReminder = upcomingReminders[0] || null;
+  const nextReminder = useMemo<ReminderItem | null>(() => {
+    const now = Date.now();
+    const actionable = scheduledTodayRecords
+      .map((item): ReminderItem | null => {
+        const triggerTime = item.type === 'medication'
+          ? item.metadata?.nextTriggerAt || item.metadata?.next_trigger_at || item.scheduled_at || item.scheduled_time || item.created_at
+          : item.scheduled_at || item.scheduled_time || item.created_at;
+        if (getSafeTime(triggerTime) <= now) return null;
+        return {
+          id: String(item.id),
+          type: item.type,
+          title: item.type === 'medication'
+            ? String(item.title || 'Medication reminder').replace(/^Take\s+/i, '')
+            : item.title,
+          message: item.type === 'medication'
+            ? `Dose at ${formatSafeTime(item.scheduled_at || item.scheduled_time || item.created_at)}`
+            : item.message,
+          time: String(triggerTime || ''),
+          status: item.status,
+          notification: item,
+        };
+      })
+      .filter((item): item is ReminderItem => item !== null)
+      .sort((a, b) => getSafeTime(a.time) - getSafeTime(b.time));
+    return actionable[0] || upcomingReminders[0] || null;
+  }, [scheduledTodayRecords, upcomingReminders]);
 
   const counters = useMemo(() => {
-    const today = new Date();
     void stats;
-    const visibleRecords = notifications.filter((item) => !isHiddenRecent(item, hiddenRecentIds));
-    const unread = visibleRecords.filter(item => isUnread(item)).length;
-    const scheduledKeys = new Set<string>();
-    upcomingReminders
-      .filter(item => isSameLocalDay(item.time, today) && getSafeTime(item.time) > Date.now())
-      .forEach((item) => scheduledKeys.add(getReminderKey(item)));
-    const scheduledToday = scheduledKeys.size;
-    const alerts = visibleRecords.filter(item => isAlertStatus(item.status)).length;
     return [
-      { key: 'unread', label: 'Unread', value: unread, color: '#2563EB', icon: 'mail-unread-outline' as const },
-      { key: 'scheduled', label: 'Scheduled Today', value: scheduledToday, color: '#2563EB', icon: 'time-outline' as const },
-      { key: 'alerts', label: 'Alerts', value: alerts, color: '#DC2626', icon: 'alert-circle-outline' as const },
+      { key: 'unread' as const, label: 'Unread', value: unreadRecords.length, color: '#2563EB', icon: 'mail-unread-outline' as const },
+      { key: 'scheduled' as const, label: 'Scheduled Today', value: scheduledTodayRecords.length, color: '#2563EB', icon: 'time-outline' as const },
+      { key: 'alerts' as const, label: 'Alerts', value: alertRecords.length, color: '#DC2626', icon: 'alert-circle-outline' as const },
     ];
-  }, [hiddenRecentIds, notifications, stats, upcomingReminders]);
+  }, [alertRecords.length, scheduledTodayRecords.length, stats, unreadRecords.length]);
 
   const renderNotificationCard = (item: NotificationItem) => {
     const tone = getTone(item);
@@ -759,29 +1059,6 @@ export default function Activity() {
     );
   };
 
-  const renderReminder = (item: ReminderItem) => {
-    const tone = getTone(item);
-    return (
-      <TouchableOpacity
-        key={item.id}
-        activeOpacity={item.notification ? 0.84 : 1}
-        style={styles.reminderRow}
-        onPress={() => item.notification && setSelectedNotification(item.notification)}
-      >
-        <View style={[styles.iconBubble, { backgroundColor: tone.bg, borderColor: tone.border }]}>
-          <Ionicons name={tone.icon} size={19} color={tone.color} />
-        </View>
-        <View style={styles.cardBody}>
-          <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
-          <Text style={styles.cardMessage} numberOfLines={2}>
-            {item.message}{item.fallback ? ' | from medication schedule' : ''}
-          </Text>
-        </View>
-        <Text style={styles.reminderTime}>{formatSafeTime(item.time)}</Text>
-      </TouchableOpacity>
-    );
-  };
-
   const openReminderTarget = (item: ReminderItem | null) => {
     if (!item) return;
     if (item.type === 'medication') {
@@ -793,6 +1070,20 @@ export default function Activity() {
     }
   };
 
+  const openCounterList = (key: CounterKey) => {
+    if (key === 'unread') {
+      setFilter('unread');
+      setShowAllRecent(true);
+      setRecordListModal({ title: 'Unread Notifications', records: unreadRecords });
+      return;
+    }
+    if (key === 'scheduled') {
+      setRecordListModal({ title: 'Scheduled Today', records: scheduledTodayRecords });
+      return;
+    }
+    setRecordListModal({ title: 'Alerts', records: alertRecords });
+  };
+
   const renderNextReminder = () => {
     if (!nextReminder) {
       return (
@@ -802,7 +1093,7 @@ export default function Activity() {
           </View>
           <View style={styles.cardBody}>
             <Text style={styles.nextReminderLabel}>Next Reminder</Text>
-            <Text style={styles.nextReminderTitle}>You're all set for now.</Text>
+            <Text style={styles.nextReminderTitle}>You&apos;re all set for now.</Text>
             <Text style={styles.cardMessage}>No upcoming reminders today.</Text>
           </View>
         </View>
@@ -855,21 +1146,28 @@ export default function Activity() {
 
         <View style={styles.counterRow}>
           {counters.map(counter => (
-            <View key={counter.key} style={styles.counterCard}>
+            <TouchableOpacity
+              key={counter.key}
+              style={styles.counterCard}
+              activeOpacity={0.84}
+              accessibilityRole="button"
+              onPress={() => openCounterList(counter.key)}
+            >
               <View style={styles.counterTopRow}>
                 <View style={[styles.counterIcon, { backgroundColor: `${counter.color}14` }]}>
                   <Ionicons name={counter.icon} size={15} color={counter.color} />
                 </View>
                 <Text style={[styles.counterValue, { color: counter.color }]} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{counter.value}</Text>
+                <Ionicons name="chevron-forward" size={13} color="#94A3B8" />
               </View>
               <Text style={styles.counterLabel} maxFontSizeMultiplier={FONT_SCALE.chip}>{counter.label}</Text>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
 
         {renderNextReminder()}
 
-        {error ? (
+        {error && !(offlineMode && error === 'Offline mode') ? (
           <View style={styles.noticeBox}>
             <Ionicons name="cloud-offline-outline" size={18} color="#B45309" />
             <Text style={styles.noticeText}>{error}</Text>
@@ -880,7 +1178,9 @@ export default function Activity() {
           <View>
             <Text style={[styles.sectionTitle, styles.inboxTitle]}>Recent Notifications</Text>
             <Text style={styles.sectionSubtitle}>
-              Showing {Math.min(displayedNotifications.length, filteredNotifications.length)} of {filteredNotifications.length} records.
+              {filteredNotifications.length > 0
+                ? `Showing ${Math.min(displayedNotifications.length, filteredNotifications.length)} of ${filteredNotifications.length} recent records.`
+                : 'No recent notifications.'}
             </Text>
           </View>
         </View>
@@ -911,26 +1211,23 @@ export default function Activity() {
           ))}
         </View>
 
-        {loading ? null : displayedNotifications.length === 0 ? (
+        {displayedNotifications.length === 0 ? (
           <View style={styles.emptyInbox}>
             <Ionicons name="notifications-off-outline" size={32} color="#94A3B8" />
-            <Text style={styles.emptyTitle}>No notification records yet</Text>
-            <Text style={styles.emptyText}>Beverage logs, medication activity, and reminder records will appear here.</Text>
+            <Text style={styles.emptyTitle}>
+              {filter === 'unread'
+                ? 'No unread notifications'
+                : filter === 'medication'
+                  ? 'No recent medication notifications'
+                  : filter === 'hydration'
+                    ? 'No recent beverage notifications'
+                    : 'No recent notifications'}
+            </Text>
+            <Text style={styles.emptyText}>Delivered reminders and recent activity will appear here.</Text>
           </View>
         ) : (
           <>
-            {todayNotifications.length > 0 ? (
-              <>
-                <Text style={styles.groupTitle}>Today</Text>
-                {todayNotifications.map(renderNotificationCard)}
-              </>
-            ) : null}
-            {earlierNotifications.length > 0 ? (
-              <>
-                <Text style={styles.groupTitle}>Earlier</Text>
-                {earlierNotifications.map(renderNotificationCard)}
-              </>
-            ) : null}
+            {displayedNotifications.map(renderNotificationCard)}
             {hasMoreRecent ? (
               <TouchableOpacity style={styles.viewAllButton} onPress={() => setShowAllRecent((value) => !value)} activeOpacity={0.82}>
                 <Text style={styles.viewAllText}>{showAllRecent ? 'Show less' : 'View all'}</Text>
@@ -940,21 +1237,54 @@ export default function Activity() {
           </>
         )}
 
-        <Text style={styles.sectionTitle}>Upcoming Reminders</Text>
-        <View style={styles.sectionCard}>
-          {upcomingReminders.length > 0 ? (
-            upcomingReminders.map(renderReminder)
-          ) : (
-            <View style={styles.emptyBox}>
-              <Ionicons name="calendar-clear-outline" size={26} color="#94A3B8" />
-              <Text style={styles.emptyTitle}>No upcoming reminders for today.</Text>
-              <Text style={styles.emptyText}>Your beverage and medication reminders will appear here automatically.</Text>
-            </View>
-          )}
-        </View>
-
         <Text style={styles.deliveryText}>Notification delivery depends on device permissions and system settings.</Text>
       </ScrollView>
+
+      <Modal visible={Boolean(recordListModal)} transparent animationType="fade" onRequestClose={() => setRecordListModal(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.detailModal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{recordListModal?.title || ''}</Text>
+              <TouchableOpacity style={styles.modalClose} onPress={() => setRecordListModal(null)} accessibilityRole="button">
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            {recordListModal?.records?.length ? (
+              <ScrollView style={styles.recordList} contentContainerStyle={styles.recordListContent}>
+                {recordListModal.records.map((item) => {
+                  const tone = getTone(item);
+                  const when = item.scheduled_at || item.scheduled_time || item.created_at;
+                  return (
+                    <TouchableOpacity
+                      key={`${recordListModal.title}:${item.id}`}
+                      style={styles.recordListRow}
+                      activeOpacity={0.84}
+                      onPress={() => {
+                        setRecordListModal(null);
+                        if (!isLocalActivity(item)) setSelectedNotification(item);
+                      }}
+                    >
+                      <View style={[styles.iconBubble, { backgroundColor: tone.bg, borderColor: tone.border }]}>
+                        <Ionicons name={tone.icon} size={18} color={tone.color} />
+                      </View>
+                      <View style={styles.cardBody}>
+                        <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+                        <Text style={styles.cardMessage} numberOfLines={2}>{item.message || 'Notification record'}</Text>
+                        <Text style={styles.cardTime}>{formatSafeTime(when)} | {item.status.replace(/_/g, ' ')}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <View style={styles.emptyBox}>
+                <Ionicons name="checkmark-circle-outline" size={28} color="#94A3B8" />
+                <Text style={styles.emptyTitle}>{recordListModal?.title === 'Alerts' ? 'No alerts' : 'No records'}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={Boolean(selectedNotification)} transparent animationType="fade" onRequestClose={() => setSelectedNotification(null)}>
         <View style={styles.modalBackdrop}>
@@ -1491,6 +1821,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     padding: 16,
+    maxHeight: '82%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1504,6 +1835,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  recordList: {
+    marginTop: 12,
+    maxHeight: 420,
+  },
+  recordListContent: {
+    gap: 8,
+    paddingBottom: 4,
+  },
+  recordListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 10,
   },
   modalClose: {
     width: 34,
