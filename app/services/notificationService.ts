@@ -1265,6 +1265,24 @@ export async function readLocalNotificationInbox(ownerArg?: CacheOwner | null): 
   }
 }
 
+export function isUnreadActionableNotificationRecord(record: Pick<LocalNotificationRecord, 'status' | 'opened_at' | 'read_at' | 'scheduled_at' | 'scheduled_time' | 'created_at' | 'metadata'>) {
+  const unreadStatuses: LocalNotificationStatus[] = ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed'];
+  const when = getSafeRecordTime(record.scheduled_at || record.scheduled_time || record.created_at);
+  const isFutureScheduled = (record.status === 'scheduled' || record.status === 'upcoming') && when > Date.now();
+  return (
+    unreadStatuses.includes(record.status as LocalNotificationStatus) &&
+    !record.opened_at &&
+    !record.read_at &&
+    !record.metadata?.local_activity &&
+    !isFutureScheduled
+  );
+}
+
+export async function getUnreadActionableNotificationCount(ownerArg?: CacheOwner | null): Promise<number> {
+  const records = await readLocalNotificationInbox(ownerArg);
+  return records.filter(isUnreadActionableNotificationRecord).length;
+}
+
 export async function writeLocalNotificationInbox(ownerArg: CacheOwner | null | undefined, records: LocalNotificationRecord[]) {
   try {
     const owner = await resolveNotificationOwner(ownerArg);

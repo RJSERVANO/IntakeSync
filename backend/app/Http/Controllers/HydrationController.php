@@ -85,6 +85,9 @@ class HydrationController
     {
         return [
             'amount_ml' => (int)$entry->amount_ml,
+            'id' => $entry->id ?? null,
+            'local_id' => $entry->client_uuid ?? null,
+            'client_uuid' => $entry->client_uuid ?? null,
             'timestamp' => $entry->created_at,
             'source' => $entry->source ?? 'manual',
             'beverage_type' => $entry->beverage_type ?? 'water',
@@ -330,6 +333,8 @@ class HydrationController
         $caffeineLevel = $this->normalizeLevel($request->input('caffeine_level', 'none'));
         $notes = $this->normalizeNotes($request->input('notes'));
         $drinkLabel = $this->normalizeDrinkLabel($request->input('drink_label'));
+        $clientUuid = $request->input('client_uuid') ?: $request->input('local_id');
+        $clientUuid = is_string($clientUuid) && trim($clientUuid) !== '' ? substr(trim($clientUuid), 0, 191) : null;
 
         if ($beverageType === 'water') {
             $sugarLevel = 'none';
@@ -337,8 +342,17 @@ class HydrationController
         }
 
         if (class_exists(HydrationEntry::class)) {
+            if ($clientUuid) {
+                $existing = HydrationEntry::where('user_id', $user->id)
+                    ->where('client_uuid', $clientUuid)
+                    ->first();
+                if ($existing) {
+                    return response()->json($this->entryResponse($existing), 200);
+                }
+            }
             $e = HydrationEntry::create([
                 'user_id' => $user->id,
+                'client_uuid' => $clientUuid,
                 'amount_ml' => $amount,
                 'source' => $source,
                 'beverage_type' => $beverageType,
@@ -352,7 +366,16 @@ class HydrationController
             return response()->json($this->entryResponse($e), 201);
         }
         $data = $this->readData($user->id);
+        if ($clientUuid) {
+            foreach (($data['entries'] ?? []) as $existingEntry) {
+                if (($existingEntry['client_uuid'] ?? $existingEntry['local_id'] ?? null) === $clientUuid) {
+                    return response()->json($existingEntry, 200);
+                }
+            }
+        }
         $entry = [
+            'local_id' => $clientUuid,
+            'client_uuid' => $clientUuid,
             'amount_ml' => $amount,
             'timestamp' => now()->toDateTimeString(),
             'source' => $source,

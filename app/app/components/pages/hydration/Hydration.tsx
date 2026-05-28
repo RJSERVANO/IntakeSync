@@ -58,6 +58,21 @@ function entryKey(entry: any) {
   return String(entry?.id ?? entry?.local_id ?? `${entry?.timestamp ?? ''}:${entry?.amount_ml ?? ''}:${entry?.source ?? ''}:${entry?.drink_label ?? ''}`);
 }
 
+function entryIdentities(entry: any) {
+  return [entry?.id, entry?.server_id, entry?.local_id, entry?.client_uuid]
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map(String);
+}
+
+function entryFingerprint(entry: any) {
+  return [
+    entry?.timestamp ?? entry?.created_at ?? '',
+    entry?.amount_ml ?? '',
+    entry?.source ?? '',
+    entry?.drink_label ?? '',
+  ].map((value) => String(value).trim().toLowerCase()).join('|');
+}
+
 function getLocalDateKey(date: Date | string) {
   const d = typeof date === 'string' ? new Date(date) : date;
   const year = d.getFullYear();
@@ -67,13 +82,33 @@ function getLocalDateKey(date: Date | string) {
 }
 
 function mergeEntries(primary: any[], secondary: any[]) {
-  const seen = new Set<string>();
+  const byIdentity = new Map<string, number>();
+  const byFingerprint = new Map<string, number>();
   const merged: any[] = [];
   [...primary, ...secondary].forEach((entry) => {
-    const key = entryKey(entry);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
+    const identities = entryIdentities(entry);
+    const fingerprint = entryFingerprint(entry);
+    const existingIndex = identities
+      .map((identity) => byIdentity.get(identity))
+      .find((index) => index !== undefined) ?? byFingerprint.get(fingerprint);
+    if (existingIndex !== undefined) {
+      const existing = merged[existingIndex];
+      const next = {
+        ...existing,
+        ...entry,
+        local_id: existing.local_id || entry.local_id || entry.client_uuid,
+        client_uuid: existing.client_uuid || entry.client_uuid || entry.local_id,
+        sync_status: entry.sync_status || existing.sync_status,
+      };
+      merged[existingIndex] = next;
+      entryIdentities(next).forEach((identity) => byIdentity.set(identity, existingIndex));
+      if (fingerprint) byFingerprint.set(fingerprint, existingIndex);
+      return;
+    }
+    const nextIndex = merged.length;
     merged.push(entry);
+    identities.forEach((identity) => byIdentity.set(identity, nextIndex));
+    if (fingerprint) byFingerprint.set(fingerprint, nextIndex);
   });
   return merged.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
 }
@@ -119,6 +154,133 @@ const LEVEL_OPTIONS: { value: BeverageLevel; label: string }[] = [
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
 ];
+
+const ALCOHOL_ALLOWED_PHRASES = [
+  'root beer',
+  'ginger beer',
+  'beer shampoo',
+  'virgin mojito',
+  'virgin margarita',
+  'virgin pina colada',
+  'mocktail',
+  'non alcoholic',
+  'nonalcoholic',
+  'alcohol free',
+  'zero alcohol',
+  '0 alcohol',
+  '0 percent alcohol',
+  '0% alcohol',
+];
+
+const ALCOHOL_KEYWORDS = [
+  'pale pilsen',
+  'san miguel',
+  'san mig light',
+  'red horse',
+  'cerveza negra',
+  'ginebra',
+  'gsm blue',
+  'gin bilog',
+  'tanduay',
+  'emperador',
+  'fundador',
+  'lambanog',
+  'tapuy',
+  'basi',
+  'tuba',
+  'soju',
+  'hard drink',
+  'alak',
+  'inuman',
+  'lager',
+  'ale',
+  'stout',
+  'porter',
+  'pilsner',
+  'red wine',
+  'white wine',
+  'rose',
+  'champagne',
+  'prosecco',
+  'sparkling wine',
+  'whiskey',
+  'whisky',
+  'bourbon',
+  'scotch',
+  'rum',
+  'vodka',
+  'gin',
+  'tequila',
+  'mezcal',
+  'brandy',
+  'cognac',
+  'sake',
+  'cider',
+  'hard cider',
+  'hard seltzer',
+  'liqueur',
+  'bailey',
+  'baileys',
+  'kahlua',
+  'jager',
+  'jagermeister',
+  'margarita',
+  'mojito',
+  'martini',
+  'daiquiri',
+  'negroni',
+  'old fashioned',
+  'manhattan',
+  'cosmopolitan',
+  'pina colada',
+  'long island',
+  'bloody mary',
+  'heineken',
+  'budweiser',
+  'corona',
+  'guinness',
+  'stella artois',
+  'hoegaarden',
+  'tiger',
+  'johnnie walker',
+  'jack daniels',
+  'jack daniel',
+  'jim beam',
+  'jameson',
+  'chivas',
+  'bacardi',
+  'captain morgan',
+  'smirnoff',
+  'absolut',
+  'grey goose',
+  'jose cuervo',
+  'hennessy',
+  'beer',
+  'wine',
+  'cocktail',
+];
+
+function normalizeBeverageText(text: string) {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[%]/g, ' percent ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function textHasPhrase(text: string, phrase: string) {
+  return new RegExp(`(^|\\s)${phrase.replace(/\s+/g, '\\s+')}(\\s|$)`).test(text);
+}
+
+function isAlcoholicBeverageText(text: string): boolean {
+  const normalized = normalizeBeverageText(text);
+  if (!normalized) return false;
+  if (ALCOHOL_ALLOWED_PHRASES.some((phrase) => textHasPhrase(normalized, normalizeBeverageText(phrase)))) return false;
+  return ALCOHOL_KEYWORDS.some((keyword) => textHasPhrase(normalized, normalizeBeverageText(keyword)));
+}
 
 function getLevelLabel(value?: string) {
   return LEVEL_OPTIONS.find((option) => option.value === value)?.label || 'None';
@@ -265,11 +427,14 @@ export default function Hydration() {
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [hydrationAddInFlight, setHydrationAddInFlight] = useState(false);
   const canUseHydrationCacheRef = useRef(false);
   const previousTokenRef = useRef<string | undefined>(undefined);
   const entriesRef = useRef<any[]>([]);
   const goalRef = useRef(goal);
   const hydrationRefreshInFlightRef = useRef(false);
+  const hydrationAddInFlightRef = useRef(false);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -530,6 +695,7 @@ export default function Hydration() {
   }
 
   function quickAddWater(amount: number) {
+    if (hydrationAddInFlightRef.current) return;
     setQuickWaterFeedback(amount);
     void addAmount(amount, 'quick');
     setTimeout(() => setQuickWaterFeedback(null), 450);
@@ -584,6 +750,8 @@ export default function Hydration() {
         }
 
         setCacheReady(true);
+        const pendingLocalBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+        setPendingSyncCount(offlineMode ? pendingLocalBeverages.length : 0);
 
         if (token) {
           await syncPendingBeverages(false);
@@ -652,6 +820,7 @@ export default function Hydration() {
         if (api.isStaleSessionError(err)) return;
         if (api.isNetworkError(err)) {
           setOfflineMode(true);
+          setPendingSyncCount((await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE').length);
           showInlineNotice('Offline mode');
         }
       } finally {
@@ -676,6 +845,7 @@ export default function Hydration() {
     const context = await captureAuthSessionContext(token as string);
     if (!(await isAuthSessionContextCurrent(context))) return;
     const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+    setPendingSyncCount(offlineMode ? pendingBeverages.length : 0);
     const shouldShowSync = showResult || pendingBeverages.length > 0;
     if (pendingBeverages.length === 0 && !showResult) return;
     if (shouldShowSync) setSyncing(true);
@@ -699,10 +869,12 @@ export default function Hydration() {
       });
       if (result.synced > 0) {
         setOfflineMode(false);
+        setPendingSyncCount(0);
         if (showResult) showInlineNotice('Sync complete');
       }
     } catch {
       setOfflineMode(true);
+      setPendingSyncCount((await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE').length);
       if (showResult) showInlineNotice('Still offline');
     } finally {
       if (shouldShowSync && await isAuthSessionContextCurrent(context)) setSyncing(false);
@@ -772,127 +944,133 @@ export default function Hydration() {
       drink_label?: string | null;
     },
   ) {
-    const selectedBeverage = metadata?.beverage_type || 'water';
-    const localId = createLocalId();
-    const entry = {
-      local_id: localId,
-      amount_ml: amountMl,
-      timestamp: new Date().toISOString(),
-      source,
-      beverage_type: selectedBeverage,
-      sugar_level: selectedBeverage === 'water' ? 'none' : metadata?.sugar_level || 'none',
-      caffeine_level: selectedBeverage === 'water' ? 'none' : metadata?.caffeine_level || 'none',
-      notes: metadata?.notes?.trim() || null,
-      drink_label: metadata?.drink_label?.trim() || undefined,
-      sync_status: 'pending',
-    };
-    const previousEntries = entries;
-    const newEntries = [...entries, entry];
-    const oldTotal = totalToday();
-    const newTotal = oldTotal + amountMl;
-    
-    entriesRef.current = newEntries;
-    setEntries(newEntries);
+    if (hydrationAddInFlightRef.current) return;
+    hydrationAddInFlightRef.current = true;
+    setHydrationAddInFlight(true);
     try {
-      await persistLocal({ goal, entries: newEntries });
-      const session = await getCachedSession();
-      const owner = getCacheOwner(session?.user ?? null);
-      await upsertHydrationLogNotification(owner, entry);
-      await cancelHydrationSlotNotifications(owner, entry.timestamp);
-    } catch {
-      entriesRef.current = previousEntries;
-      setEntries(previousEntries);
-      showInlineNotice('Save failed');
-      return;
-    }
-    await refreshHydrationReminderSummary(newEntries);
-    
-    // Trigger pulse animation
-    pulseButton();
-    
-    // FIX: Check if goal reached (only show modal once per session)
-    // Uses ref to prevent repeated modals when user adds more water after crossing 100% threshold
-    const justReachedGoal = newTotal >= goal && oldTotal < goal;
-    if (justReachedGoal) {
-      await showGoalReachedOnce();
-    }
-    if (newTotal >= goal) {
-      const session = await getCachedSession();
-      await markHydrationGoalCompleted(getCacheOwner(session?.user ?? null));
-    } else {
-      await syncHydrationReminderLifecycle(newTotal, goal);
-    }
-    
-    // Check for overhydration (>150% of goal) - only show modal once per session
-    // Uses ref to prevent repeated warnings when user continues drinking after 150% threshold
-    const currentPercentage = (newTotal / goal) * 100;
-    const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
-    if (justExceeded150 && !overhydrationShownRef.current) {
-      showInlineNotice('High intake logged');
-      overhydrationShownRef.current = true; // Mark as shown this session
-      setOverhydrationShownToday(true); // Also mark for backend tracking
-    }
-    
-    // Check if behind on hydration pace (only if not yet reached goal)
-    if (newTotal < goal) {
-      const paceCheck = calculateHydrationPace(newTotal, goal, 'morning');
-      if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
-        showInlineNotice('Almost there');
-        
-      }
-    }
-    
-    const queuePayload: BeverageLogPayload = {
-      local_id: localId,
-      amount_ml: amountMl,
-      source,
-      beverage_type: entry.beverage_type,
-      sugar_level: entry.sugar_level,
-      caffeine_level: entry.caffeine_level,
-      notes: entry.notes,
-      drink_label: entry.drink_label ?? null,
-      timestamp: entry.timestamp,
-    };
-    await enqueueBeverageLog(queuePayload);
+      const selectedBeverage = metadata?.beverage_type || 'water';
+      const localId = createLocalId();
+      const entry = {
+        local_id: localId,
+        client_uuid: localId,
+        amount_ml: amountMl,
+        timestamp: new Date().toISOString(),
+        source,
+        beverage_type: selectedBeverage,
+        sugar_level: selectedBeverage === 'water' ? 'none' : metadata?.sugar_level || 'none',
+        caffeine_level: selectedBeverage === 'water' ? 'none' : metadata?.caffeine_level || 'none',
+        notes: metadata?.notes?.trim() || null,
+        drink_label: metadata?.drink_label?.trim() || undefined,
+        sync_status: 'pending',
+      };
+      const previousEntries = entriesRef.current.length ? entriesRef.current : entries;
+      const newEntries = mergeEntries([...previousEntries, entry], []);
+      const oldTotal = totalForLocalDay(previousEntries);
+      const newTotal = oldTotal + amountMl;
 
-    if (token) {
+      entriesRef.current = newEntries;
+      setEntries(newEntries);
       try {
-        const response = await api.post('/hydration', {
-          local_id: localId,
-          client_uuid: localId,
-          amount_ml: amountMl,
-          source,
-          beverage_type: entry.beverage_type,
-          sugar_level: entry.sugar_level,
-          caffeine_level: entry.caffeine_level,
-          notes: entry.notes,
-          drink_label: entry.drink_label ?? null,
-          timestamp: entry.timestamp,
-        }, token as string);
-        await markBeverageLogSynced(localId);
-        const syncedEntries = newEntries.map((item) => item.local_id === localId ? {
-          ...item,
-          id: response?.id ?? response?.entry?.id ?? item.id,
-          sync_status: 'synced',
-        } : item);
-        entriesRef.current = syncedEntries;
-        setEntries(syncedEntries);
-        await persistLocal({ goal, entries: syncedEntries });
-        await refreshHydrationReminderSummary(syncedEntries);
-        await syncPendingBeverages(false);
-        setOfflineMode(false);
-      } catch (err:any) {
-        console.log('Hydration sync error', err);
-        setOfflineMode(api.isNetworkError(err));
-        showInlineNotice(api.isNetworkError(err) ? 'Will sync later' : 'Sync pending');
+        await persistLocal({ goal, entries: newEntries });
+        const session = await getCachedSession();
+        const owner = getCacheOwner(session?.user ?? null);
+        await upsertHydrationLogNotification(owner, entry);
+        await cancelHydrationSlotNotifications(owner, entry.timestamp);
+      } catch {
+        entriesRef.current = previousEntries;
+        setEntries(previousEntries);
+        showInlineNotice('Save failed');
+        return;
       }
-    } else {
-      setOfflineMode(true);
-      showInlineNotice('Will sync later');
-    }
-    if (source !== 'quick') {
-      closeNotice();
-      showInlineNotice('Beverage logged');
+      await refreshHydrationReminderSummary(newEntries);
+
+      pulseButton();
+
+      const justReachedGoal = newTotal >= goal && oldTotal < goal;
+      if (justReachedGoal) {
+        await showGoalReachedOnce();
+      }
+      if (newTotal >= goal) {
+        const session = await getCachedSession();
+        await markHydrationGoalCompleted(getCacheOwner(session?.user ?? null));
+      } else {
+        await syncHydrationReminderLifecycle(newTotal, goal);
+      }
+
+      const currentPercentage = (newTotal / goal) * 100;
+      const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
+      if (justExceeded150 && !overhydrationShownRef.current) {
+        showInlineNotice('High intake logged');
+        overhydrationShownRef.current = true;
+        setOverhydrationShownToday(true);
+      }
+
+      if (newTotal < goal) {
+        const paceCheck = calculateHydrationPace(newTotal, goal, 'morning');
+        if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
+          showInlineNotice('Almost there');
+        }
+      }
+
+      const queuePayload: BeverageLogPayload = {
+        local_id: localId,
+        client_uuid: localId,
+        amount_ml: amountMl,
+        source,
+        beverage_type: entry.beverage_type,
+        sugar_level: entry.sugar_level,
+        caffeine_level: entry.caffeine_level,
+        notes: entry.notes,
+        drink_label: entry.drink_label ?? null,
+        timestamp: entry.timestamp,
+      };
+
+      let showedSyncNotice = false;
+      if (token) {
+        try {
+          const response = await api.post('/hydration', queuePayload, token as string);
+          await markBeverageLogSynced(localId);
+          const syncedEntries = mergeEntries(newEntries.map((item) => item.local_id === localId ? {
+            ...item,
+            id: response?.id ?? response?.entry?.id ?? item.id,
+            client_uuid: localId,
+            sync_status: 'synced',
+          } : item), [response?.entry || response].filter(Boolean));
+          entriesRef.current = syncedEntries;
+          setEntries(syncedEntries);
+          await persistLocal({ goal, entries: syncedEntries });
+          await refreshHydrationReminderSummary(syncedEntries);
+          setPendingSyncCount(0);
+          setOfflineMode(false);
+        } catch (err:any) {
+          console.log('Hydration sync error', err);
+          if (api.isNetworkError(err)) {
+            await enqueueBeverageLog(queuePayload);
+            const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+            setPendingSyncCount(pendingBeverages.length);
+            setOfflineMode(true);
+            showInlineNotice('Will sync later');
+            showedSyncNotice = true;
+          } else {
+            showInlineNotice('Could not sync');
+            showedSyncNotice = true;
+          }
+        }
+      } else {
+        await enqueueBeverageLog(queuePayload);
+        const pendingBeverages = (await getPendingSyncActions()).filter((item) => item.action_type === 'LOG_BEVERAGE');
+        setPendingSyncCount(pendingBeverages.length);
+        setOfflineMode(true);
+        showInlineNotice('Will sync later');
+        showedSyncNotice = true;
+      }
+      if (source !== 'quick' && !showedSyncNotice) {
+        closeNotice();
+        showInlineNotice('Beverage logged');
+      }
+    } finally {
+      hydrationAddInFlightRef.current = false;
+      setHydrationAddInFlight(false);
     }
   }
 
@@ -901,18 +1079,31 @@ export default function Hydration() {
   async function submitCustom() {
     const val = parseInt(amountInput || '0', 10);
     if (!val || val <= 0) {
-      showNotice('warning', 'Invalid Amount', 'Enter a positive amount in ml');
+      showNotice('warning', 'Invalid Amount', 'Enter a valid amount from 1 to 2000 ml.');
+      return;
+    }
+    if (val > 2000) {
+      showNotice('warning', 'Maximum Amount', 'Maximum custom log is 2000 ml per entry.');
       return;
     }
     const selectedDrinkOption = DRINK_OPTIONS.find((option) => option.value === selectedDrink) || DRINK_OPTIONS[0];
     const note = beverageNotes.trim();
     const drinkLabel = selectedDrink === 'other' ? customBeverageName.trim() : selectedDrinkOption.label;
+    if (selectedDrink === 'other' && isAlcoholicBeverageText(`${drinkLabel} ${note}`)) {
+      setNoticeModal({
+        type: 'warning',
+        title: 'Alcoholic drinks are not supported',
+        message: 'IntakeSync currently excludes alcoholic beverages from beverage tracking. Please log only water, caffeinated, sugar-sweetened, or non-alcoholic drinks.',
+        primaryText: 'OK',
+      });
+      return;
+    }
     setAmountInput('');
     setBeverageNotes('');
     if (selectedDrink === 'other') {
       setCustomBeverageName('');
     }
-    addAmount(val, 'custom', {
+    await addAmount(val, 'custom', {
       beverage_type: beverageType,
       sugar_level: beverageType === 'water' ? 'none' : sugarLevel,
       caffeine_level: beverageType === 'water' ? 'none' : caffeineLevel,
@@ -1220,6 +1411,15 @@ export default function Hydration() {
   const selectedDateEntries = entries
     .filter(entry => entry.timestamp && getLocalDateKey(entry.timestamp) === selectedDateKey)
     .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  const topSystemNotice = !inlineNotice
+    ? offlineMode
+      ? { message: 'Offline mode', iconName: 'cloud-offline-outline' as const }
+      : syncing
+        ? { message: 'Syncing...', iconName: 'sync-outline' as const }
+        : pendingSyncCount > 0
+          ? { message: `${pendingSyncCount} change${pendingSyncCount === 1 ? '' : 's'} waiting to sync.`, iconName: 'sync-outline' as const }
+          : null
+    : null;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1240,14 +1440,12 @@ export default function Hydration() {
       </View>
 
       <InlineNotice visible={Boolean(inlineNotice)} message={inlineNotice || ''} top={Math.max(insets.top, 8) + 54} />
-      {(offlineMode || syncing) && !inlineNotice ? (
-        <InlineSyncNotice
-          visible
-          message={offlineMode ? 'Offline mode' : 'Syncing...'}
-          iconName={offlineMode ? 'cloud-offline-outline' : 'sync-outline'}
-          top={Math.max(insets.top, 8) + 54}
-        />
-      ) : null}
+      <InlineSyncNotice
+        visible={Boolean(topSystemNotice)}
+        message={topSystemNotice?.message || ''}
+        iconName={topSystemNotice?.iconName || 'sync-outline'}
+        top={Math.max(insets.top, 8) + 54}
+      />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 160, paddingTop: 12 }]}
@@ -1345,9 +1543,12 @@ export default function Hydration() {
             {QUICK_WATER_AMOUNTS.map((amount) => (
               <TouchableOpacity
                 key={amount}
-                style={[styles.waterChip, quickWaterFeedback === amount && styles.waterChipPressed]}
+                style={[styles.waterChip, quickWaterFeedback === amount && styles.waterChipPressed, hydrationAddInFlight && styles.addBtnAltDisabled]}
                 onPress={() => quickAddWater(amount)}
+                disabled={hydrationAddInFlight}
                 activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={hydrationAddInFlight ? 'Logging beverage' : `Add ${amount} ml water`}
               >
                 <Ionicons name="water" size={15} color={quickWaterFeedback === amount ? '#FFFFFF' : '#1E3A8A'} />
                 <Text style={[styles.waterChipText, quickWaterFeedback === amount && styles.waterChipTextPressed]} maxFontSizeMultiplier={FONT_SCALE.button} numberOfLines={1}>{amount} ml</Text>
@@ -1390,15 +1591,20 @@ export default function Hydration() {
             </View>
 
             {selectedDrink === 'other' && (
-              <TextInput
-                value={customBeverageName}
-                onChangeText={setCustomBeverageName}
-                placeholder="Custom beverage name"
-                maxLength={80}
-                style={styles.fullInputAlt}
-                textAlignVertical="center"
-                maxFontSizeMultiplier={FONT_SCALE.input}
-              />
+              <View>
+                <TextInput
+                  value={customBeverageName}
+                  onChangeText={setCustomBeverageName}
+                  placeholder="Enter non-alcoholic beverage name"
+                  placeholderTextColor="#64748B"
+                  maxLength={80}
+                  style={styles.fullInputAlt}
+                  textAlignVertical="center"
+                  maxFontSizeMultiplier={FONT_SCALE.input}
+                  accessibilityLabel="Other beverage name"
+                />
+                <Text style={styles.otherHelperText}>Alcoholic drinks are not supported.</Text>
+              </View>
             )}
 
             <Text style={styles.formLabel}>Caffeine level</Text>
@@ -1430,7 +1636,7 @@ export default function Hydration() {
 
             <TextInput
               value={amountInput}
-              onChangeText={setAmountInput}
+              onChangeText={(text) => setAmountInput(text.replace(/[^0-9]/g, ''))}
               placeholder="Custom ml"
               placeholderTextColor="#64748B"
               keyboardType="numeric"
@@ -1453,7 +1659,16 @@ export default function Hydration() {
             />
 
             <View style={styles.logButtonRow}>
-              <TouchableOpacity style={styles.addBtnAlt} onPress={submitCustom} activeOpacity={0.9}><Text style={styles.addBtnText} maxFontSizeMultiplier={FONT_SCALE.button}>Log</Text></TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.addBtnAlt, hydrationAddInFlight && styles.addBtnAltDisabled]}
+                onPress={submitCustom}
+                disabled={hydrationAddInFlight}
+                activeOpacity={0.9}
+                accessibilityRole="button"
+                accessibilityLabel={hydrationAddInFlight ? 'Logging beverage' : 'Log beverage'}
+              >
+                <Text style={styles.addBtnText} maxFontSizeMultiplier={FONT_SCALE.button}>Log</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -2055,7 +2270,9 @@ const styles = StyleSheet.create({
   inputAlt: { flex:1, backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, marginRight:8, color:'#0F172A' },
   inputAltFull: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 11, minHeight: 46, color:'#0F172A', marginTop: 4, marginBottom: 10 },
   fullInputAlt: { backgroundColor:'#FFFFFF', borderRadius:10, borderWidth: 1, borderColor: '#CBD5E1', paddingHorizontal:12, paddingVertical: 11, minHeight: 46, color:'#0F172A', marginTop: 10 },
+  otherHelperText: { color: '#64748B', fontSize: 12, fontWeight: '700', marginTop: 6, marginBottom: 4 },
   addBtnAlt: { backgroundColor:'#2563EB', paddingHorizontal:18, justifyContent:'center', borderRadius:10, minHeight: 42, alignItems: 'center' },
+  addBtnAltDisabled: { opacity: 0.55 },
   addBtnText: { color:'white', fontWeight:'800' },
   logButtonRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10 },
   notesInputAlt: { backgroundColor:'#F3F4F6', borderRadius:8, paddingHorizontal:12, paddingVertical: 10, minHeight: 44, marginTop: 4, color:'#0F172A' },

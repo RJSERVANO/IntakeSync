@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { ActivityIndicator, View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable, Keyboard } from 'react-native';
+import { ActivityIndicator, DeviceEventEmitter, View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, Image, Pressable, Keyboard } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -29,7 +29,8 @@ import {
   writeOtcSearchCache,
 } from '../services/offlineStorage';
 import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
-import { subscribeHomeRefresh } from '../services/homeEvents';
+import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT, subscribeHomeRefresh } from '../services/homeEvents';
+import { getUnreadActionableNotificationCount, reconcileNotificationInbox } from '../services/notificationService';
 import { performLocalLogout } from '../services/logoutSession';
 import { deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
@@ -50,8 +51,19 @@ function createBeverageLocalId() {
   return `bev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function hydrationEntryKey(entry: any) {
-  return String(entry?.id ?? entry?.local_id ?? `${entry?.timestamp ?? ''}:${entry?.amount_ml ?? ''}:${entry?.source ?? ''}:${entry?.drink_label ?? ''}`);
+function hydrationEntryIdentities(entry: any) {
+  return [entry?.id, entry?.server_id, entry?.local_id, entry?.client_uuid]
+    .filter((value) => value !== null && value !== undefined && String(value).trim())
+    .map(String);
+}
+
+function hydrationEntryFingerprint(entry: any) {
+  return [
+    entry?.timestamp ?? entry?.created_at ?? '',
+    entry?.amount_ml ?? '',
+    entry?.source ?? '',
+    entry?.drink_label ?? '',
+  ].map((value) => String(value).trim().toLowerCase()).join('|');
 }
 
 function getLocalDateKey(date: Date | string) {
@@ -63,13 +75,33 @@ function getLocalDateKey(date: Date | string) {
 }
 
 function mergeHydrationEntries(primary: any[], secondary: any[]) {
-  const seen = new Set<string>();
+  const byIdentity = new Map<string, number>();
+  const byFingerprint = new Map<string, number>();
   const merged: any[] = [];
   [...primary, ...secondary].forEach((entry) => {
-    const key = hydrationEntryKey(entry);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
+    const identities = hydrationEntryIdentities(entry);
+    const fingerprint = hydrationEntryFingerprint(entry);
+    const existingIndex = identities
+      .map((identity) => byIdentity.get(identity))
+      .find((index) => index !== undefined) ?? byFingerprint.get(fingerprint);
+    if (existingIndex !== undefined) {
+      const existing = merged[existingIndex];
+      const next = {
+        ...existing,
+        ...entry,
+        local_id: existing.local_id || entry.local_id || entry.client_uuid,
+        client_uuid: existing.client_uuid || entry.client_uuid || entry.local_id,
+        sync_status: entry.sync_status || existing.sync_status,
+      };
+      merged[existingIndex] = next;
+      hydrationEntryIdentities(next).forEach((identity) => byIdentity.set(identity, existingIndex));
+      if (fingerprint) byFingerprint.set(fingerprint, existingIndex);
+      return;
+    }
+    const nextIndex = merged.length;
     merged.push(entry);
+    identities.forEach((identity) => byIdentity.set(identity, nextIndex));
+    if (fingerprint) byFingerprint.set(fingerprint, nextIndex);
   });
   return merged.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
 }
@@ -207,7 +239,7 @@ export default function Home() {
   const [patterns, setPatterns] = useState<any[]>([]);
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
   const [upcomingMedications, setUpcomingMedications] = useState<any[]>([]);
-  const [notificationStats, setNotificationStats] = useState<any>(null);
+  const [localUnreadNotificationCount, setLocalUnreadNotificationCount] = useState(0);
   const [offlineMode, setOfflineMode] = useState(offline === '1');
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [medicineSearch, setMedicineSearch] = useState('');
@@ -218,6 +250,7 @@ export default function Home() {
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
   const [inlineNotice, setInlineNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [beverageAddInFlight, setBeverageAddInFlight] = useState(false);
   const [noticeModal, setNoticeModal] = useState<{
     type: ThemedNoticeType;
     title: string;
@@ -231,6 +264,7 @@ export default function Home() {
   const refreshFromCacheInFlightRef = useRef(false);
   const backgroundRefreshInFlightRef = useRef(false);
   const homeRefreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const beverageAddInFlightRef = useRef(false);
   const insightsScore = weeklyReport?.overall_score ?? 0;
   const remoteAvatarUri = getUserRemoteAvatarUri(user);
   const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
@@ -253,7 +287,7 @@ export default function Home() {
     setPatterns([]);
     setSnoozeSuggestions([]);
     setUpcomingMedications([]);
-    setNotificationStats(null);
+    setLocalUnreadNotificationCount(0);
     setPendingSyncCount(0);
     setMedicineSuggestions([]);
     setShowSuggestions(false);
@@ -261,6 +295,8 @@ export default function Home() {
     setSelectedMedicineResult(null);
     setInlineNotice(null);
     setSyncing(false);
+    setBeverageAddInFlight(false);
+    beverageAddInFlightRef.current = false;
   }, []);
 
   const showInlineNotice = useCallback((message: string) => {
@@ -355,17 +391,32 @@ export default function Home() {
     }
   }, [routeToken]);
 
+  const refreshHomeNotificationBadge = useCallback(async (visibleUser?: any | null) => {
+    const session = await getCachedSession();
+    const sessionUser = visibleUser || user || session?.user || null;
+    if (!sessionUser || !hasValidCachedSession(session)) return;
+    if (routeToken && session.token !== routeToken) return;
+    const context = await captureAuthSessionContext(session.token, sessionUser);
+    if (!(await isAuthSessionContextCurrent(context))) return;
+    const owner = getCacheOwner(sessionUser);
+    if (!owner.owner_id && !owner.owner_email) return;
+    await reconcileNotificationInbox(owner);
+    if (!(await isAuthSessionContextCurrent(context))) return;
+    setLocalUnreadNotificationCount(await getUnreadActionableNotificationCount(owner));
+  }, [routeToken, user]);
+
   useFocusEffect(
     useCallback(() => {
       loadHeaderUserFromCache();
       void applyCacheFirstHomeSummary(user);
+      void refreshHomeNotificationBadge(user);
       const syncToken = routeToken;
       (async () => {
         const context = await captureAuthSessionContext(syncToken);
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
         const before = await getSyncQueueSummary();
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
-        setPendingSyncCount(before.pending);
+        setPendingSyncCount(offlineMode ? before.pending : 0);
         if (syncToken && before.pending > 0) {
           setSyncing(true);
           try {
@@ -381,9 +432,9 @@ export default function Home() {
         }
         const summary = await getSyncQueueSummary();
         if (syncToken && !(await isAuthSessionContextCurrent(context))) return;
-        setPendingSyncCount(summary.pending);
+        setPendingSyncCount(offlineMode ? summary.pending : 0);
       })();
-    }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, routeToken, user])
+    }, [applyCacheFirstHomeSummary, loadHeaderUserFromCache, offlineMode, refreshHomeNotificationBadge, routeToken, user])
   );
 
   useEffect(() => {
@@ -395,6 +446,16 @@ export default function Home() {
     });
     return () => subscription.remove();
   }, [applyCacheFirstHomeSummary, user]);
+
+  useEffect(() => {
+    const refresh = () => refreshHomeNotificationBadge(user).catch(() => {});
+    const notificationSub = DeviceEventEmitter.addListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
+    const reminderSub = DeviceEventEmitter.addListener(REMINDERS_RESCHEDULED_EVENT, refresh);
+    return () => {
+      notificationSub.remove();
+      reminderSub.remove();
+    };
+  }, [refreshHomeNotificationBadge, user]);
 
   // Debounce medicine search
   useEffect(() => {
@@ -639,7 +700,7 @@ export default function Home() {
             }
             void writeHydration().then(() => applyCacheFirstHomeSummary(backgroundUser)).catch(() => undefined);
             const owner = getCacheOwner(backgroundUser);
-            if (owner.owner_id || owner.owner_email) {
+            if ((owner.owner_id || owner.owner_email) && hydrationData) {
               void isAuthSessionContextCurrent(context).then((current) => {
                 if (!current) return;
                 writeOwnedOfflineCache(getUserScopedKey(owner, 'home_summary'), backgroundUser, {
@@ -657,13 +718,7 @@ export default function Home() {
             });
           }).catch(() => {
             void isAuthSessionContextCurrent(context).then((current) => {
-              if (!current) return;
-              setQuickStatus((prev) => ({
-                ...prev,
-                hydrationPercentage: 0,
-                hydrationTotal: 0,
-                hydrationGoal: 2000,
-              }));
+              if (current) void applyCacheFirstHomeSummary(backgroundUser);
             });
           });
           
@@ -684,12 +739,7 @@ export default function Home() {
             });
 
           api.get('/notifications/stats', activeToken, 3000)
-            .then((statsData) => {
-              void isAuthSessionContextCurrent(context).then((current) => current && setNotificationStats(statsData || null));
-            })
-            .catch(() => {
-              void isAuthSessionContextCurrent(context).then((current) => current && setNotificationStats(null));
-            })
+            .catch(() => null)
             .finally(() => {
               void isAuthSessionContextCurrent(context).then((current) => {
                 if (current) backgroundRefreshInFlightRef.current = false;
@@ -897,9 +947,7 @@ export default function Home() {
     : 0;
   const recentUpdates = timeline.slice(0, 2);
   const missedCount = timeline.filter((item) => item.status === 'missed').length;
-  const notificationCount = notificationStats
-    ? Math.max(0, Number(notificationStats.unread ?? 0) + Number(notificationStats.alerts ?? notificationStats.needs_attention ?? 0))
-    : timeline.filter((item) => item.status === 'missed' || item.status === 'pending').length;
+  const notificationCount = localUnreadNotificationCount;
   const nextMedication = medicationSummary.nextMedication || upcomingMedications[0] || null;
 
   const getMedicationName = (medication: any) => (
@@ -1101,54 +1149,33 @@ export default function Home() {
   };
 
   const quickLogWater = async () => {
+    if (beverageAddInFlightRef.current) return;
+    beverageAddInFlightRef.current = true;
+    setBeverageAddInFlight(true);
     const amountMl = 250;
     const localId = createBeverageLocalId();
-    const entry = {
-      local_id: localId,
-      client_uuid: localId,
-      amount_ml: amountMl,
-      timestamp: new Date().toISOString(),
-      source: 'home_quick',
-      beverage_type: 'water',
-      sugar_level: 'none',
-      caffeine_level: 'none',
-      notes: null,
-      drink_label: 'Water',
-      sync_status: 'pending',
-    };
-    const cachedHydration = await readHydrationCache<any>();
-    const goal = resolveHydrationGoal(cachedHydration || quickStatus, quickStatus.hydrationGoal || 2000);
-    const cachedEntries = Array.isArray(cachedHydration?.entries) ? cachedHydration.entries : [];
-    const currentEntries = Array.isArray(hydrationEntries) ? hydrationEntries : [];
-    const newEntries = mergeHydrationEntries([...currentEntries, entry], cachedEntries);
     try {
+      const entry = {
+        local_id: localId,
+        client_uuid: localId,
+        amount_ml: amountMl,
+        timestamp: new Date().toISOString(),
+        source: 'home_quick',
+        beverage_type: 'water',
+        sugar_level: 'none',
+        caffeine_level: 'none',
+        notes: null,
+        drink_label: 'Water',
+        sync_status: 'pending',
+      };
+      const cachedHydration = await readHydrationCache<any>();
+      const goal = resolveHydrationGoal(cachedHydration || quickStatus, quickStatus.hydrationGoal || 2000);
+      const cachedEntries = Array.isArray(cachedHydration?.entries) ? cachedHydration.entries : [];
+      const currentEntries = Array.isArray(hydrationEntries) ? hydrationEntries : [];
+      const newEntries = mergeHydrationEntries([...currentEntries, entry], cachedEntries);
       await persistHomeHydrationSnapshot(newEntries, goal);
-    } catch {
-      showInlineNotice('Save failed');
-      return;
-    }
 
-    const queuePayload: BeverageLogPayload = {
-      local_id: localId,
-      amount_ml: amountMl,
-      source: entry.source,
-      beverage_type: entry.beverage_type,
-      sugar_level: entry.sugar_level,
-      caffeine_level: entry.caffeine_level,
-      notes: entry.notes,
-      drink_label: entry.drink_label,
-      timestamp: entry.timestamp,
-    };
-    await enqueueBeverageLog(queuePayload);
-
-    if (!token) {
-      setOfflineMode(true);
-      showInlineNotice('Will sync later');
-      return;
-    }
-
-    try {
-      const response = await api.post('/hydration', {
+      const queuePayload: BeverageLogPayload = {
         local_id: localId,
         client_uuid: localId,
         amount_ml: amountMl,
@@ -1159,26 +1186,63 @@ export default function Home() {
         notes: entry.notes,
         drink_label: entry.drink_label,
         timestamp: entry.timestamp,
-      }, routeToken as string);
-      await markBeverageLogSynced(localId);
-      const syncedEntries = newEntries.map((item) => item.local_id === localId ? {
-        ...item,
-        id: response?.id ?? response?.entry?.id ?? item.id,
-        sync_status: 'synced',
-      } : item);
-      await persistHomeHydrationSnapshot(syncedEntries, goal);
-      setOfflineMode(false);
-      showInlineNotice('Water logged');
-    } catch (err: any) {
-      console.log('Home quick beverage log sync error:', {
-        status: err?.status,
-        message: err?.data?.message || err?.message,
-        data: err?.data,
-      });
-      if (api.isNetworkError(err)) setOfflineMode(true);
-      showInlineNotice(api.isNetworkError(err) ? 'Will sync later' : 'Sync pending');
+      };
+
+      if (!routeToken) {
+        await enqueueBeverageLog(queuePayload);
+        const summary = await getSyncQueueSummary();
+        setPendingSyncCount(summary.pending);
+        setOfflineMode(true);
+        showInlineNotice('Will sync later');
+        return;
+      }
+
+      try {
+        const response = await api.post('/hydration', queuePayload, routeToken as string);
+        await markBeverageLogSynced(localId);
+        const syncedEntries = mergeHydrationEntries(newEntries.map((item) => item.local_id === localId ? {
+          ...item,
+          id: response?.id ?? response?.entry?.id ?? item.id,
+          client_uuid: localId,
+          sync_status: 'synced',
+        } : item), [response?.entry || response].filter(Boolean));
+        await persistHomeHydrationSnapshot(syncedEntries, goal);
+        setPendingSyncCount(0);
+        setOfflineMode(false);
+        showInlineNotice('Water logged');
+      } catch (err: any) {
+        console.log('Home quick beverage log sync error:', {
+          status: err?.status,
+          message: err?.data?.message || err?.message,
+          data: err?.data,
+        });
+        if (api.isNetworkError(err)) {
+          await enqueueBeverageLog(queuePayload);
+          const summary = await getSyncQueueSummary();
+          setPendingSyncCount(summary.pending);
+          setOfflineMode(true);
+          showInlineNotice('Will sync later');
+        } else {
+          showInlineNotice('Could not sync');
+        }
+      }
+    } catch {
+      showInlineNotice('Save failed');
+    } finally {
+      beverageAddInFlightRef.current = false;
+      setBeverageAddInFlight(false);
     }
   };
+
+  const topSystemNotice = !inlineNotice && !menuVisible && !noticeModal && !selectedMedicineResult
+    ? offlineMode
+      ? { message: 'Offline mode', iconName: 'cloud-offline-outline' as const }
+      : syncing
+        ? { message: 'Syncing...', iconName: 'sync-outline' as const }
+        : pendingSyncCount > 0
+          ? { message: `${pendingSyncCount} change${pendingSyncCount === 1 ? '' : 's'} waiting to sync.`, iconName: 'sync-outline' as const }
+          : null
+    : null;
 
   if (loading || !user) {
     return (
@@ -1203,6 +1267,8 @@ export default function Home() {
             style={styles.notificationButton}
             onPress={handleNotificationPress}
             activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel={notificationCount > 0 ? `Open notifications, ${notificationCount} unread` : 'Open notifications'}
           >
             <Ionicons name="notifications-outline" size={22} color="#1E3A8A" />
             {notificationCount > 0 && (
@@ -1221,28 +1287,17 @@ export default function Home() {
           </TouchableOpacity>
         </View>
       </View>
-      <InlineSyncNotice
-        visible={syncing && !inlineNotice && !menuVisible && !noticeModal && !selectedMedicineResult}
-        message="Syncing..."
-        top={Math.max(insets.top, 8) + 54}
-      />
       <InlineNotice
         visible={Boolean(inlineNotice) && !menuVisible && !noticeModal && !selectedMedicineResult}
         message={inlineNotice || ''}
         top={Math.max(insets.top, 8) + 54}
       />
-      {offlineMode ? (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={15} color="#1E3A8A" />
-          <Text style={styles.offlineBannerText}>Offline mode</Text>
-        </View>
-      ) : null}
-      {pendingSyncCount > 0 ? (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="sync-outline" size={15} color="#1E3A8A" />
-          <Text style={styles.offlineBannerText}>{pendingSyncCount} changes waiting to sync.</Text>
-        </View>
-      ) : null}
+      <InlineSyncNotice
+        visible={Boolean(topSystemNotice)}
+        message={topSystemNotice?.message || ''}
+        iconName={topSystemNotice?.iconName || 'sync-outline'}
+        top={Math.max(insets.top, 8) + 54}
+      />
 
       <ScrollView
         style={styles.scrollView}
@@ -1370,7 +1425,10 @@ export default function Home() {
             <View style={styles.waterActionRow}>
               <Text style={styles.primaryMetric} maxFontSizeMultiplier={FONT_SCALE.stat} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{quickStatus.hydrationPercentage}%</Text>
               <Pressable
-                style={({ pressed }) => [styles.quickActionChip, pressed && styles.chipPressed]}
+                style={({ pressed }) => [styles.quickActionChip, beverageAddInFlight && styles.quickActionChipDisabled, pressed && !beverageAddInFlight && styles.chipPressed]}
+                disabled={beverageAddInFlight}
+                accessibilityRole="button"
+                accessibilityLabel={beverageAddInFlight ? 'Logging beverage' : 'Add 250 ml water'}
                 onPress={async (e) => {
                   e.stopPropagation();
                   try {
@@ -2661,6 +2719,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 6,
     elevation: 2,
+  },
+  quickActionChipDisabled: {
+    opacity: 0.55,
   },
   medicationAddChip: {
     alignSelf: 'flex-start',

@@ -37,6 +37,7 @@ export type SyncQueueAction =
 
 export interface BeverageLogPayload {
   local_id: string;
+  client_uuid?: string;
   amount_ml: number;
   beverage_type: string;
   sugar_level: string;
@@ -141,7 +142,7 @@ function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQue
         method: 'POST',
         payload: {
           local_id: item.payload.local_id,
-          client_uuid: item.payload.local_id,
+          client_uuid: item.payload.client_uuid || item.payload.local_id,
           amount_ml: item.payload.amount_ml,
           source: item.payload.source,
           beverage_type: item.payload.beverage_type,
@@ -457,16 +458,22 @@ export async function processSyncQueue(
 }
 
 export async function enqueueBeverageLog(payload: BeverageLogPayload) {
+  const stableId = payload.client_uuid || payload.local_id;
   return enqueueSyncAction({
-    local_id: payload.local_id,
+    local_id: stableId,
     action_type: 'LOG_BEVERAGE',
     method: 'POST',
-    payload,
+    payload: { ...payload, local_id: stableId, client_uuid: stableId },
   });
 }
 
 export async function markBeverageLogSynced(localId: string) {
-  return markSyncActionSynced(localId);
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
+  await writeQueue(
+    queue.filter((item) => !(item.action_type === 'LOG_BEVERAGE' && item.local_id === localId)),
+    session?.user,
+  );
 }
 
 export async function processBeverageQueue(

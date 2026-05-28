@@ -11,6 +11,7 @@ class HydrationEntry extends Model
     protected $table = 'hydration_entries';
     protected $fillable = [
         'user_id',
+        'client_uuid',
         'amount_ml',
         'source',
         'beverage_type',
