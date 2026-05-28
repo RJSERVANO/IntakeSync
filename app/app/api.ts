@@ -167,9 +167,18 @@ async function ensureCurrentSession(method: string, url: string, token?: string,
   }
 }
 
+function isHtmlResponse(text: string, res?: Response) {
+  const contentType = res?.headers?.get('content-type')?.toLowerCase() || '';
+  const trimmed = text.trim().toLowerCase();
+  return contentType.includes('text/html') || trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
+}
+
 async function parseResponse(res: Response) {
   const text = await res.text();
   if (!text) return null;
+  if (isHtmlResponse(text, res)) {
+    return { message: 'Server route not found. Please check API configuration.' };
+  }
   try {
     return JSON.parse(text);
   } catch {
@@ -342,6 +351,9 @@ export function getErrorTitle(error: any, fallbackTitle = 'Request Failed') {
 }
 
 export function getErrorMessage(error: any, fallbackMessage = 'Request failed.') {
+  if (typeof error?.data === 'string' && isHtmlResponse(error.data)) {
+    return 'Server route not found. Please check API configuration.';
+  }
   return error?.message || error?.data?.message || error?.data || defaultMessageForStatus(error?.status) || fallbackMessage;
 }
 
