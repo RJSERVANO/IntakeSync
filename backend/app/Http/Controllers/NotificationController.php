@@ -42,7 +42,7 @@ class NotificationController extends Controller
             'message' => 'required_without:body|string|max:500',
             'scheduled_time' => 'required_without:scheduled_at|date',
             'scheduled_at' => 'required_without:scheduled_time|date',
-            'status' => 'required|in:scheduled,delivered,missed,completed,snoozed,cleared',
+            'status' => 'required|in:scheduled,upcoming,created,delivered,opened,read,actioned,missed,skipped,completed,taken,logged,snoozed,cleared,hidden,deleted,failed',
             'data' => 'nullable|array',
             'metadata' => 'nullable|array',
         ]);
@@ -72,7 +72,7 @@ class NotificationController extends Controller
     public function update(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'status' => 'sometimes|in:scheduled,delivered,missed,completed,snoozed,cleared',
+            'status' => 'sometimes|in:scheduled,upcoming,created,delivered,opened,read,actioned,missed,skipped,completed,taken,logged,snoozed,cleared,hidden,deleted,failed',
             'scheduled_time' => 'sometimes|required_without:scheduled_at|date',
             'scheduled_at' => 'sometimes|required_without:scheduled_time|date',
             'opened_at' => 'sometimes|nullable|date',

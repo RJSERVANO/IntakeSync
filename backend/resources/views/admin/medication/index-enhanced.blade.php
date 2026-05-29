@@ -1,411 +1,239 @@
 @extends('layouts.app')
 
-@section('title', 'Medication Management - Enhanced')
+@section('title', 'Medication Management')
 
 @section('content')
 <div class="min-h-screen bg-slate-50 py-3">
     <div class="max-w-7xl mx-auto px-4 sm:px-6">
-        <!-- Page Header -->
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-5">
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-5">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900">Medication Management</h1>
-                <p class="text-slate-500 mt-2">Track medication schedules, adherence rates, and compliance issues</p>
+                <p class="text-slate-500 mt-1">Backend medication schedules, history, and adherence risk.</p>
             </div>
-            <div class="flex items-center gap-3 mt-3 md:mt-0">
-                <select id="timeRange" data-base-url="{{ route('admin.medication.index') }}" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                    <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
-                    <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
-                    <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
-                </select>
-            </div>
+            <select id="timeRange" data-base-url="{{ route('admin.medication.index') }}" class="px-3 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
+                <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
+                <option value="90" {{ (int) $timeRange === 90 ? 'selected' : '' }}>Last 90 days</option>
+            </select>
         </div>
 
-        <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-3">
-                    <div class="p-3 bg-teal-50 rounded-xl">
-                        <svg class="w-6 h-6 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
-                        </svg>
+        @php
+            $summaryCards = [
+                ['label' => 'Active Medications', 'value' => number_format($activeMedications), 'meta' => 'active or unexpired records', 'tone' => 'teal'],
+                ['label' => 'Adherence Rate', 'value' => $adherenceRate . '%', 'meta' => 'taken/completed history', 'tone' => 'green'],
+                ['label' => 'Taken / Completed', 'value' => number_format($takenDoses), 'meta' => 'successful dose records', 'tone' => 'blue'],
+                ['label' => 'Missed Doses', 'value' => number_format($missedDoses), 'meta' => 'missed or skipped', 'tone' => 'red'],
+                ['label' => 'Snoozed Doses', 'value' => number_format($snoozedDoses), 'meta' => 'delayed, not completed', 'tone' => 'amber'],
+                ['label' => 'Critical Users', 'value' => number_format($criticalMissedMedications->count()), 'meta' => 'repeated missed doses', 'tone' => 'red'],
+            ];
+            $toneClasses = [
+                'teal' => 'bg-teal-50 text-teal-700',
+                'green' => 'bg-green-50 text-green-700',
+                'blue' => 'bg-blue-50 text-blue-700',
+                'red' => 'bg-red-50 text-red-700',
+                'amber' => 'bg-amber-50 text-amber-700',
+            ];
+            $trendRows = collect($weeklyAdherenceData)->take(-14)->values();
+        @endphp
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+            @foreach($summaryCards as $card)
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ $card['label'] }}</p>
+                        <p class="text-2xl font-bold text-slate-900 mt-2">{{ $card['value'] }}</p>
                     </div>
+                    <span class="h-9 w-9 rounded-lg flex items-center justify-center {{ $toneClasses[$card['tone']] }}">
+                        <span class="h-2.5 w-2.5 rounded-full bg-current"></span>
+                    </span>
                 </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Active Medications</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $activeMedications }}</p>
-                </div>
+                <p class="text-xs text-slate-500 mt-3">{{ $card['meta'] }}</p>
             </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-3">
-                    <div class="p-3 bg-green-50 rounded-xl">
-                        <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Adherence Rate</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $adherenceRate }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">System-wide average</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-3">
-                    <div class="p-3 bg-red-50 rounded-xl">
-                        <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v5m0 4h.01M10.5 7.5l6 6m-9.5 3.5a3.536 3.536 0 010-5l4.5-4.5a3.536 3.536 0 015 5L12 17.5a3.536 3.536 0 01-5 0z"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Missed Doses</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $missedDoses }}</p>
-                    <p class="text-xs text-slate-500 mt-2">this period</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-3">
-                    <div class="p-3 bg-amber-50 rounded-xl">
-                        <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-4-4h-1M9 20H3v-2a4 4 0 014-4h2m4-7a4 4 0 11-8 0 4 4 0 018 0m3 3l2 2 4-4"></path>
-                        </svg>
-                    </div>
-                </div>
-                <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Critical Users</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $criticalMissedMedications->count() }}</p>
-                    <p class="text-xs text-slate-500 mt-2">repeated offenders</p>
-                </div>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Taken / Completed</p>
-                <p class="text-3xl font-bold text-slate-900">{{ number_format($takenDoses) }}</p>
-                <p class="text-xs text-slate-500 mt-2">successful history records</p>
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-                <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Snoozed Doses</p>
-                <p class="text-3xl font-bold text-slate-900">{{ number_format($snoozedDoses) }}</p>
-                <p class="text-xs text-slate-500 mt-2">delayed, not completed</p>
-            </div>
+            @endforeach
         </div>
 
-        <!-- Critical Missed Doses Alert -->
         <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-5">
-            <div class="px-4 py-3 border-b border-slate-100 bg-red-50">
-                <h3 class="text-lg font-bold text-red-900">Critical Missed Doses Alert</h3>
-                <p class="text-sm text-red-700 mt-1">Users with repeated missed medications requiring immediate follow-up</p>
+            <div class="px-4 py-3 border-b border-red-100 bg-red-50">
+                <h2 class="text-base font-bold text-red-900">Critical Missed Doses Alert</h2>
+                <p class="text-xs text-red-700 mt-1">Users with repeated missed/skipped medication records in this range.</p>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
                     <thead class="bg-slate-50 border-b border-slate-100">
                         <tr>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">User Name</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Email</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Missed Count (7d)</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Medications</th>
-                            <th class="px-6 py-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">User</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Email</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Missed</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Medications</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wide">Action</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100">
                         @forelse($criticalMissedMedications as $record)
-                        <tr>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <p class="font-medium text-slate-900">{{ $record['user_name'] }}</p>
-                            </td>
-                            <td class="px-6 py-4">
-                                <p class="text-sm text-slate-600">{{ $record['user_email'] }}</p>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-red-100 text-red-800">{{ $record['missed_count'] }} times</span>
-                            </td>
-                            <td class="px-6 py-4">
-                                <p class="text-sm text-slate-600">{{ $record['medications'] }}</p>
-                            </td>
-                            <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="{{ route('admin.users.show', $record['user_id']) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View Profile -></a>
-                            </td>
+                        <tr class="hover:bg-slate-50">
+                            <td class="px-4 py-3 text-sm font-semibold text-slate-900">{{ $record['user_name'] }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-600">{{ $record['user_email'] }}</td>
+                            <td class="px-4 py-3"><span class="inline-flex px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">{{ $record['missed_count'] }} times</span></td>
+                            <td class="px-4 py-3 text-sm text-slate-600">{{ $record['medications'] }}</td>
+                            <td class="px-4 py-3 text-right"><a href="{{ route('admin.users.show', $record['user_id']) }}" class="text-sm font-semibold text-blue-600 hover:text-blue-700">View</a></td>
                         </tr>
                         @empty
-                        <tr>
-                            <td colspan="5" class="px-6 py-8 text-center text-slate-400">
-                                <p class="text-sm">No critical missed doses found</p>
-                            </td>
-                        </tr>
+                        <tr><td colspan="5" class="px-4 py-5 text-center text-sm text-slate-500">No critical missed dose patterns in this range.</td></tr>
                         @endforelse
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Compliance Ranking -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
-            <!-- Top Performers -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
             <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
                 <div class="px-4 py-3 border-b border-slate-100 bg-green-50">
-                    <h3 class="text-lg font-bold text-green-900">Top Performers</h3>
-                    <p class="text-sm text-green-700 mt-1">Highest medication adherence rates</p>
+                    <h2 class="text-base font-bold text-green-900">Top Performers</h2>
+                    <p class="text-xs text-green-700 mt-1">One row per user.</p>
                 </div>
                 <div class="divide-y divide-slate-100">
                     @forelse($complianceRanking['top_users'] as $user)
-                    <div class="px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                        <div>
-                            <p class="font-semibold text-slate-900">{{ $user['name'] }}</p>
-                            <p class="text-xs text-slate-500 mt-1">{{ $user['completed'] }}/{{ $user['total'] }} doses completed</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-lg font-bold text-green-600">{{ $user['adherence_rate'] }}%</p>
-                            <div class="w-16 h-2 bg-slate-200 rounded-full mt-1">
-                                <div class="bg-green-600 h-2 rounded-full" style="width: {{ $user['adherence_rate'] }}%"></div>
+                    @php
+                        $userAdherencePercent = max(0, min(100, (float) ($user['adherence_rate'] ?? 0)));
+                        $userAdherenceStyle = '--bar-width: ' . $userAdherencePercent . '%; width: var(--bar-width);';
+                    @endphp
+                    <div class="px-4 py-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-slate-900 truncate">{{ $user['name'] }}</p>
+                                <p class="text-xs text-slate-500">{{ $user['completed'] }}/{{ $user['total'] }} doses completed</p>
                             </div>
+                            <p class="text-sm font-bold text-green-700">{{ $user['adherence_rate'] }}%</p>
                         </div>
+                        <div class="mt-2 h-1.5 rounded-full bg-slate-100"><div class="h-1.5 rounded-full bg-green-500" {!! 'style="' . e($userAdherenceStyle) . '"' !!}></div></div>
                     </div>
                     @empty
-                    <div class="px-6 py-8 text-center text-slate-400">
-                        <p class="text-sm">No data available</p>
-                    </div>
+                    <div class="px-4 py-5 text-center text-sm text-slate-500">No adherence data yet.</div>
                     @endforelse
                 </div>
             </div>
 
-            <!-- Bottom Performers -->
             <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-                <div class="px-4 py-3 border-b border-slate-100 bg-red-50">
-                    <h3 class="text-lg font-bold text-red-900">Need Attention</h3>
-                    <p class="text-sm text-red-700 mt-1">Lowest medication adherence rates</p>
+                <div class="px-4 py-3 border-b border-slate-100 bg-amber-50">
+                    <h2 class="text-base font-bold text-amber-900">Need Attention</h2>
+                    <p class="text-xs text-amber-700 mt-1">Lowest user adherence, deduped.</p>
                 </div>
                 <div class="divide-y divide-slate-100">
                     @forelse($complianceRanking['bottom_users'] as $user)
-                    <div class="px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                        <div>
-                            <p class="font-semibold text-slate-900">{{ $user['name'] }}</p>
-                            <p class="text-xs text-slate-500 mt-1">{{ $user['completed'] }}/{{ $user['total'] }} doses completed</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-lg font-bold {{ $user['adherence_rate'] < 60 ? 'text-red-600' : 'text-amber-600' }}">{{ $user['adherence_rate'] }}%</p>
-                            <div class="w-16 h-2 bg-slate-200 rounded-full mt-1">
-                                <div class="{{ $user['adherence_rate'] < 60 ? 'bg-red-600' : 'bg-amber-600' }} h-2 rounded-full" style="width: {{ $user['adherence_rate'] }}%"></div>
+                    @php
+                        $userAdherencePercent = max(0, min(100, (float) ($user['adherence_rate'] ?? 0)));
+                        $userAdherenceStyle = '--bar-width: ' . $userAdherencePercent . '%; width: var(--bar-width);';
+                    @endphp
+                    <div class="px-4 py-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold text-slate-900 truncate">{{ $user['name'] }}</p>
+                                <p class="text-xs text-slate-500">{{ $user['completed'] }}/{{ $user['total'] }} doses completed</p>
                             </div>
+                            <p class="text-sm font-bold {{ $user['adherence_rate'] < 60 ? 'text-red-700' : 'text-amber-700' }}">{{ $user['adherence_rate'] }}%</p>
                         </div>
+                        <div class="mt-2 h-1.5 rounded-full bg-slate-100"><div class="h-1.5 rounded-full {{ $user['adherence_rate'] < 60 ? 'bg-red-500' : 'bg-amber-500' }}" {!! 'style="' . e($userAdherenceStyle) . '"' !!}></div></div>
                     </div>
                     @empty
-                    <div class="px-6 py-8 text-center text-slate-400">
-                        <p class="text-sm">No data available</p>
-                    </div>
+                    <div class="px-4 py-5 text-center text-sm text-slate-500">No attention list for this range.</div>
                     @endforelse
                 </div>
             </div>
-        </div>
 
-        <!-- Charts -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-3">
-                    <div>
-                        <h3 class="text-lg font-bold text-slate-900">Adherence by Medication</h3>
-                        <p class="text-slate-500 text-sm">Compliance rates from medication history records</p>
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+                <h2 class="text-base font-bold text-slate-900">Adherence Trend</h2>
+                <p class="text-xs text-slate-500 mt-1">Compact daily backend history view.</p>
+                @if($trendRows->sum('adherence') > 0)
+                <div class="mt-4 flex items-end gap-1 h-28 border-b border-slate-100">
+                    @foreach($trendRows as $point)
+                    @php
+                        $trendHeight = max(3, min(100, (float) ($point['adherence'] ?? 0)));
+                        $trendStyle = '--bar-height: ' . $trendHeight . '%; height: var(--bar-height);';
+                    @endphp
+                    <div class="flex-1 flex flex-col items-center justify-end gap-1">
+                        <div class="w-full rounded-t bg-blue-500/80" {!! 'style="' . e($trendStyle) . '"' !!}></div>
                     </div>
+                    @endforeach
                 </div>
-                @if($medicationTypeData->isNotEmpty())
-                <div class="relative h-44 w-full">
-                    <canvas id="medicationTypeChart"></canvas>
+                <div class="mt-2 flex justify-between text-[11px] text-slate-400">
+                    <span>{{ $trendRows->first()['date'] ?? '' }}</span>
+                    <span>{{ $trendRows->last()['date'] ?? '' }}</span>
                 </div>
                 @else
-                <div class="h-24 rounded-lg bg-slate-50 flex items-center justify-center text-sm text-slate-500">No medication history in this range.</div>
-                @endif
-            </div>
-
-            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-3">
-                    <div>
-                        <h3 class="text-lg font-bold text-slate-900">Weekly Adherence Trend</h3>
-                        <p class="text-slate-500 text-sm">Last 30 days performance</p>
-                    </div>
-                </div>
-                @if(collect($weeklyAdherenceData)->sum('adherence') > 0)
-                <div class="relative h-44 w-full">
-                    <canvas id="weeklyAdherenceChart"></canvas>
-                </div>
-                @else
-                <div class="h-24 rounded-lg bg-slate-50 flex items-center justify-center text-sm text-slate-500">No adherence trend data in this range.</div>
+                <div class="mt-4 rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No adherence trend data in this range.</div>
                 @endif
             </div>
         </div>
 
-        <!-- Problematic Entries -->
-        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-            <div class="px-4 py-3 border-b border-slate-100">
-                <h3 class="text-lg font-bold text-slate-900">Recent Problematic Entries</h3>
-                <p class="text-slate-500 text-sm">Missed, skipped, and snoozed medication records</p>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+            <div class="lg:col-span-1 bg-white rounded-xl border border-slate-100 shadow-sm p-4">
+                <h2 class="text-base font-bold text-slate-900">Adherence by Medication</h2>
+                <p class="text-xs text-slate-500 mt-1">Supported medication names only.</p>
+                <div class="mt-4 space-y-3">
+                    @forelse($medicationTypeData as $item)
+                    @php
+                        $medicationAdherencePercent = max(0, min(100, (float) ($item['adherence'] ?? 0)));
+                        $medicationAdherenceStyle = '--bar-width: ' . $medicationAdherencePercent . '%; width: var(--bar-width);';
+                    @endphp
+                    <div>
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-sm font-semibold text-slate-700 truncate">{{ $item['type'] }}</p>
+                            <p class="text-xs font-bold text-slate-700">{{ $item['adherence'] }}%</p>
+                        </div>
+                        <div class="mt-1.5 h-1.5 rounded-full bg-slate-100"><div class="h-1.5 rounded-full bg-teal-500" {!! 'style="' . e($medicationAdherenceStyle) . '"' !!}></div></div>
+                    </div>
+                    @empty
+                    <div class="rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">No medication history in this range.</div>
+                    @endforelse
+                </div>
             </div>
-            <div class="overflow-x-auto">
-                <table class="w-full">
-                    <thead class="bg-slate-50 border-b border-slate-100">
-                        <tr>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Date</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">User</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Medication</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Status</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Scheduled Time</th>
-                            <th class="px-6 py-4 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Taken Time</th>
-                            <th class="px-6 py-4 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100">
-                        @forelse($problematicEntries as $entry)
-                        <tr class="hover:bg-slate-50 transition-colors">
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="text-sm text-slate-600">{{ $entry->created_at->format('M d, Y') }}</span>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <p class="font-medium text-slate-900">{{ $entry->user->name ?? 'Unknown User' }}</p>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <p class="text-sm text-slate-600">{{ $entry->medication_name_snapshot ?: ($entry->medication->name ?? 'Unknown') }}</p>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold {{ in_array($entry->status, ['missed', 'skipped'], true) ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800' }}">
-                                    {{ ucfirst($entry->status) }}
-                                </span>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <p class="text-sm text-slate-600">{{ $entry->scheduled_time ? $entry->scheduled_time->format('M d, Y H:i') : '-' }}</p>
-                            </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <p class="text-sm text-slate-600">{{ $entry->taken_time ? $entry->taken_time->format('M d, Y H:i') : '-' }}</p>
-                            </td>
-                            <td class="px-6 py-4 text-right whitespace-nowrap">
-                                <a href="{{ route('admin.users.show', $entry->user_id) }}" class="text-blue-600 hover:text-blue-900 text-sm font-medium">View -></a>
-                            </td>
-                        </tr>
-                        @empty
-                        <tr>
-                            <td colspan="7" class="px-6 py-8 text-center text-slate-400">
-                                <p class="text-sm">No problematic entries found</p>
-                            </td>
-                        </tr>
-                        @endforelse
-                    </tbody>
-                </table>
+
+            <div class="lg:col-span-2 bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <div>
+                        <h2 class="text-base font-bold text-slate-900">Recent Problematic Entries</h2>
+                        <p class="text-xs text-slate-500 mt-1">Missed, skipped, and snoozed records. Latest {{ $problematicEntries->count() }} shown.</p>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-slate-50 border-b border-slate-100">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Date</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">User</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Medication</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Status</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Scheduled</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wide">Taken</th>
+                                <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wide">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            @forelse($problematicEntries as $entry)
+                            @php $status = strtolower((string) $entry->status); @endphp
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{{ $entry->created_at->format('M j, Y') }}</td>
+                                <td class="px-4 py-3 whitespace-nowrap text-sm font-semibold text-slate-900">{{ $entry->user->name ?? 'Unknown User' }}</td>
+                                <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{{ $entry->medication_name_snapshot ?: ($entry->medication->name ?? 'Unknown') }}</td>
+                                <td class="px-4 py-3 whitespace-nowrap"><span class="inline-flex px-2 py-1 rounded-full text-xs font-semibold {{ in_array($status, ['missed', 'skipped'], true) ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700' }}">{{ ucfirst($status) }}</span></td>
+                                <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{{ $entry->scheduled_time ? $entry->scheduled_time->format('M j, H:i') : '-' }}</td>
+                                <td class="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{{ $entry->taken_time ? $entry->taken_time->format('M j, H:i') : '-' }}</td>
+                                <td class="px-4 py-3 text-right whitespace-nowrap"><a href="{{ route('admin.users.show', $entry->user_id) }}" class="text-sm font-semibold text-blue-600 hover:text-blue-700">View</a></td>
+                            </tr>
+                            @empty
+                            <tr><td colspan="7" class="px-4 py-6 text-center text-sm text-slate-500">No problematic entries in this range.</td></tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 @push('scripts')
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<!-- htmlhint attr-unsafe-chars:false -->
 <script>
-    let medicationTypeChart, weeklyAdherenceChart;
-
-    function initCharts() {
-        // Adherence by medication
-        const typeCtx = document.getElementById('medicationTypeChart');
-        if (typeCtx) {
-            const medicationTypes = @json($medicationTypeData);
-            medicationTypeChart = new Chart(typeCtx.getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: medicationTypes.map(m => m.type),
-                    datasets: [{
-                        label: 'Adherence Rate (%)',
-                        data: medicationTypes.map(m => m.adherence),
-                        backgroundColor: ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981'],
-                        borderRadius: 4
-                    }]
-                },
-                options: {
-                    indexAxis: 'y',
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
-                    },
-                    scales: {
-                        x: {
-                            beginAtZero: true,
-                            max: 100,
-                            grid: {
-                                borderDash: [2, 2],
-                                drawBorder: false
-                            },
-                            ticks: {
-                                callback: function(value) {
-                                    return value + '%';
-                                }
-                            }
-                        },
-                        y: {
-                            grid: {
-                                display: false
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
-        // Medication adherence trend
-        const weeklyCtx = document.getElementById('weeklyAdherenceChart');
-        if (weeklyCtx) {
-            const weeklyData = @json($weeklyAdherenceData);
-            weeklyAdherenceChart = new Chart(weeklyCtx.getContext('2d'), {
-                type: 'line',
-                data: {
-                    labels: weeklyData.map(item => item.date),
-                    datasets: [{
-                        label: 'System-wide Adherence',
-                        data: weeklyData.map(item => item.adherence),
-                        borderColor: '#22c55e',
-                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                        tension: 0.4,
-                        fill: true,
-                        pointBackgroundColor: '#fff',
-                        pointBorderColor: '#22c55e',
-                        pointBorderWidth: 2,
-                        pointRadius: 5,
-                        pointHoverRadius: 7
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            max: 100,
-                            grid: {
-                                borderDash: [2, 2],
-                                drawBorder: false
-                            },
-                            ticks: {
-                                callback: function(value) {
-                                    return value + '%';
-                                }
-                            }
-                        },
-                        x: {
-                            grid: {
-                                display: false
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
-
     document.addEventListener('DOMContentLoaded', () => {
         const timeRange = document.getElementById('timeRange');
         if (timeRange) {
@@ -413,8 +241,6 @@
                 window.location = `${timeRange.dataset.baseUrl}?timeRange=${timeRange.value}`;
             });
         }
-
-        initCharts();
     });
 </script>
 @endpush

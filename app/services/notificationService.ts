@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CacheOwner, getCacheOwner, getCachedSession, getUserScopedKey, readDeletedMedicationTombstones, readHydrationCache, readMedicationCache, readMedicationHistoryCache, readNotificationsCache, writeMedicationCache, writeNotificationsCache } from './offlineStorage';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT } from './homeEvents';
 import { logPerf, perfNow } from '../utils/perf';
+import { getMedicationHistoryIdentityValues } from '../utils/medicationSummary';
 
 export const HYDRATION_CHANNEL_ID = 'intakesync_hydration_v1';
 export const MEDICATION_CHANNEL_ID = 'intakesync_medication_v1';
@@ -1959,8 +1960,8 @@ function medicationDoseHasOutcome(ref: ScheduledNotificationRef, history: any[])
   return (history || []).some((entry) => {
     const status = entry?.status;
     if (status !== 'completed' && status !== 'skipped' && status !== 'missed' && status !== 'snoozed') return false;
-    const medId = String(entry?.medId ?? entry?.medication_id ?? entry?.medicationId ?? '');
-    if (ref.medicationId && medId && medId !== String(ref.medicationId)) return false;
+    const historyIdentities = getMedicationHistoryIdentityValues(entry);
+    if (ref.medicationId && historyIdentities.length > 0 && !historyIdentities.includes(String(ref.medicationId))) return false;
     return sameDoseTime(entry?.time || entry?.scheduled_at || entry?.scheduled_time, ref.doseTime);
   });
 }

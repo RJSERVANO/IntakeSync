@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Medication;
 use App\Models\MedicationHistory;
+use App\Models\Notification as NotificationModel;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
@@ -187,7 +188,9 @@ class MedicationController extends Controller
                     'taken_time' => now(),
                 ]);
                 Log::info('Updated missed/skipped to completed', ['entry_id' => $existingEntry->id]);
-                return response()->json($existingEntry->fresh(), 200);
+                $updatedEntry = $existingEntry->fresh();
+                $this->persistMedicationActivityNotification($updatedEntry, $medication, $user);
+                return response()->json($updatedEntry, 200);
             }
 
             if ($data['status'] === 'completed' && $existingEntry->status === 'snoozed') {
@@ -197,7 +200,9 @@ class MedicationController extends Controller
                     'scheduled_time' => $scheduledTime,
                     'taken_time' => now(),
                 ]);
-                return response()->json($existingEntry->fresh(), 200);
+                $updatedEntry = $existingEntry->fresh();
+                $this->persistMedicationActivityNotification($updatedEntry, $medication, $user);
+                return response()->json($updatedEntry, 200);
             }
 
             // If trying to mark as skipped/missed but already marked as completed, don't allow
@@ -232,6 +237,8 @@ class MedicationController extends Controller
             'user_id' => $hist->user_id,
             'status' => $hist->status,
         ]);
+
+        $this->persistMedicationActivityNotification($hist, $medication, $user);
 
         return response()->json($hist, 201);
     }
@@ -500,7 +507,7 @@ class MedicationController extends Controller
                     continue;
                 }
 
-                MedicationHistory::create([
+                $history = MedicationHistory::create([
                     'medication_id' => $medication->id,
                     'user_id' => $medication->user_id,
                     'status' => 'skipped',
@@ -510,7 +517,70 @@ class MedicationController extends Controller
                     'medication_name_snapshot' => $medication->name,
                     'dosage_snapshot' => $medication->dosage,
                 ]);
+
+                $this->persistMedicationActivityNotification($history, $medication, $user);
             }
+        }
+    }
+
+    private function persistMedicationActivityNotification(MedicationHistory $history, Medication $medication, $user): void
+    {
+        if (!class_exists(NotificationModel::class)) {
+            return;
+        }
+
+        try {
+            $status = strtolower((string) $history->status);
+            $notificationStatus = match ($status) {
+                'completed', 'taken' => 'completed',
+                'missed', 'skipped' => 'missed',
+                'snoozed' => 'snoozed',
+                default => 'scheduled',
+            };
+            $scheduledTime = $history->scheduled_time ?: $history->time ?: now();
+            $medicationName = $history->medication_name_snapshot ?: $medication->name ?: 'Medication';
+            $statusLabel = match ($notificationStatus) {
+                'completed' => 'completed',
+                'missed' => 'missed',
+                'snoozed' => 'snoozed',
+                default => 'updated',
+            };
+            $timestamps = [];
+
+            if ($notificationStatus === 'completed') {
+                $timestamps['completed_at'] = $history->taken_time ?: $history->updated_at ?: now();
+                $timestamps['actioned_at'] = $timestamps['completed_at'];
+                $timestamps['opened_at'] = $timestamps['completed_at'];
+            } elseif ($notificationStatus === 'missed') {
+                $timestamps['missed_at'] = $history->updated_at ?: now();
+            } elseif ($notificationStatus === 'snoozed') {
+                $timestamps['opened_at'] = $history->updated_at ?: now();
+            }
+
+            NotificationModel::firstOrCreate(
+                [
+                    'user_id' => $user->id,
+                    'type' => 'medication',
+                    'status' => $notificationStatus,
+                    'scheduled_time' => $scheduledTime,
+                    'title' => "Medication {$statusLabel}",
+                ],
+                array_merge([
+                    'body' => "{$medicationName} was {$statusLabel}.",
+                    'data' => [
+                        'source' => 'medication_history',
+                        'medication_history_id' => $history->id,
+                        'medication_id' => $medication->id,
+                    ],
+                ], $timestamps)
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Unable to persist medication notification activity', [
+                'user_id' => $user->id ?? null,
+                'medication_id' => $medication->id ?? null,
+                'history_id' => $history->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

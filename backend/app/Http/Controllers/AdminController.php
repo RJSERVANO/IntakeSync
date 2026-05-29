@@ -700,13 +700,19 @@ class AdminController extends Controller
             ->count();
 
         $openRate = $totalNotifications > 0 ? round(($openedNotifications / $totalNotifications) * 100, 1) : null;
+        $openRateLabel = $openRate === null ? 'No data yet' : $openRate . '%';
 
         $effectiveness = $this->getNotificationEffectiveness($timeRange);
         $effectivenessRate = $effectiveness['total'] > 0 ? $effectiveness['rate'] : null;
+        $effectivenessRateLabel = $effectivenessRate === null ? 'No data yet' : $effectivenessRate . '%';
         $avgResponseMinutes = $this->getNotificationAverageResponseMinutes($timeRange);
         $notificationVolumeData = $this->getNotificationVolumeData($timeRange);
         $notificationTypeData = $this->getNotificationTypeData($timeRange);
         $engagementBreakdown = $this->getNotificationEngagementBreakdown($timeRange);
+        $hasBackendNotificationData = $totalNotifications > 0;
+        $notificationPersistenceNote = $hasBackendNotificationData
+            ? 'Showing backend-persisted notification and app activity records only.'
+            : 'No backend notification records in this range. Device-local Activity rows are excluded; new hydration and medication API activity is persisted for admin analytics.';
 
         $snoozedCount = $visibleNotifications
             ->filter(fn($notification) => $this->isNotificationSnoozed($notification))
@@ -739,11 +745,15 @@ class AdminController extends Controller
             'totalNotifications',
             'deliveredNotifications',
             'openRate',
+            'openRateLabel',
             'effectivenessRate',
+            'effectivenessRateLabel',
             'avgResponseMinutes',
             'notificationVolumeData',
             'notificationTypeData',
             'engagementBreakdown',
+            'hasBackendNotificationData',
+            'notificationPersistenceNote',
             'snoozedCount',
             'failedCount',
             'failedNotifications',
@@ -1096,9 +1106,9 @@ class AdminController extends Controller
             ->get()
             ->filter(fn($notification) => !$this->isNotificationHidden($notification))
             ->map(function ($notification) {
-                $openedAt = $this->notificationOpenedAt($notification);
-                $actionedAt = $this->notificationActionedAt($notification);
-                return $openedAt && $actionedAt ? $openedAt->diffInMinutes($actionedAt) : null;
+                $startAt = $this->notificationStartedAt($notification);
+                $endAt = $this->notificationActionedAt($notification) ?: $this->notificationOpenedAt($notification);
+                return $startAt && $endAt && $endAt->gte($startAt) ? $startAt->diffInMinutes($endAt) : null;
             })
             ->filter(fn($minutes) => $minutes !== null);
 
@@ -1107,6 +1117,17 @@ class AdminController extends Controller
         }
 
         return round($notifications->avg(), 1);
+    }
+
+    private function notificationStartedAt(Notification $notification): ?Carbon
+    {
+        foreach (['delivered_at', 'scheduled_time', 'created_at'] as $column) {
+            if (Schema::hasColumn('notifications', $column) && $notification->{$column}) {
+                return Carbon::parse($notification->{$column});
+            }
+        }
+
+        return $notification->created_at ? Carbon::parse($notification->created_at) : null;
     }
 
     private function getNotificationVolumeData($days)

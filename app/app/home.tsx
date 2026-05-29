@@ -26,11 +26,11 @@ import {
   writeOwnedOfflineCache,
   writeOtcSearchCache,
 } from '../services/offlineStorage';
-import { enqueueBeverageLog, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
-import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT, subscribeHomeRefresh } from '../services/homeEvents';
+import { enqueueBeverageLog, getPendingSyncActions, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
+import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT, subscribeHomeRefresh, subscribeMedicationHistoryUpdated } from '../services/homeEvents';
 import { getUnreadActionableNotificationCount } from '../services/notificationService';
 import { performLocalLogout } from '../services/logoutSession';
-import { deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
+import { buildPendingMedicationHistoryEntries, deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import { SelectedAvatar, getAvatarSource } from './components/AvatarSelector';
 import ThemedNoticeModal, { ThemedNoticeType } from './components/common/ThemedNoticeModal';
@@ -381,12 +381,13 @@ export default function Home() {
       }
 
       didReadCache = true;
-      const [hydrationCache, cachedMedsRaw, medicationHistoryRaw, deletedKeysRaw, homeCache] = await Promise.all([
+      const [hydrationCache, cachedMedsRaw, medicationHistoryRaw, deletedKeysRaw, homeCache, pendingActionsRaw] = await Promise.all([
         readHydrationCache<any>(),
         readMedicationCache<any[]>(sessionUser),
         readMedicationHistoryCache<any[]>(sessionUser),
         readDeletedMedicationTombstones(sessionUser),
         readOwnedOfflineCache<any>(getUserScopedKey(getCacheOwner(sessionUser), 'home_summary'), sessionUser),
+        getPendingSyncActions(),
       ]);
       cacheHit = Boolean(hydrationCache || cachedMedsRaw?.length || medicationHistoryRaw?.length || homeCache);
 
@@ -394,9 +395,13 @@ export default function Home() {
       const cachedMeds = (cachedMedsRaw || []).filter((med) => (
         !med?.deleted_at && !getMedicationIdentityValues(med).some((identity) => deletedKeys.has(identity))
       ));
+      const pendingMedicationHistory = buildPendingMedicationHistoryEntries(
+        (pendingActionsRaw || []).filter((item) => item.action_type.includes('MEDICATION')),
+        cachedMeds,
+      );
       const todayMedication = deriveTodayMedicationSummary({
         meds: cachedMeds,
-        rawHistory: medicationHistoryRaw || [],
+        rawHistory: [...pendingMedicationHistory, ...(medicationHistoryRaw || [])],
         now: new Date(),
       });
 
@@ -429,6 +434,40 @@ export default function Home() {
       }
       refreshFromCacheInFlightRef.current = false;
     }
+  }, [routeToken]);
+
+  const refreshMedicationSummaryFromCache = useCallback(async (visibleUser?: any | null) => {
+    const session = await getCachedSession();
+    const sessionUser = visibleUser || userRef.current || session?.user || null;
+    if (!sessionUser || !hasValidCachedSession(session)) return;
+    if (routeToken && session.token !== routeToken) return;
+    const [cachedMedsRaw, medicationHistoryRaw, deletedKeysRaw, pendingActionsRaw] = await Promise.all([
+      readMedicationCache<any[]>(sessionUser),
+      readMedicationHistoryCache<any[]>(sessionUser),
+      readDeletedMedicationTombstones(sessionUser),
+      getPendingSyncActions(),
+    ]);
+    const deletedKeys = new Set(deletedKeysRaw || []);
+    const cachedMeds = (cachedMedsRaw || []).filter((med) => (
+      !med?.deleted_at && !getMedicationIdentityValues(med).some((identity) => deletedKeys.has(identity))
+    ));
+    const pendingMedicationHistory = buildPendingMedicationHistoryEntries(
+      (pendingActionsRaw || []).filter((item) => item.action_type.includes('MEDICATION')),
+      cachedMeds,
+    );
+    const todayMedication = deriveTodayMedicationSummary({
+      meds: cachedMeds,
+      rawHistory: [...pendingMedicationHistory, ...(medicationHistoryRaw || [])],
+      now: new Date(),
+    });
+    setMedicationSummary(todayMedication);
+    setUpcomingMedications(todayMedication.nextMedication ? [todayMedication.nextMedication] : []);
+    setQuickStatus((prev) => ({
+      ...prev,
+      medicationsTaken: todayMedication.taken,
+      medicationsTotal: todayMedication.total,
+      medicationsLeft: todayMedication.remaining,
+    }));
   }, [routeToken]);
 
   const refreshHomeNotificationBadge = useCallback(async (visibleUser?: any | null) => {
@@ -509,6 +548,13 @@ export default function Home() {
     });
     return () => subscription.remove();
   }, [applyCacheFirstHomeSummary, refreshHomeNotificationBadge]);
+
+  useEffect(() => {
+    const subscription = subscribeMedicationHistoryUpdated(() => {
+      void refreshMedicationSummaryFromCache(userRef.current);
+    });
+    return () => subscription.remove();
+  }, [refreshMedicationSummaryFromCache]);
 
   useEffect(() => {
     const refresh = () => refreshHomeNotificationBadge(userRef.current).catch(() => {});

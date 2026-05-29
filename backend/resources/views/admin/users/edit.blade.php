@@ -5,477 +5,235 @@
 @section('content')
 <div class="min-h-screen bg-slate-50 py-3">
     <div class="max-w-6xl mx-auto px-4 sm:px-6">
-        <!-- Page Header -->
-        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-5">
+        <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between mb-5">
             <div>
-                <div class="flex items-center gap-3 mb-2">
+                <div class="flex items-center gap-2 text-sm mb-2">
                     <a href="{{ route('admin.users.index') }}" class="text-slate-500 hover:text-slate-700 font-medium">Users</a>
                     <span class="text-slate-400">/</span>
-                    <span class="text-slate-900 font-medium">{{ $user->name }}</span>
+                    <a href="{{ route('admin.users.show', $user) }}" class="text-slate-500 hover:text-slate-700 font-medium">{{ $user->name }}</a>
+                    <span class="text-slate-400">/</span>
+                    <span class="text-slate-900 font-medium">Edit</span>
                 </div>
-                <h1 class="text-3xl font-bold text-slate-900">Edit User: {{ $user->name }}</h1>
-                <p class="text-slate-500 mt-1">{{ $user->email }}</p>
+                <h1 class="text-3xl font-bold text-slate-900">Edit User</h1>
+                <p class="text-slate-500 mt-1">{{ $user->name }} · {{ $user->email }}</p>
             </div>
-            <div class="flex items-center gap-3">
-                <a href="{{ route('admin.users.index') }}" class="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors font-medium text-sm">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
-                    </svg>
-                    Back
-                </a>
-            </div>
-        </div>
-
-        <!-- Success Alert -->
-        @if (session('success'))
-        <div class="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex gap-3">
-            <svg class="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-            </svg>
-            <div>
-                <h3 class="font-semibold text-green-800">Success</h3>
-                <p class="text-sm text-green-700">{{ session('success') }}</p>
-            </div>
-        </div>
-        @endif
-
-        <!-- User Info Card with Status -->
-        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-5">
-            <div class="px-6 py-5 border-b border-slate-100">
-                <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
-                    <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">User ID</p>
-                        <p class="text-lg font-semibold text-slate-900 mt-2">{{ $user->id }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Role</p>
-                        <div class="mt-2">
-                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold {{ $user->role === 'admin' ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-700' }}">
-                                <span class="w-2 h-2 rounded-full {{ $user->role === 'admin' ? 'bg-blue-400' : 'bg-slate-400' }}"></span>
-                                {{ ucfirst($user->role) }}
-                            </span>
-                        </div>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</p>
-                        <div class="mt-2">
-                            @php
-                            $bgColorClass = match($user->status) {
-                            'active' => 'bg-green-50 text-green-700',
-                            'suspended' => 'bg-yellow-50 text-yellow-700',
-                            'banned' => 'bg-red-50 text-red-700',
-                            'unverified' => 'bg-gray-50 text-gray-700',
-                            default => 'bg-slate-50 text-slate-700'
-                            };
-                            $dotColor = match($user->status) {
-                            'active' => 'bg-green-400',
-                            'suspended' => 'bg-yellow-400',
-                            'banned' => 'bg-red-400',
-                            'unverified' => 'bg-gray-400',
-                            default => 'bg-slate-400'
-                            };
-                            @endphp
-                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold {{ $bgColorClass }}">
-                                <span class="w-2 h-2 rounded-full {{ $dotColor }}"></span>
-                                {{ ucfirst($user->status) }}
-                            </span>
-                        </div>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Member Since</p>
-                        <p class="text-sm font-medium text-slate-600 mt-2">{{ $user->created_at->format('M j, Y') }}</p>
-                    </div>
-                    <div>
-                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Last Updated</p>
-                        <p class="text-sm font-medium text-slate-600 mt-2">{{ $user->updated_at->format('M j, Y') }}</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Validation Errors Alert -->
-        @if ($errors->any())
-        <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-            <div class="flex gap-3">
-                <svg class="w-5 h-5 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            <a href="{{ route('admin.users.show', $user) }}" class="inline-flex items-center gap-2 border border-slate-200 text-slate-600 px-3 py-2 rounded-lg hover:bg-white font-medium text-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                 </svg>
-                <div>
-                    <h3 class="font-semibold text-red-800 mb-2">Please fix the following errors:</h3>
-                    <ul class="space-y-1">
-                        @foreach ($errors->all() as $error)
-                        <li class="text-sm text-red-700">{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                </div>
-            </div>
+                Back
+            </a>
+        </div>
+
+        @if (session('success'))
+        <div class="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3">
+            <p class="text-sm font-semibold text-green-900">Success</p>
+            <p class="text-sm text-green-700 mt-1">{{ session('success') }}</p>
         </div>
         @endif
 
-        <!-- Tabbed Interface -->
+        @if ($errors->any())
+        <div class="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+            <p class="text-sm font-semibold text-red-900">Please fix the following errors:</p>
+            <ul class="mt-2 space-y-1 text-sm text-red-700">
+                @foreach ($errors->all() as $error)
+                <li>{{ $error }}</li>
+                @endforeach
+            </ul>
+        </div>
+        @endif
+
+        @php
+            $roleClass = $user->role === 'admin' ? 'bg-blue-50 text-blue-700' : 'bg-slate-50 text-slate-700';
+            $statusClass = match($user->status ?? 'active') {
+                'active' => 'bg-green-50 text-green-700',
+                'suspended' => 'bg-amber-50 text-amber-700',
+                'banned' => 'bg-red-50 text-red-700',
+                'unverified' => 'bg-slate-100 text-slate-700',
+                default => 'bg-slate-100 text-slate-700',
+            };
+        @endphp
+
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4 mb-5">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">User ID</p>
+                    <p class="text-lg font-bold text-slate-900 mt-1">{{ $user->id }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Role</p>
+                    <span class="mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold {{ $roleClass }}">{{ ucfirst($user->role) }}</span>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</p>
+                    <span class="mt-1 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold {{ $statusClass }}">{{ ucfirst($user->status ?? 'active') }}</span>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Member Since</p>
+                    <p class="text-sm font-medium text-slate-700 mt-1">{{ $user->created_at->format('M j, Y') }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Last Updated</p>
+                    <p class="text-sm font-medium text-slate-700 mt-1">{{ $user->updated_at->format('M j, Y') }}</p>
+                </div>
+            </div>
+        </div>
+
         <form id="passwordResetForm" method="POST" action="{{ route('admin.users.send-password-reset', $user) }}" class="hidden">
             @csrf
         </form>
 
         <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
-            <!-- Tab Navigation -->
             <div class="border-b border-slate-100 overflow-x-auto">
-                <div class="flex flex-wrap md:flex-nowrap" role="tablist">
-                    <button onclick="showTab(event, 'account')" id="account-tab" role="tab" aria-selected="true" class="tab-button px-6 py-4 text-sm font-semibold text-blue-600 border-b-2 border-blue-500 hover:text-slate-900 transition-colors whitespace-nowrap">
-                        <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            Account Info
-                        </span>
-                    </button>
-                    <button onclick="showTab(event, 'health')" id="health-tab" role="tab" aria-selected="false" class="tab-button px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:border-slate-300 hover:text-slate-900 transition-colors whitespace-nowrap">
-                        <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
-                            </svg>
-                            Health
-                        </span>
-                    </button>
-                    <button onclick="showTab(event, 'activity')" id="activity-tab" role="tab" aria-selected="false" class="tab-button px-6 py-4 text-sm font-semibold text-slate-600 border-b-2 border-transparent hover:border-slate-300 hover:text-slate-900 transition-colors whitespace-nowrap">
-                        <span class="flex items-center gap-2">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            Activity
-                        </span>
-                    </button>
+                <div class="flex min-w-max" role="tablist">
+                    @foreach(['account' => 'Account Info', 'health' => 'Health', 'activity' => 'Activity'] as $tab => $label)
+                    <button type="button" onclick="showEditTab('{{ $tab }}')" id="{{ $tab }}-tab" class="tab-button px-4 py-3 text-sm font-semibold border-b-2 transition-colors {{ $loop->first ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300' }}">{{ $label }}</button>
+                    @endforeach
                 </div>
             </div>
 
-            <!-- Account Info Tab -->
-            <div id="account-tab-content" class="tab-content p-6">
-                <form method="POST" action="{{ route('admin.users.update', $user) }}" class="space-y-6">
+            <div id="account-tab-content" class="tab-content p-4">
+                <form method="POST" action="{{ route('admin.users.update', $user) }}" class="space-y-5">
                     @csrf
                     @method('PUT')
 
-                    <!-- Account Status Section -->
-                    <div class="border-b border-slate-100 pb-6">
-                        <h3 class="text-lg font-semibold text-slate-900 mb-4">Account Status</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label for="status" class="block text-sm font-semibold text-slate-900 mb-2">
-                                    User Status <span class="text-red-600">*</span>
-                                </label>
-                                <select
-                                    id="status"
-                                    name="status"
-                                    class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                                    <option value="active" {{ $user->status === 'active' ? 'selected' : '' }}>Active</option>
-                                    <option value="suspended" {{ $user->status === 'suspended' ? 'selected' : '' }}>Suspended</option>
-                                    <option value="banned" {{ $user->status === 'banned' ? 'selected' : '' }}>Banned</option>
-                                    <option value="unverified" {{ $user->status === 'unverified' ? 'selected' : '' }}>Unverified</option>
-                                </select>
-                                @error('status')
-                                <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
-                                @enderror
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Personal Information -->
-                    <div class="border-b border-slate-100 pb-6">
-                        <h3 class="text-lg font-semibold text-slate-900 mb-4">Personal Information</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Full Name -->
-                            <div>
-                                <label for="name" class="block text-sm font-semibold text-slate-900 mb-2">
-                                    Full Name <span class="text-red-600">*</span>
-                                </label>
-                                <input
-                                    type="text"
-                                    id="name"
-                                    name="name"
-                                    value="{{ old('name', $user->name) }}"
-                                    required
-                                    class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                                @error('name')
-                                <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <!-- Email Address -->
-                            <div>
-                                <label for="email" class="block text-sm font-semibold text-slate-900 mb-2">
-                                    Email Address <span class="text-red-600">*</span>
-                                </label>
-                                <input
-                                    type="email"
-                                    id="email"
-                                    name="email"
-                                    value="{{ old('email', $user->email) }}"
-                                    required
-                                    class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
-                                @error('email')
-                                <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
-                                @enderror
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Permissions -->
-                    <div class="border-b border-slate-100 pb-6">
-                        <h3 class="text-lg font-semibold text-slate-900 mb-4">Permissions</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
-                            <label for="role" class="block text-sm font-semibold text-slate-900 mb-2">
-                                User Role <span class="text-red-600">*</span>
-                            </label>
-                            <select
-                                id="role"
-                                name="role"
-                                required
-                                class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
+                            <label for="status" class="block text-sm font-semibold text-slate-900 mb-1.5">Status <span class="text-red-600">*</span></label>
+                            <select id="status" name="status" class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="active" {{ $user->status === 'active' ? 'selected' : '' }}>Active</option>
+                                <option value="suspended" {{ $user->status === 'suspended' ? 'selected' : '' }}>Suspended</option>
+                                <option value="banned" {{ $user->status === 'banned' ? 'selected' : '' }}>Banned</option>
+                                <option value="unverified" {{ $user->status === 'unverified' ? 'selected' : '' }}>Unverified</option>
+                            </select>
+                            @error('status')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                        </div>
+
+                        <div>
+                            <label for="name" class="block text-sm font-semibold text-slate-900 mb-1.5">Full Name <span class="text-red-600">*</span></label>
+                            <input type="text" id="name" name="name" value="{{ old('name', $user->name) }}" required class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            @error('name')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                        </div>
+
+                        <div>
+                            <label for="email" class="block text-sm font-semibold text-slate-900 mb-1.5">Email <span class="text-red-600">*</span></label>
+                            <input type="email" id="email" name="email" value="{{ old('email', $user->email) }}" required class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            @error('email')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label for="role" class="block text-sm font-semibold text-slate-900 mb-1.5">Role <span class="text-red-600">*</span></label>
+                            <select id="role" name="role" required class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
                                 <option value="user" {{ $user->role === 'user' ? 'selected' : '' }}>User</option>
                                 <option value="admin" {{ $user->role === 'admin' ? 'selected' : '' }}>Administrator</option>
                             </select>
                             @if ($user->id === auth()->id())
-                            <p class="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4v2m0 4v2M7.08 6.24a9 9 0 110 17.52M6.24 7.08a9 9 0 010 17.52"></path>
-                                </svg>
-                                Warning: You are editing your own account. Be careful with role changes.
-                            </p>
+                            <p class="text-xs text-amber-600 mt-1">You are editing your own account. Be careful with role changes.</p>
                             @endif
-                            @error('role')
-                            <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
-                            @enderror
+                            @error('role')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                        </div>
+
+                        <div class="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                            <p class="text-sm font-semibold text-blue-900">Password Management</p>
+                            <p class="text-xs text-blue-700 mt-1">Send a password reset email instead of setting a manual password.</p>
+                            <button type="submit" form="passwordResetForm" class="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium text-sm shadow-sm">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                                </svg>
+                                Send Reset Email
+                            </button>
                         </div>
                     </div>
 
-                    <!-- Password Reset -->
-                    <div class="border-b border-slate-100 pb-6">
-                        <h3 class="text-lg font-semibold text-slate-900 mb-4">Password Management</h3>
-                        <p class="text-sm text-slate-600 mb-4">Instead of setting a password manually, send the user a password reset email. They can click the link to create their own secure password.</p>
-                            <button type="submit" form="passwordResetForm" class="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors shadow-sm">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
-                                </svg>
-                                Send Password Reset Email
-                            </button>
+                    <div>
+                        <label for="medical_history" class="block text-sm font-semibold text-slate-900 mb-1.5">Medical History Notes</label>
+                        <textarea id="medical_history" name="medical_history" rows="4" class="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500">{{ old('medical_history', $user->medical_history) }}</textarea>
+                        @error('medical_history')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
                     </div>
 
-                    <!-- Medical History -->
-                    <div class="pb-6">
-                        <h3 class="text-lg font-semibold text-slate-900 mb-4">Medical History</h3>
-                        <label for="medical_history" class="block text-sm font-semibold text-slate-900 mb-2">
-                            Medical History Notes
-                        </label>
-                        <textarea
-                            id="medical_history"
-                            name="medical_history"
-                            rows="4"
-                            placeholder="Enter any relevant medical history for this user..."
-                            class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">{{ old('medical_history', $user->medical_history) }}</textarea>
-                        @error('medical_history')
-                        <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
-                        @enderror
-                    </div>
-
-                    <!-- Form Actions -->
-                    <div class="flex items-center gap-3 pt-6 border-t border-slate-100">
-                        <a href="{{ route('admin.users.index') }}" class="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium transition-colors">
-                            Cancel
-                        </a>
-                        <button type="submit" class="px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors shadow-sm">
-                            Save Changes
-                        </button>
+                    <div class="flex items-center gap-2 pt-4 border-t border-slate-100">
+                        <a href="{{ route('admin.users.show', $user) }}" class="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium text-sm">Cancel</a>
+                        <button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium text-sm shadow-sm">Save Changes</button>
                     </div>
                 </form>
             </div>
 
-            <!-- Health Profile Tab -->
-            <div id="health-tab-content" class="tab-content hidden p-6">
-                <div class="space-y-6">
-                    <h3 class="text-lg font-semibold text-slate-900">Health Profile (Read-Only)</h3>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <!-- Weight & Height -->
-                        <div class="bg-slate-50 rounded-lg p-4">
-                            <h4 class="font-semibold text-slate-900 mb-4">Physical Measurements</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Weight</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->weight ? $user->weight . ' ' . ($user->weight_unit ?? 'kg') : 'Not provided' }}
-                                    </p>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Age</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        @php
-                                        $ageDisplay = 'Not provided';
-                                        $dob = $user->date_of_birth;
-                                        if ($dob) {
-                                        $birthDate = new DateTime($dob);
-                                        $ageDisplay = $birthDate->diff(new DateTime())->y;
-                                        }
-                                        @endphp
-                                        {{ $ageDisplay }}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Exercise Frequency -->
-                        <div class="bg-slate-50 rounded-lg p-4">
-                            <h4 class="font-semibold text-slate-900 mb-4">Lifestyle</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Exercise Frequency</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->exercise_frequency ? ucfirst($user->exercise_frequency) : 'Not provided' }}
-                                    </p>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Climate Setting</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->climate ? ucfirst($user->climate) : 'Not provided' }}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
+            <div id="health-tab-content" class="tab-content hidden p-4">
+                <h2 class="text-base font-bold text-slate-900 mb-3">Health Profile</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Weight</p>
+                        <p class="text-lg font-bold text-slate-900 mt-1">{{ $user->weight ? $user->weight . ' ' . ($user->weight_unit ?? 'kg') : 'Not provided' }}</p>
                     </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <!-- Hydration Goal -->
-                        <div class="bg-slate-50 rounded-lg p-4">
-                            <h4 class="font-semibold text-slate-900 mb-4">Health Goals</h4>
-                            <div class="space-y-3">
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Daily Hydration Goal</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->hydration_goal ? $user->hydration_goal . ' ml' : 'Not set' }}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Exercise Frequency</p>
+                        <p class="text-lg font-bold text-slate-900 mt-1">{{ $user->exercise_frequency ? ucfirst($user->exercise_frequency) : 'Not provided' }}</p>
                     </div>
-
-                    <!-- Medical History -->
-                    @if($user->medical_history)
-                    <div class="bg-blue-50 rounded-lg p-6">
-                        <h4 class="font-semibold text-slate-900 mb-2">Medical History</h4>
-                        <p class="text-slate-700 text-sm leading-relaxed">{{ $user->medical_history }}</p>
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Climate</p>
+                        <p class="text-lg font-bold text-slate-900 mt-1">{{ $user->climate ? ucfirst($user->climate) : 'Not provided' }}</p>
                     </div>
-                    @else
-                    <div class="bg-slate-50 rounded-lg p-6 text-center">
-                        <p class="text-slate-500 text-sm">No medical history has been recorded yet.</p>
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Daily Hydration Goal</p>
+                        <p class="text-lg font-bold text-slate-900 mt-1">{{ $user->hydration_goal ? number_format($user->hydration_goal) . ' ml' : 'Not set' }}</p>
                     </div>
-                    @endif
+                    <div class="md:col-span-2 rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Medical History</p>
+                        <p class="text-sm text-slate-700 mt-1">{{ $user->medical_history ?: 'No medical history has been recorded yet.' }}</p>
+                    </div>
                 </div>
             </div>
-            <!-- Activity Log Tab -->
-            <div id="activity-tab-content" class="tab-content hidden p-6">
-                <div class="space-y-6">
-                    <h3 class="text-lg font-semibold text-slate-900 mb-6">Activity Log</h3>
 
-                    <!-- Last Login Info -->
-                    @if($lastLogin)
-                    <div class="bg-blue-50 rounded-lg p-6 border border-blue-200">
-                        <h4 class="font-semibold text-slate-900 mb-3">Last Login</h4>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div id="activity-tab-content" class="tab-content hidden p-4">
+                <h2 class="text-base font-bold text-slate-900 mb-3">Activity</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Last Login</p>
+                        <p class="text-sm font-semibold text-slate-900 mt-1">{{ $lastLogin ? $lastLogin->created_at->format('M j, Y H:i') : 'No explicit login event' }}</p>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Last Sync</p>
+                        <p class="text-sm font-semibold text-slate-900 mt-1">{{ $user->last_sync_at ? $user->last_sync_at->format('M j, Y H:i') : 'Never' }}</p>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 p-3">
+                        <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Latest App Version</p>
+                        <p class="text-sm font-semibold text-slate-900 mt-1">{{ $user->last_app_version ?? 'Not recorded' }}</p>
+                    </div>
+                </div>
+
+                <div class="divide-y divide-slate-100 rounded-lg border border-slate-100 overflow-hidden">
+                    @forelse($activityLogs as $log)
+                    <div class="px-4 py-3 bg-white">
+                        <div class="flex items-start justify-between gap-3">
                             <div>
-                                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Timestamp</p>
-                                <p class="text-sm font-medium text-slate-900 mt-1">{{ $lastLogin->created_at->format('M j, Y H:i:s') }}</p>
-                                <p class="text-xs text-slate-600 mt-0.5">{{ $lastLogin->created_at->diffForHumans() }}</p>
+                                <p class="text-sm font-semibold text-slate-900">{{ ucfirst(str_replace('_', ' ', $log->activity_type)) }}</p>
+                                @if($log->details)<p class="text-sm text-slate-600 mt-1">{{ $log->details }}</p>@endif
+                                <p class="text-xs text-slate-500 mt-1">{{ $log->ip_address ? 'IP: ' . $log->ip_address : 'IP not recorded' }}{{ $log->app_version ? ' · Version: ' . $log->app_version : '' }}</p>
                             </div>
-                            <div>
-                                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">IP Address</p>
-                                <p class="text-sm font-medium text-slate-900 mt-1">{{ $lastLogin->ip_address ?? 'Not recorded' }}</p>
-                            </div>
-                            <div>
-                                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">App Version</p>
-                                <p class="text-sm font-medium text-slate-900 mt-1">{{ $lastLogin->app_version ?? 'Not recorded' }}</p>
-                            </div>
+                            <p class="text-xs text-slate-500 whitespace-nowrap">{{ $log->created_at->format('M j, H:i') }}</p>
                         </div>
                     </div>
-                    @else
-                    <div class="bg-slate-50 rounded-lg p-4 text-center">
-                        <p class="text-slate-500 text-sm">{{ $user->last_login_at || $user->last_sync_at || $activityLogs->count() > 0 ? 'No explicit login event recorded.' : 'No backend activity recorded yet.' }}</p>
-                    </div>
-                    @endif
-
-                    <!-- Last Sync Info -->
-                    <div class="bg-slate-50 rounded-lg p-4">
-                        <h4 class="font-semibold text-slate-900 mb-3">Recent Activity</h4>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Last Sync</p>
-                                <p class="text-sm font-medium text-slate-900 mt-1">{{ $user->last_sync_at ? $user->last_sync_at->format('M j, Y H:i:s') : 'Never' }}</p>
-                                @if($user->last_sync_at)
-                                <p class="text-xs text-slate-600 mt-0.5">{{ $user->last_sync_at->diffForHumans() }}</p>
-                                @endif
-                            </div>
-                            <div>
-                                <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Latest App Version</p>
-                                <p class="text-sm font-medium text-slate-900 mt-1">{{ $user->last_app_version ?? 'Not recorded' }}</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Recent Activity List -->
-                    @if($activityLogs->count() > 0)
-                    <div>
-                        <h4 class="font-semibold text-slate-900 mb-4">Recent Events</h4>
-                        <div class="space-y-3">
-                            @foreach($activityLogs as $log)
-                            <div class="border border-slate-200 rounded-lg p-4 hover:bg-slate-50 transition-colors">
-                                <div class="flex justify-between items-start">
-                                    <div>
-                                        <p class="font-medium text-slate-900">{{ ucfirst(str_replace('_', ' ', $log->activity_type)) }}</p>
-                                        @if($log->details)
-                                        <p class="text-sm text-slate-600 mt-1">{{ $log->details }}</p>
-                                        @endif
-                                        <div class="flex gap-4 mt-2 text-xs text-slate-500">
-                                            @if($log->ip_address)
-                                            <span>IP: {{ $log->ip_address }}</span>
-                                            @endif
-                                            @if($log->app_version)
-                                            <span>Version: {{ $log->app_version }}</span>
-                                            @endif
-                                        </div>
-                                    </div>
-                                    <div class="text-right">
-                                        <p class="text-sm text-slate-600">{{ $log->created_at->format('M j') }}</p>
-                                        <p class="text-xs text-slate-500">{{ $log->created_at->format('H:i') }}</p>
-                                    </div>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                    @else
-                    <div class="bg-slate-50 rounded-lg p-6 text-center">
-                        <p class="text-slate-500 text-sm">No activity recorded yet.</p>
-                    </div>
-                    @endif
+                    @empty
+                    <div class="px-4 py-6 text-center text-sm text-slate-500 bg-white">No activity recorded yet.</div>
+                    @endforelse
                 </div>
             </div>
         </div>
 
-        <!-- Danger Zone -->
         <div class="bg-red-50 rounded-xl border border-red-200 shadow-sm overflow-hidden mt-5">
-            <div class="px-6 py-5">
-                <h3 class="text-lg font-semibold text-red-900 mb-2">Danger Zone</h3>
-                <p class="text-sm text-red-700 mb-6">Permanent actions that cannot be undone</p>
-
-                <!-- Delete Account Button -->
-                <form method="POST" action="{{ route('admin.users.destroy', $user) }}" onsubmit="return confirmDelete()">
+            <div class="px-4 py-4">
+                <h2 class="text-base font-bold text-red-900">Danger Zone</h2>
+                <p class="text-sm text-red-700 mt-1 mb-4">Permanent actions that cannot be undone.</p>
+                <form method="POST" action="{{ route('admin.users.destroy', $user) }}" onsubmit="return confirm('Are you absolutely sure you want to delete this user account? This action is irreversible.');">
                     @csrf
                     @method('DELETE')
-
                     @if ($user->id === auth()->id())
-                    <div class="p-4 bg-red-100 rounded-lg border border-red-300 text-red-900 text-sm">
-                        You cannot delete your own account.
-                    </div>
+                    <div class="p-3 bg-red-100 rounded-lg border border-red-300 text-red-900 text-sm">You cannot delete your own account.</div>
                     @else
-                    <button type="submit" class="px-6 py-2.5 rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium transition-colors shadow-sm inline-flex items-center gap-2">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <button type="submit" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium text-sm shadow-sm inline-flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
                         </svg>
                         Delete Account
@@ -487,33 +245,20 @@
     </div>
 </div>
 
+@push('scripts')
 <script>
-    function showTab(event, tabName) {
-        // Prevent default link behavior
-        event.preventDefault();
-
-        // Hide all tab contents
-        document.querySelectorAll('.tab-content').forEach(content => {
-            content.classList.add('hidden');
-        });
-
-        // Remove active styles from all tab buttons
+    function showEditTab(tabName) {
+        document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
         document.querySelectorAll('.tab-button').forEach(button => {
             button.classList.remove('border-blue-500', 'text-blue-600');
             button.classList.add('border-transparent', 'text-slate-600');
         });
 
-        // Show selected tab content
-        const contentId = tabName + '-tab-content';
-        document.getElementById(contentId).classList.remove('hidden');
-
-        // Add active styles to clicked button
-        event.target.closest('.tab-button').classList.remove('border-transparent', 'text-slate-600');
-        event.target.closest('.tab-button').classList.add('border-blue-500', 'text-blue-600');
-    }
-
-    function confirmDelete() {
-        return confirm('Are you absolutely sure you want to delete this user account? This action is irreversible and all associated data will be permanently deleted.');
+        document.getElementById(tabName + '-tab-content')?.classList.remove('hidden');
+        const selected = document.getElementById(tabName + '-tab');
+        selected?.classList.add('border-blue-500', 'text-blue-600');
+        selected?.classList.remove('border-transparent', 'text-slate-600');
     }
 </script>
+@endpush
 @endsection

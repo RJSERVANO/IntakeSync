@@ -612,7 +612,7 @@ export default function Activity() {
 
     const medicationById = new Map<string, any>();
     (Array.isArray(medicationCache) ? medicationCache : []).forEach((med) => {
-      [med?.id, med?.local_id, med?.server_id].filter(Boolean).forEach((id) => medicationById.set(String(id), med));
+      [med?.id, med?.local_id, med?.server_id, med?.client_uuid].filter(Boolean).forEach((id) => medicationById.set(String(id), med));
     });
 
     const beverageRecords: NotificationItem[] = (Array.isArray(hydrationCache?.entries) ? hydrationCache.entries : [])
@@ -650,11 +650,12 @@ export default function Activity() {
       .filter((entry: any) => !clearedHistoryKeys.has(String(entry?.id)) && !clearedHistoryKeys.has(medicationHistoryCompositeKey(entry)))
       .filter((entry: any) => !deletedMedicationKeySet.has(String(entry?.medId || entry?.medication_id || entry?.medicationId || '')))
       .map((entry: any) => {
-        const med = medicationById.get(String(entry?.medId || entry?.medication_id || entry?.medicationId || ''));
+        const med = medicationById.get(String(entry?.medId || entry?.medication_id || entry?.medicationId || entry?.server_id || entry?.local_id || ''));
         const status = (entry?.status === 'skipped' ? 'skipped' : entry?.status === 'missed' ? 'missed' : entry?.status === 'snoozed' ? 'snoozed' : 'completed') as NotificationStatus;
         const when = entry?.loggedAt || entry?.logged_at || entry?.created_at || entry?.time || new Date().toISOString();
-        const medName = med?.name || entry?.medication_name || 'Medication';
+        const medName = med?.name || entry?.medicationName || entry?.medication_name || 'Medication';
         const isLate = isMedicationHistoryLate(entry);
+        const doseKey = entry?.dose_key || entry?.doseKey || `${entry?.medId || entry?.medication_id || entry?.server_id || med?.id || 'med'}:${entry?.time || when}`;
         return {
           id: `medication-history:${entry?.id || `${entry?.medId || entry?.medication_id}:${entry?.time}:${status}`}`,
           type: 'medication',
@@ -674,6 +675,9 @@ export default function Activity() {
             is_late: isLate,
             taken_status: isLate ? 'late' : status === 'completed' ? 'on_time' : null,
             doseTime: entry?.time || when,
+            dose_time: entry?.time || when,
+            doseKey,
+            dose_key: doseKey,
           },
         };
       });

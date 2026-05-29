@@ -765,8 +765,11 @@ export async function readMedicationHistoryCache<T = any[]>(user?: any | null): 
 export async function writeMedicationHistoryCache(user: any | null | undefined, data: any[]): Promise<void> {
   const ownerKey = getUserCacheIdentifier(user);
   if (!ownerKey) return;
-  await writeOwnedOfflineCache(getMedicationHistoryCacheKey(ownerKey), user, data);
-  emitMedicationHistoryUpdated();
+  const key = getMedicationHistoryCacheKey(ownerKey);
+  const current = await readOwnedOfflineCache<any[]>(key, user);
+  const changed = JSON.stringify(current?.data ?? []) !== JSON.stringify(data ?? []);
+  await writeOwnedOfflineCache(key, user, data);
+  if (changed) emitMedicationHistoryUpdated();
 }
 
 export async function readDeletedMedicationTombstones(user?: any | null): Promise<string[]> {

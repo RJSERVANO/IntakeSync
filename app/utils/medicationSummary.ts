@@ -22,9 +22,11 @@ export type MedicationSummaryMedication = {
 export type MedicationSummaryHistoryEntry = {
   id?: string | number;
   medId?: string | number;
+  medicationId?: string | number;
   medication_id?: string | number;
   server_id?: string | number;
   local_id?: string | number;
+  client_uuid?: string | number;
   medicationName?: string;
   medication_name?: string;
   medication_name_snapshot?: string;
@@ -40,6 +42,9 @@ export type MedicationSummaryHistoryEntry = {
   completed_at?: string;
   created_at?: string;
   updated_at?: string;
+  scheduled_date?: string;
+  dose_key?: string;
+  sync_status?: string;
   is_late?: boolean;
   isLate?: boolean;
   taken_status?: string | null;
@@ -57,10 +62,24 @@ export type MedicationSummaryHistoryEntry = {
 type NormalizedHistoryEntry = {
   id: string;
   medId: string;
+  medication_id?: string | number;
+  medicationId?: string | number;
+  server_id?: string | number;
+  local_id?: string | number;
+  client_uuid?: string | number;
   time: string;
+  scheduled_time?: string;
+  scheduled_date?: string;
+  dose_key?: string;
+  sync_status?: string;
   status: 'completed' | 'skipped' | 'missed' | 'snoozed';
   loggedAt?: string;
+  logged_at?: string;
+  taken_at?: string;
+  completed_at?: string;
+  is_late?: boolean;
   isLate?: boolean;
+  taken_status?: 'on_time' | 'late' | string | null;
   takenStatus?: 'on_time' | 'late' | string | null;
   medicationName?: string;
   dosage?: string;
@@ -132,6 +151,31 @@ export function normalizeMedicationIdKey(value?: string | number | null) {
   return String(value).trim();
 }
 
+export function normalizeMedicationHistoryStatus(status?: string | null): NormalizedHistoryEntry['status'] | null {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'completed' || normalized === 'taken') return 'completed';
+  if (normalized === 'missed') return 'missed';
+  if (normalized === 'skipped') return 'skipped';
+  if (normalized === 'snoozed') return 'snoozed';
+  return null;
+}
+
+function getLocalDoseDateParts(time: string) {
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return null;
+  return {
+    date: toDateStringLocal(date),
+    minute: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
+  };
+}
+
+export function getStableMedicationDoseKey(medicationIdentity: string | number | null | undefined, scheduledTime: string) {
+  const identity = normalizeMedicationIdKey(medicationIdentity);
+  const parts = getLocalDoseDateParts(scheduledTime);
+  if (!identity || !parts) return '';
+  return `${identity}:${parts.date}:${parts.minute}`;
+}
+
 function isSameDoseTime(entryTime: string, scheduledTime: string) {
   const entry = new Date(entryTime);
   const scheduled = new Date(scheduledTime);
@@ -146,6 +190,22 @@ export function getMedicationIdentityValues(med: Partial<MedicationSummaryMedica
     med?.local_id,
     med?.client_uuid,
     med?.id,
+    med?.medication_id,
+    med?.medicationId,
+    med?.medId,
+  ]
+    .map(normalizeMedicationIdKey)
+    .filter(Boolean);
+}
+
+export function getMedicationHistoryIdentityValues(entry: Partial<MedicationSummaryHistoryEntry> | any) {
+  return [
+    entry?.server_id,
+    entry?.medication_id,
+    entry?.medicationId,
+    entry?.medId,
+    entry?.local_id,
+    entry?.client_uuid,
   ]
     .map(normalizeMedicationIdKey)
     .filter(Boolean);
@@ -169,10 +229,10 @@ export function sameMedication(a: Partial<MedicationSummaryMedication> | any, b:
 
 function normalizeHistoryEntry(entry: MedicationSummaryHistoryEntry): NormalizedHistoryEntry | null {
   const time = entry.scheduled_time || entry.time;
-  const status = entry.status;
-  const medId = entry.medId ?? entry.medication_id ?? entry.server_id ?? entry.local_id;
+  const status = normalizeMedicationHistoryStatus(entry.status);
+  const identities = getMedicationHistoryIdentityValues(entry);
+  const medId = identities[0] ?? entry.medId ?? entry.medication_id ?? entry.server_id ?? entry.local_id;
   if (!time || !medId || !status) return null;
-  if (!['completed', 'skipped', 'missed', 'snoozed'].includes(status)) return null;
 
   const loggedAt = entry.loggedAt || entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at;
   const scheduledTime = new Date(time).getTime();
@@ -186,10 +246,24 @@ function normalizeHistoryEntry(entry: MedicationSummaryHistoryEntry): Normalized
   return {
     id: String(entry.id ?? entry.local_id ?? `${medId}:${time}:${status}`),
     medId: String(medId),
+    medication_id: entry.medication_id,
+    medicationId: entry.medicationId,
+    server_id: entry.server_id,
+    local_id: entry.local_id,
+    client_uuid: entry.client_uuid,
     time,
+    scheduled_time: entry.scheduled_time || time,
+    scheduled_date: entry.scheduled_date || getLocalDoseDateParts(time)?.date,
+    dose_key: entry.dose_key || getStableMedicationDoseKey(medId, time),
+    sync_status: entry.sync_status,
     status: status as NormalizedHistoryEntry['status'],
     loggedAt,
+    logged_at: entry.logged_at || loggedAt,
+    taken_at: entry.taken_at,
+    completed_at: entry.completed_at,
+    is_late: status === 'completed' ? explicitLate || derivedLate : false,
     isLate: status === 'completed' ? explicitLate || derivedLate : false,
+    taken_status: status === 'completed' ? (explicitLate || derivedLate ? 'late' : 'on_time') : null,
     takenStatus: status === 'completed' ? (explicitLate || derivedLate ? 'late' : 'on_time') : null,
     medicationName: entry.medicationName || entry.medication_name_snapshot || entry.medication?.name || entry.medication_name,
     dosage: entry.dosage_snapshot || entry.medication?.dosage || entry.dosage,
@@ -197,17 +271,29 @@ function normalizeHistoryEntry(entry: MedicationSummaryHistoryEntry): Normalized
   };
 }
 
-function getDoseMinuteKey(entry: NormalizedHistoryEntry) {
-  const date = new Date(entry.time);
-  if (Number.isNaN(date.getTime())) return `${entry.medId}:${entry.id}`;
-  date.setSeconds(0, 0);
-  return `${entry.medId}:${date.toISOString().slice(0, 16)}`;
+function getHistoryNameDoseKey(entry: NormalizedHistoryEntry) {
+  const parts = getLocalDoseDateParts(entry.time);
+  const name = String(entry.medicationName || '').trim().toLowerCase();
+  const dosage = String(entry.dosage || '').trim().toLowerCase();
+  if (!parts || !name) return '';
+  return `name:${name}:${dosage}:${parts.date}:${parts.minute}`;
+}
+
+function getDoseMinuteKeys(entry: NormalizedHistoryEntry) {
+  const identities = getMedicationHistoryIdentityValues(entry);
+  const keys = identities
+    .map((identity) => getStableMedicationDoseKey(identity, entry.time))
+    .filter(Boolean);
+  const nameKey = getHistoryNameDoseKey(entry);
+  if (nameKey) keys.push(nameKey);
+  return Array.from(new Set(keys.length ? keys : [`fallback:${entry.medId}:${entry.id}`]));
 }
 
 function getHistoryStatusPriority(status: NormalizedHistoryEntry['status']) {
   if (status === 'completed') return 4;
-  if (status === 'snoozed') return 3;
-  if (status === 'missed' || status === 'skipped') return 2;
+  if (status === 'skipped') return 3;
+  if (status === 'snoozed') return 2;
+  if (status === 'missed') return 1;
   return 1;
 }
 
@@ -220,12 +306,15 @@ function getHistorySortTime(entry: NormalizedHistoryEntry) {
 
 export function dedupeMedicationHistory(entries: MedicationSummaryHistoryEntry[]) {
   const byDose = new Map<string, NormalizedHistoryEntry>();
+  const canonicalByAlias = new Map<string, string>();
   entries.map(normalizeHistoryEntry).filter(Boolean).forEach((entry) => {
     const normalized = entry as NormalizedHistoryEntry;
-    const key = getDoseMinuteKey(normalized);
+    const aliases = getDoseMinuteKeys(normalized);
+    const key = aliases.map((alias) => canonicalByAlias.get(alias)).find(Boolean) || aliases[0];
     const existing = byDose.get(key);
     if (!existing) {
       byDose.set(key, normalized);
+      aliases.forEach((alias) => canonicalByAlias.set(alias, key));
       return;
     }
 
@@ -237,9 +326,56 @@ export function dedupeMedicationHistory(entries: MedicationSummaryHistoryEntry[]
     ) {
       byDose.set(key, normalized);
     }
+    aliases.forEach((alias) => canonicalByAlias.set(alias, key));
   });
 
   return Array.from(byDose.values()).sort((a, b) => getHistorySortTime(b) - getHistorySortTime(a));
+}
+
+export function buildPendingMedicationHistoryEntries(actions: any[] = [], meds: MedicationSummaryMedication[] = []) {
+  return actions
+    .filter((item) => ['MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item?.action_type))
+    .map((item) => {
+      const payload = item.payload || {};
+      const med = meds.find((candidate) => {
+        const candidateIds = new Set(getMedicationIdentityValues(candidate));
+        return getMedicationHistoryIdentityValues({ ...payload, medId: payload.medId || item.local_id })
+          .some((identity) => candidateIds.has(identity));
+      });
+      const status = item.action_type === 'MARK_MEDICATION_TAKEN'
+        ? 'completed'
+        : item.action_type === 'MARK_MEDICATION_MISSED'
+          ? 'missed'
+          : 'snoozed';
+      const time = payload.scheduled_time || payload.time;
+      if (!time) return null;
+      const medId = payload.medId || payload.medication_id || payload.server_id || med?.id || item.local_id;
+      return {
+        id: item.local_id || payload.client_uuid || `${item.action_type}:${medId}:${time}`,
+        medId,
+        medication_id: payload.medication_id,
+        medicationId: payload.medicationId,
+        server_id: payload.server_id,
+        local_id: payload.local_id || item.local_id,
+        client_uuid: payload.client_uuid || item.local_id,
+        medicationName: payload.medicationName || payload.medication_name || med?.name,
+        dosage: payload.dosage || med?.dosage,
+        status,
+        time,
+        scheduled_time: time,
+        scheduled_date: payload.scheduled_date || getLocalDoseDateParts(time)?.date,
+        loggedAt: payload.logged_at || payload.taken_at || item.created_at,
+        logged_at: payload.logged_at || payload.taken_at || item.created_at,
+        taken_at: payload.taken_at,
+        is_late: payload.is_late,
+        isLate: payload.isLate,
+        taken_status: payload.taken_status,
+        takenStatus: payload.takenStatus,
+        dose_key: payload.dose_key || getStableMedicationDoseKey(medId, time),
+        sync_status: item.status || 'pending',
+      };
+    })
+    .filter(Boolean) as MedicationSummaryHistoryEntry[];
 }
 
 export function dedupeMedicationHistoryForToday(entries: MedicationSummaryHistoryEntry[], now = new Date()) {
@@ -423,7 +559,14 @@ export function getMedicationDoseOccurrencesForDate(med: MedicationSummaryMedica
 }
 
 function medIdentityMatchesHistory(med: MedicationSummaryMedication, entry: NormalizedHistoryEntry) {
-  return getMedicationIdentityValues(med).some((identity) => identity === entry.medId);
+  const medIdentities = new Set(getMedicationIdentityValues(med));
+  if (getMedicationHistoryIdentityValues(entry).some((identity) => medIdentities.has(identity))) return true;
+  const medName = String(med.name || '').trim().toLowerCase();
+  const entryName = String(entry.medicationName || '').trim().toLowerCase();
+  const medDosage = String(med.dosage || '').trim().toLowerCase();
+  const entryDosage = String(entry.dosage || '').trim().toLowerCase();
+  if (!medName || medName !== entryName) return false;
+  return !medDosage || !entryDosage || medDosage === entryDosage;
 }
 
 function getDoseHistoryEntry(
@@ -439,9 +582,7 @@ function getDoseHistoryEntry(
 }
 
 function doseKey(medId: string, time: string) {
-  const date = new Date(time);
-  date.setSeconds(0, 0);
-  return `${medId}:${date.toISOString().slice(0, 16)}`;
+  return getStableMedicationDoseKey(medId, time) || `${medId}:${time}`;
 }
 
 function statusForOccurrence(med: MedicationSummaryMedication, time: string, history: NormalizedHistoryEntry[], now: Date) {

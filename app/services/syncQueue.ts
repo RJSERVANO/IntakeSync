@@ -4,15 +4,18 @@ import {
   cacheOwnerMatches,
   getCacheOwner,
   getMedicationCacheKey,
+  readMedicationHistoryCache,
   getUserCacheIdentifier,
   getUserScopedKey,
   readOfflineCache,
+  writeMedicationHistoryCache,
   writeOfflineCache,
   getCachedSession,
 } from './offlineStorage';
 import { emitSyncCompleted } from './homeEvents';
 import { captureAuthSessionContext, getCurrentAuthSessionVersion, isAuthSessionContextCurrent, isCurrentAuthSessionVersion } from './authSession';
 import { logPerf, perfNow } from '../utils/perf';
+import { dedupeMedicationHistory, getMedicationHistoryIdentityValues } from '../utils/medicationSummary';
 
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed' | 'failed_non_retryable';
 export type SyncQueueAction =
@@ -368,6 +371,37 @@ async function sendItem(item: SyncQueueItem, token: string) {
   }
 }
 
+async function markMedicationHistoryActionSynced(item: SyncQueueItem, response: any, user?: any | null) {
+  if (!['MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item.action_type)) return;
+  const history = await readMedicationHistoryCache<any[]>(user);
+  if (!Array.isArray(history)) return;
+  const payload = item.payload || {};
+  const actionIdentities = new Set(getMedicationHistoryIdentityValues({
+    ...payload,
+    medId: payload.medId || payload.medication_id || payload.server_id,
+    local_id: payload.local_id || item.local_id,
+    client_uuid: payload.client_uuid || item.local_id,
+  }));
+  const actionTime = new Date(payload.scheduled_time || payload.time || '').getTime();
+  const next = dedupeMedicationHistory(history.map((entry) => {
+    const entryTime = new Date(entry?.scheduled_time || entry?.time || '').getTime();
+    const sameDose = Number.isFinite(actionTime)
+      && Number.isFinite(entryTime)
+      && Math.abs(entryTime - actionTime) < 60 * 1000
+      && getMedicationHistoryIdentityValues(entry).some((identity) => actionIdentities.has(identity));
+    if (!sameDose && String(entry?.id) !== String(item.local_id)) return entry;
+    return {
+      ...entry,
+      id: response?.id || entry.id,
+      server_id: payload.server_id || entry.server_id,
+      medication_id: payload.medication_id || entry.medication_id,
+      sync_status: 'synced',
+      updated_at: response?.updated_at || new Date().toISOString(),
+    };
+  }));
+  await writeMedicationHistoryCache(user, next);
+}
+
 export async function enqueueSyncAction(action: EnqueueInput) {
   const now = new Date().toISOString();
   const session = await getCachedSession();
@@ -635,6 +669,7 @@ export async function processSyncQueue(
         }
         if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: 'synced', updated_at: new Date().toISOString(), last_error: null };
         synced += 1;
+        await markMedicationHistoryActionSynced(item, response, currentUser);
         await onSynced?.(item, response);
       } catch (error: any) {
         if (api.isStaleSessionError(error) || !(await isAuthSessionContextCurrent(sessionContext))) {
@@ -646,6 +681,7 @@ export async function processSyncQueue(
         if (safeDuplicate || safeMissing) {
           if (index >= 0) nextQueue[index] = { ...nextQueue[index], status: 'synced', updated_at: new Date().toISOString(), last_error: null };
           synced += 1;
+          await markMedicationHistoryActionSynced(item, null, currentUser);
           continue;
         }
         const nextRetryCount = index >= 0 ? nextQueue[index].retry_count + 1 : item.retry_count + 1;

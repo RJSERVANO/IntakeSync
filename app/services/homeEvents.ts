@@ -34,7 +34,6 @@ export function emitMedicationUpdated() {
 
 export function emitMedicationHistoryUpdated() {
   DeviceEventEmitter.emit(MEDICATION_HISTORY_UPDATED_EVENT, { at: Date.now() });
-  emitHomeRefresh('medication-history');
 }
 
 export function emitProfileUpdated() {
@@ -54,4 +53,8 @@ export function emitSyncCompleted(result?: any) {
 
 export function subscribeHomeRefresh(listener: (event: { reason?: HomeRefreshReason; at?: number }) => void) {
   return DeviceEventEmitter.addListener(HOME_REFRESH_EVENT, listener);
+}
+
+export function subscribeMedicationHistoryUpdated(listener: (event: { at?: number }) => void) {
+  return DeviceEventEmitter.addListener(MEDICATION_HISTORY_UPDATED_EVENT, listener);
 }

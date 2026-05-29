@@ -9,6 +9,7 @@ use DateTime;
 use DateInterval;
 // optional DB model
 use App\Models\HydrationEntry;
+use App\Models\Notification as NotificationModel;
 use App\Models\User;
 
 class HydrationController
@@ -347,6 +348,7 @@ class HydrationController
                     ->where('client_uuid', $clientUuid)
                     ->first();
                 if ($existing) {
+                    $this->persistHydrationActivityNotification($existing, $user);
                     return response()->json($this->entryResponse($existing), 200);
                 }
             }
@@ -362,6 +364,7 @@ class HydrationController
                 'drink_label' => $drinkLabel,
                 'created_at' => now(),
             ]);
+            $this->persistHydrationActivityNotification($e, $user);
             Log::debug('Hydration add (db)', ['user' => $user->id, 'entry_id' => $e->id]);
             return response()->json($this->entryResponse($e), 201);
         }
@@ -389,6 +392,47 @@ class HydrationController
         $this->writeData($user->id, $data);
         Log::debug('Hydration add', ['user' => $user->id, 'entry' => $entry]);
         return response()->json($entry, 201);
+    }
+
+    private function persistHydrationActivityNotification(HydrationEntry $entry, User $user): void
+    {
+        if (!class_exists(NotificationModel::class)) {
+            return;
+        }
+
+        try {
+            $scheduledTime = $entry->created_at ?: now();
+            $drink = $entry->drink_label ?: str_replace('_', ' ', $entry->beverage_type ?: 'water');
+            $amount = (int) $entry->amount_ml;
+
+            NotificationModel::firstOrCreate(
+                [
+                    'user_id' => $user->id,
+                    'type' => 'hydration',
+                    'status' => 'completed',
+                    'scheduled_time' => $scheduledTime,
+                    'title' => 'Hydration logged',
+                ],
+                [
+                    'body' => trim("{$amount} ml {$drink} recorded"),
+                    'completed_at' => $scheduledTime,
+                    'actioned_at' => $scheduledTime,
+                    'opened_at' => $scheduledTime,
+                    'data' => [
+                        'source' => 'hydration_entry',
+                        'hydration_entry_id' => $entry->id,
+                        'amount_ml' => $amount,
+                        'beverage_type' => $entry->beverage_type ?: 'water',
+                    ],
+                ]
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Unable to persist hydration notification activity', [
+                'user_id' => $user->id,
+                'entry_id' => $entry->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     // POST /api/hydration/goal
