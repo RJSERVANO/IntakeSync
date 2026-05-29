@@ -12,13 +12,13 @@
                 <p class="text-slate-500 mt-2">Manage all platform users and their permissions</p>
             </div>
             <div class="flex items-center gap-3 mt-6 md:mt-0">
-                <button class="flex items-center gap-2 px-4 py-2 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors font-medium text-sm">
+                <button type="button" disabled title="Filter controls are not configured yet" class="flex items-center gap-2 px-4 py-2 text-slate-400 border border-slate-200 rounded-lg bg-slate-50 font-medium text-sm cursor-not-allowed">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
                     </svg>
                     Filter
                 </button>
-                <button class="flex items-center gap-2 px-4 py-2 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors font-medium text-sm">
+                <button type="button" disabled title="Export is not configured yet" class="flex items-center gap-2 px-4 py-2 text-slate-400 border border-slate-200 rounded-lg bg-slate-50 font-medium text-sm cursor-not-allowed">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3v-6"></path>
                     </svg>

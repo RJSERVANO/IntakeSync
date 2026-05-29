@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../app/api';
 import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../services/authSession';
-import { getCachedSession, mergeLocalAvatarIntoUser, updateCachedUser } from '../services/offlineStorage';
+import { getCachedSession, mergeLocalAvatarIntoUser, readProfileCache, updateCachedUser } from '../services/offlineStorage';
 
 interface NormalizedUser {
   [key: string]: any;
@@ -23,8 +23,9 @@ export default function useUser(token?: string) {
       const context = await captureAuthSessionContext(token);
       if (!(await isAuthSessionContextCurrent(context))) return;
       const cached = await getCachedSession();
+      const cachedProfile = await readProfileCache<any>(cached?.user ?? null);
       if (cached?.user) {
-        const cachedUser = await mergeLocalAvatarIntoUser(cached.user);
+        const cachedUser = await mergeLocalAvatarIntoUser(cachedProfile || cached.user);
         setUser(cachedUser);
         setLoading(false);
       }
@@ -37,6 +38,14 @@ export default function useUser(token?: string) {
         dateOfBirth: data.date_of_birth || data.dateOfBirth || undefined,
         emergencyContact: data.emergency_contact || data.emergencyContact || undefined,
       };
+      const profileTime = new Date(cachedProfile?.local_updated_at || cachedProfile?.updated_at || 0).getTime();
+      const remoteTime = new Date(merged?.updated_at || 0).getTime();
+      if (Number.isFinite(profileTime) && profileTime > 0 && (!Number.isFinite(remoteTime) || profileTime > remoteTime)) {
+        const localProfile = await mergeLocalAvatarIntoUser(cachedProfile);
+        if (!(await isAuthSessionContextCurrent(context))) return;
+        setUser(localProfile);
+        return;
+      }
       const withLocalAvatar = await mergeLocalAvatarIntoUser(merged);
       if (!(await isAuthSessionContextCurrent(context))) return;
       setUser(withLocalAvatar);

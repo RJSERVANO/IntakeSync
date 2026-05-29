@@ -23,7 +23,6 @@ import {
   searchCachedOtcMedicinesWithMeta,
   updateCachedUser,
   writeHydrationCache,
-  writeMedicationCache,
   writeOwnedOfflineCache,
   writeOtcSearchCache,
 } from '../services/offlineStorage';
@@ -554,7 +553,7 @@ export default function Home() {
         } else {
           setMedicineSearchMessage(
             api.isNetworkError(err)
-              ? 'No offline medication search data available. You can still manually enter a medication name.'
+              ? 'OTC search requires an internet connection unless previous results are available offline.'
               : 'Could not search medications. Please try again.'
           );
           setShowSuggestions(true);
@@ -724,11 +723,9 @@ export default function Home() {
             api.get('/hydration', activeToken, 3000).catch(() => null),
             api.get('/medications/upcoming', activeToken, 3000).catch(() => null),
             api.get('/medications/stats', activeToken, 3000).catch(() => null),
-            api.get('/medications', activeToken, 3000).catch(() => null),
           ]).then((results) => {
             const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
-            const medicationsData = results[3].status === 'fulfilled' ? results[3].value : null;
             
             const hydrationGoal = resolveHydrationGoal(hydrationData);
             const writeHydration = async () => {
@@ -751,11 +748,6 @@ export default function Home() {
               if (!current) return;
               setUpcomingMedications((currentItems) => currentItems.length ? currentItems : (Array.isArray(upcoming) ? upcoming : []));
             });
-            if (backgroundUser && Array.isArray(medicationsData)) {
-              void isAuthSessionContextCurrent(context).then((current) => {
-                if (current) writeMedicationCache(backgroundUser, medicationsData).catch(() => {});
-              });
-            }
             void writeHydration().then(() => applyCacheFirstHomeSummary(backgroundUser, 'home:hydration_event')).catch(() => undefined);
             const owner = getCacheOwner(backgroundUser);
             if ((owner.owner_id || owner.owner_email) && hydrationData) {
@@ -776,7 +768,7 @@ export default function Home() {
             });
             logPerf('Home backend refresh', backendStartedAt, {
               trigger: 'startup_background',
-              endpointCount: 4,
+              endpointCount: 3,
             });
           }).catch(() => {
             void isAuthSessionContextCurrent(context).then((current) => {
@@ -784,7 +776,7 @@ export default function Home() {
             });
             logPerf('Home backend refresh', backendStartedAt, {
               trigger: 'startup_background',
-              endpointCount: 4,
+              endpointCount: 3,
               failed: true,
             });
           }).finally(() => {
@@ -1245,6 +1237,7 @@ export default function Home() {
       const cachedEntries = Array.isArray(cachedHydration?.entries) ? cachedHydration.entries : [];
       const currentEntries = Array.isArray(hydrationEntries) ? hydrationEntries : [];
       const newEntries = mergeHydrationEntries([...currentEntries, entry], cachedEntries);
+      api.invalidateApiCacheGroup('hydration', routeToken as string | undefined);
       await persistHomeHydrationSnapshot(newEntries, goal);
 
       const queuePayload: BeverageLogPayload = {

@@ -33,6 +33,12 @@ export default function Profile() {
   const googleAvatarUri = getUserRemoteAvatarUri(displayUser);
   const avatarSource = getAvatarSource(selectedAvatar) || (googleAvatarUri ? { uri: googleAvatarUri } : null);
 
+  const isProfileNewerThanUser = React.useCallback((profile: any, nextUser: any) => {
+    const profileTime = new Date(profile?.local_updated_at || profile?.updated_at || 0).getTime();
+    const userTime = new Date(nextUser?.local_updated_at || nextUser?.updated_at || 0).getTime();
+    return Number.isFinite(profileTime) && profileTime > 0 && (!Number.isFinite(userTime) || profileTime > userTime);
+  }, []);
+
   const applyVisibleUser = React.useCallback(async (nextUser: any) => {
     const withAvatar = await mergeLocalAvatarIntoUser(nextUser);
     setVisibleUser(withAvatar);
@@ -156,9 +162,11 @@ export default function Profile() {
       if (user) {
         const freshUser = await mergeLocalAvatarIntoUser(user);
         if (!mounted || !(await isAuthSessionContextCurrent(context))) return;
-        setVisibleUser(freshUser);
-        setSelectedAvatar(getUserSelectedAvatar(freshUser));
-        await writeProfileCache(freshUser, freshUser);
+        if (!isProfileNewerThanUser(cachedProfile, freshUser)) {
+          setVisibleUser(freshUser);
+          setSelectedAvatar(getUserSelectedAvatar(freshUser));
+          await writeProfileCache(freshUser, freshUser);
+        }
       }
       setSyncing(false);
     })().catch(() => {
@@ -168,7 +176,7 @@ export default function Profile() {
       mounted = false;
       setSyncing(false);
     };
-  }, [token, user]);
+  }, [isProfileNewerThanUser, token, user]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -178,9 +186,13 @@ export default function Profile() {
           if (!active || !token || !user) return;
           const freshUser = await mergeLocalAvatarIntoUser(user);
           if (!active) return;
-          setVisibleUser(freshUser);
-          setSelectedAvatar(getUserSelectedAvatar(freshUser));
-          await writeProfileCache(freshUser, freshUser);
+          const session = await getCachedSession();
+          const cachedProfile = await readProfileCache<any>(session?.user ?? null);
+          if (!isProfileNewerThanUser(cachedProfile, freshUser)) {
+            setVisibleUser(freshUser);
+            setSelectedAvatar(getUserSelectedAvatar(freshUser));
+            await writeProfileCache(freshUser, freshUser);
+          }
         })
         .catch(() => undefined)
         .finally(() => {
@@ -189,7 +201,7 @@ export default function Profile() {
       return () => {
         active = false;
       };
-    }, [refreshFromCache, token, user])
+    }, [isProfileNewerThanUser, refreshFromCache, token, user])
   );
 
   const getInitials = (name: string = '') => {

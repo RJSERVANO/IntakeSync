@@ -3,12 +3,12 @@
 @section('title', 'User Details - ' . $user->name)
 
 @section('content')
-<div class="min-h-screen bg-slate-50 py-4">
-    <div class="max-w-7xl mx-auto px-6">
+<div class="min-h-screen bg-slate-50 py-3">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
         <!-- Page Header -->
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-5">
             <div>
-                <div class="flex items-center gap-3 mb-4">
+                <div class="flex items-center gap-3 mb-2">
                     <a href="{{ route('admin.users.index') }}" class="text-slate-500 hover:text-slate-700 font-medium">Users</a>
                     <span class="text-slate-400">/</span>
                     <span class="text-slate-900 font-medium">{{ $user->name }}</span>
@@ -16,7 +16,7 @@
                 <h1 class="text-3xl font-bold text-slate-900">{{ $user->name }}</h1>
                 <p class="text-slate-500 mt-1">{{ $user->email }}</p>
             </div>
-            <div class="flex items-center gap-3 mt-6 md:mt-0">
+            <div class="flex items-center gap-3">
                 <a href="{{ route('admin.users.edit', $user) }}" class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm shadow-sm">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
@@ -33,8 +33,8 @@
         </div>
 
         <!-- User Info Card -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
-            <div class="px-8 py-8 grid grid-cols-2 md:grid-cols-5 gap-6">
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-5">
+            <div class="px-6 py-5 grid grid-cols-2 md:grid-cols-5 gap-5">
                 <div>
                     <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Name</p>
                     <p class="text-lg font-semibold text-slate-900 mt-2">{{ $user->name }}</p>
@@ -60,8 +60,8 @@
         </div>
 
         <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-blue-50 rounded-lg">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -75,7 +75,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-green-50 rounded-lg">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -89,7 +89,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-purple-50 rounded-lg">
                         <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -103,7 +103,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 hover:shadow-md transition-shadow">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4 hover:shadow-md transition-shadow">
                 <div class="flex items-center gap-4">
                     <div class="p-3 bg-amber-50 rounded-lg">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -118,8 +118,8 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
                 <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Today's Beverage Progress</p>
                 <p class="text-3xl font-bold text-slate-900 mt-2">{{ number_format($hydrationTodayTotal) }} ml</p>
                 <p class="text-sm text-slate-600 mt-1">{{ $hydrationTodayProgress }}% of {{ number_format($hydrationGoal) }} ml goal</p>
@@ -128,7 +128,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
                 <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">30-Day Beverage Mix</p>
                 <div class="mt-4 space-y-3">
                     @forelse($userBeverageBreakdown->take(3) as $item)
@@ -142,7 +142,7 @@
                 </div>
             </div>
 
-            <div class="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+            <div class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
                 <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Caffeine/Sugar Awareness</p>
                 <p class="text-3xl font-bold text-slate-900 mt-2">{{ number_format($userAwarenessFlags) }}</p>
                 <p class="text-sm text-slate-600 mt-1">medium or high caffeine/sugar logs in 30 days</p>
@@ -150,7 +150,7 @@
         </div>
 
         <!-- Tabs -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
             <!-- Tab Navigation -->
             <div class="border-b border-slate-100 overflow-x-auto">
                 <div class="flex min-w-max md:min-w-0" role="tablist" aria-label="User activity details">
@@ -182,7 +182,7 @@
             </div>
 
             <!-- Hydration Tab -->
-            <div id="hydration-content" class="tab-content p-8" role="tabpanel" aria-labelledby="hydration-tab">
+            <div id="hydration-content" class="tab-content p-6" role="tabpanel" aria-labelledby="hydration-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Beverage Entries</h3>
                 @if($hydrationEntries->count() > 0)
                 <div class="overflow-x-auto">
@@ -220,7 +220,7 @@
             </div>
 
             <!-- Medication Tab -->
-            <div id="medication-content" class="tab-content hidden p-8" role="tabpanel" aria-labelledby="medication-tab">
+            <div id="medication-content" class="tab-content hidden p-6" role="tabpanel" aria-labelledby="medication-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Active Medications</h3>
                 @if($medications->count() > 0)
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
@@ -253,12 +253,12 @@
                         <tbody class="divide-y divide-slate-100">
                             @foreach($medicationHistory as $history)
                             <tr class="hover:bg-slate-50 transition-colors">
-                                <td class="px-4 py-3 text-sm font-medium text-slate-900">{{ $history->medication_name }}</td>
-                                <td class="px-4 py-3 text-sm text-slate-600">{{ $history->dosage }}</td>
+                                <td class="px-4 py-3 text-sm font-medium text-slate-900">{{ $history->medication_name_snapshot ?: ($history->medication->name ?? 'Unknown') }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-600">{{ $history->dosage_snapshot ?: ($history->medication->dosage ?? '-') }}</td>
                                 <td class="px-4 py-3 text-sm">
                                     @php
-                                    $statusColor = $history->status === 'taken' ? 'text-green-600' :
-                                    ($history->status === 'missed' ? 'text-red-600' : 'text-amber-600');
+                                    $statusColor = in_array($history->status, ['taken', 'completed'], true) ? 'text-green-600' :
+                                    (in_array($history->status, ['missed', 'skipped'], true) ? 'text-red-600' : 'text-amber-600');
                                     @endphp
                                     <span class="{{ $statusColor }} font-semibold">{{ ucfirst($history->status) }}</span>
                                 </td>
@@ -275,7 +275,7 @@
             </div>
 
             <!-- Notifications Tab -->
-            <div id="notifications-content" class="tab-content hidden p-8" role="tabpanel" aria-labelledby="notifications-tab">
+            <div id="notifications-content" class="tab-content hidden p-6" role="tabpanel" aria-labelledby="notifications-tab">
                 <h3 class="text-lg font-semibold text-slate-900 mb-6">Recent Notifications</h3>
                 @if($notifications->count() > 0)
                 <div class="overflow-x-auto">
@@ -302,7 +302,7 @@
                                     @endphp
                                     <span class="{{ $statusColor }} font-semibold">{{ ucfirst($notification->status) }}</span>
                                 </td>
-                                <td class="px-4 py-3 text-sm text-slate-600">{{ $notification->scheduled_at ? \Carbon\Carbon::parse($notification->scheduled_at)->format('M j, Y g:i A') : '-' }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-600">{{ $notification->scheduled_time ? \Carbon\Carbon::parse($notification->scheduled_time)->format('M j, Y g:i A') : '-' }}</td>
                                 <td class="px-4 py-3 text-sm text-slate-600">{{ $notification->created_at->format('M j, Y g:i A') }}</td>
                             </tr>
                             @endforeach

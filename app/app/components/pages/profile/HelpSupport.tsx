@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Linking, Modal, View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
+import { Linking, Modal, View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import ThemedNoticeModal from '../../common/ThemedNoticeModal';
 import ScreenHeader from '../../common/ScreenHeader';
@@ -72,6 +73,7 @@ export default function HelpSupport() {
   const [expandedFAQ, setExpandedFAQ] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
   const [legalDoc, setLegalDoc] = useState<{ title: string; intro: string; icon: keyof typeof Ionicons.glyphMap; sections: typeof PRIVACY_SECTIONS } | null>(null);
+  const insets = useSafeAreaInsets();
 
   const openEmailSupport = async () => {
     const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(SUPPORT_SUBJECT)}&body=${encodeURIComponent(SUPPORT_BODY)}`;
@@ -243,8 +245,8 @@ export default function HelpSupport() {
         onClose={() => setNotice(null)}
       />
       <Modal visible={Boolean(legalDoc)} animationType="slide" onRequestClose={() => setLegalDoc(null)}>
-        <SafeAreaView style={styles.legalContainer}>
-          <View style={styles.legalHeader}>
+        <SafeAreaView style={styles.legalContainer} edges={['left', 'right', 'bottom']}>
+          <View style={[styles.legalHeader, { paddingTop: Math.max(insets.top, 12) + 10 }]}>
             <View style={styles.legalIcon}>
               <Ionicons name={legalDoc?.icon || 'document-text-outline'} size={24} color="#2563EB" />
             </View>
@@ -257,9 +259,22 @@ export default function HelpSupport() {
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.legalScroll} contentContainerStyle={styles.legalContent} showsVerticalScrollIndicator={false}>
-            {legalDoc?.sections.map((section) => (
-              <View style={styles.legalSectionCard} key={section.title}>
-                <Text style={styles.legalSectionTitle}>{section.title}</Text>
+            <View style={styles.legalSummaryCard}>
+              <Ionicons name="reader-outline" size={19} color="#2563EB" />
+              <Text style={styles.legalSummaryText}>{legalDoc?.intro}</Text>
+            </View>
+            {legalDoc?.sections.map((section, index) => (
+              <View style={[styles.legalSectionCard, index % 2 === 1 && styles.legalSectionCardAlt]} key={section.title}>
+                <View style={styles.legalAccent} />
+                <View style={styles.legalSectionHeader}>
+                  <View style={styles.legalBadge}>
+                    <Text style={styles.legalBadgeText}>{String(index + 1).padStart(2, '0')}</Text>
+                  </View>
+                  <View style={styles.legalSectionIcon}>
+                    <Ionicons name={index % 3 === 0 ? 'document-text-outline' : index % 3 === 1 ? 'checkmark-circle-outline' : 'shield-outline'} size={17} color="#2563EB" />
+                  </View>
+                  <Text style={styles.legalSectionTitle}>{section.title}</Text>
+                </View>
                 <Text style={styles.legalSectionBody}>{section.body}</Text>
               </View>
             ))}
@@ -403,7 +418,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingBottom: 16,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
@@ -451,19 +466,79 @@ const styles = StyleSheet.create({
     padding: 18,
     paddingBottom: 34,
   },
-  legalSectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+  legalSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    padding: 16,
+    borderColor: '#BFDBFE',
+    padding: 14,
     marginBottom: 12,
   },
+  legalSummaryText: {
+    flex: 1,
+    color: '#1E3A8A',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    textAlign: 'left',
+  },
+  legalSectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 15,
+    paddingLeft: 18,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  legalSectionCardAlt: {
+    backgroundColor: '#F8FAFC',
+  },
+  legalAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: '#2563EB',
+  },
+  legalSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  legalBadge: {
+    minWidth: 30,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  legalBadgeText: {
+    color: '#1E40AF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  legalSectionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   legalSectionTitle: {
+    flex: 1,
     color: '#0F172A',
     fontSize: 15,
     fontWeight: '900',
-    marginBottom: 7,
     textAlign: 'left',
   },
   legalSectionBody: {

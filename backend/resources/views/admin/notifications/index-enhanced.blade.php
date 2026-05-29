@@ -3,15 +3,15 @@
 @section('title', 'Notifications Management - Enhanced')
 
 @section('content')
-<div class="min-h-screen bg-slate-50 py-4">
-    <div class="max-w-7xl mx-auto px-6">
+<div class="min-h-screen bg-slate-50 py-3">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
         <!-- Page Header -->
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-5">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900">Notifications Management</h1>
                 <p class="text-slate-500 mt-2">Monitor notification delivery, engagement, and effectiveness metrics</p>
             </div>
-            <div class="flex items-center gap-3 mt-6 md:mt-0">
+            <div class="flex items-center gap-3 mt-3 md:mt-0">
                 <select id="timeRange" data-base-url="{{ route('admin.notifications.index') }}" class="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
                     <option value="7" {{ (int) $timeRange === 7 ? 'selected' : '' }}>Last 7 days</option>
                     <option value="30" {{ (int) $timeRange === 30 ? 'selected' : '' }}>Last 30 days</option>
@@ -21,9 +21,9 @@
         </div>
 
         <!-- Stats Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between mb-3">
                     <div class="p-3 bg-purple-50 rounded-xl">
                         <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"></path>
@@ -36,8 +36,8 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between mb-3">
                     <div class="p-3 bg-green-50 rounded-xl">
                         <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7l8 6 8-6M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2zM9 14l2 2 4-4"></path>
@@ -45,13 +45,13 @@
                     </div>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Delivered</p>
+                    <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Delivered / Created</p>
                     <p class="text-3xl font-bold text-slate-900">{{ number_format($deliveredNotifications) }}</p>
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between mb-3">
                     <div class="p-3 bg-blue-50 rounded-xl">
                         <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7zM15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
@@ -60,13 +60,13 @@
                 </div>
                 <div>
                     <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Open Rate</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $openRate }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">user engagement</p>
+                    <p class="text-3xl font-bold text-slate-900">{{ $openRate === null ? 'No data' : $openRate . '%' }}</p>
+                    <p class="text-xs text-slate-500 mt-2">backend opened/read records</p>
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                <div class="flex items-start justify-between mb-4">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                <div class="flex items-start justify-between mb-3">
                     <div class="p-3 bg-amber-50 rounded-xl">
                         <svg class="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M12 3l7 4v5c0 4.4-2.9 8.4-7 9-4.1-.6-7-4.6-7-9V7l7-4z"></path>
@@ -75,15 +75,15 @@
                 </div>
                 <div>
                     <p class="text-sm font-medium text-slate-500 uppercase tracking-wide mb-2">Effectiveness</p>
-                    <p class="text-3xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
-                    <p class="text-xs text-slate-500 mt-2">notifications actioned</p>
+                    <p class="text-3xl font-bold text-slate-900">{{ $effectivenessRate === null ? 'No data' : $effectivenessRate . '%' }}</p>
+                    <p class="text-xs text-slate-500 mt-2">notifications actioned/completed</p>
                 </div>
             </div>
         </div>
 
         <!-- Additional Metrics -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Snoozed</p>
@@ -100,7 +100,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Failed</p>
@@ -117,7 +117,7 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div>
                         <p class="text-sm font-medium text-slate-500 uppercase tracking-wide">Avg Response Time</p>
@@ -136,8 +136,8 @@
         </div>
 
         <!-- Failed Notifications Log -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-8">
-            <div class="px-6 py-5 border-b border-slate-100 bg-red-50">
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-5">
+            <div class="px-4 py-3 border-b border-slate-100 bg-red-50">
                 <h3 class="text-lg font-bold text-red-900">Failed Notifications Log</h3>
                 <p class="text-sm text-red-700 mt-1">Notifications that failed to deliver with error details</p>
             </div>
@@ -173,7 +173,7 @@
                         </tr>
                         @empty
                         <tr>
-                            <td colspan="5" class="px-6 py-8 text-center text-slate-400">
+                            <td colspan="5" class="px-6 py-5 text-center text-slate-400">
                                 <p class="text-sm">No failed notifications</p>
                             </td>
                         </tr>
@@ -184,36 +184,44 @@
         </div>
 
         <!-- Charts -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                <div class="flex items-center justify-between mb-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Daily Notification Volume</h3>
                         <p class="text-slate-500 text-sm">Last 30 days trend</p>
                     </div>
                 </div>
-                <div class="relative h-64 w-full">
+                @if(collect($notificationVolumeData)->sum('count') > 0)
+                <div class="relative h-44 w-full">
                     <canvas id="dailyVolumeChart"></canvas>
                 </div>
+                @else
+                <div class="h-24 rounded-lg bg-slate-50 flex items-center justify-center text-sm text-slate-500">No backend notification volume in this range.</div>
+                @endif
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-6">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                <div class="flex items-center justify-between mb-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Notification Types Distribution</h3>
                         <p class="text-slate-500 text-sm">Breakdown by notification type</p>
                     </div>
                 </div>
-                <div class="relative h-64 w-full">
+                @if($notificationTypeData->isNotEmpty())
+                <div class="relative h-44 w-full">
                     <canvas id="typesChart"></canvas>
                 </div>
+                @else
+                <div class="h-24 rounded-lg bg-slate-50 flex items-center justify-center text-sm text-slate-500">No notification types recorded.</div>
+                @endif
             </div>
         </div>
 
         <!-- Notification Effectiveness & User Interaction Status -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-6">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                <div class="flex items-center justify-between mb-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Engagement Status</h3>
                         <p class="text-slate-500 text-sm">User interaction breakdown</p>
@@ -235,32 +243,36 @@
                 </div>
             </div>
 
-            <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-                <div class="flex items-center justify-between mb-6">
+            <div class="bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                <div class="flex items-center justify-between mb-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Effectiveness Score</h3>
                         <p class="text-slate-500 text-sm">Notifications that were actioned</p>
                     </div>
                 </div>
-                <div class="flex flex-col items-center justify-center py-8">
+                @if($effectivenessRate === null)
+                <div class="h-24 rounded-lg bg-slate-50 flex items-center justify-center text-sm text-slate-500">No notification data yet.</div>
+                @else
+                <div class="flex flex-col items-center justify-center py-4">
                     <div
-                        class="relative flex h-44 w-44 items-center justify-center rounded-full"
+                        class="relative flex h-32 w-32 items-center justify-center rounded-full"
                         style="background: conic-gradient(#10b981 0deg {{ min(100, max(0, $effectivenessRate)) * 3.6 }}deg, #e2e8f0 {{ min(100, max(0, $effectivenessRate)) * 3.6 }}deg 360deg);"
                     >
                         <div class="absolute inset-3 rounded-full bg-white"></div>
                         <div class="absolute inset-0 rounded-full border border-slate-200"></div>
                         <div class="relative text-center">
-                            <p class="text-4xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
+                            <p class="text-3xl font-bold text-slate-900">{{ $effectivenessRate }}%</p>
                             <p class="text-xs text-slate-500 mt-1">effective</p>
                         </div>
                     </div>
                 </div>
+                @endif
             </div>
         </div>
 
         <!-- Recent Notifications with User Interaction -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <div class="px-6 py-5 border-b border-slate-100">
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-100">
                 <h3 class="text-lg font-bold text-slate-900">Recent Notifications</h3>
                 <p class="text-slate-500 text-sm">Latest notifications with user interaction status</p>
             </div>
@@ -293,8 +305,8 @@
                                 <span class="text-xs font-semibold text-slate-600">{{ $notif['type'] }}</span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold {{ $notif['status'] === 'delivered' ? 'bg-green-100 text-green-800' : ($notif['status'] === 'failed' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-800') }}">
-                                    {{ ucfirst($notif['status']) }}
+                                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold {{ $notif['status_key'] === 'delivered' || $notif['status_key'] === 'completed' ? 'bg-green-100 text-green-800' : ($notif['status_key'] === 'failed' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-800') }}">
+                                    {{ $notif['status'] }}
                                 </span>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">

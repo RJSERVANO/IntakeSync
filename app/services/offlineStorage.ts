@@ -16,6 +16,8 @@ export const SETTINGS_CACHE_KEY = '@intakesync:settings';
 export const NOTIFICATIONS_CACHE_KEY = '@intakesync:notifications';
 export const OTC_SEARCH_CACHE_KEY = '@intakesync:otc_search_cache:v1';
 export const OTC_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const OTC_SEARCH_CACHE_MAX_ITEMS = 200;
+const OTC_SEARCH_CACHE_MAX_QUERIES = 30;
 export const ONBOARDING_COMPLETE_KEY_PREFIX = '@intakesync:onboarding_complete:';
 export const ONBOARDING_PROGRESS_KEY_PREFIX = '@intakesync:onboarding_progress:';
 
@@ -404,7 +406,7 @@ export function filterOtcReferenceMedicines(items: any[]) {
 function dedupeOtcResults(items: any[]) {
   const byId = new Map<string, any>();
   filterOtcReferenceMedicines(items).forEach((item) => byId.set(getOtcCacheId(item), item));
-  return Array.from(byId.values());
+  return Array.from(byId.values()).slice(0, OTC_SEARCH_CACHE_MAX_ITEMS);
 }
 
 function isOtcCacheStale(savedAt?: string | null) {
@@ -470,11 +472,16 @@ export async function writeOtcSearchCache(query: string, results: any[]): Promis
       data: safeResults,
     },
   };
+  const recentQueries = Object.fromEntries(
+    Object.entries(queries)
+      .sort(([, a], [, b]) => new Date(b.saved_at).getTime() - new Date(a.saved_at).getTime())
+      .slice(0, OTC_SEARCH_CACHE_MAX_QUERIES)
+  );
   await writeOfflineCache(OTC_SEARCH_CACHE_KEY, {
     saved_at: now,
     source: 'backend',
     data: dedupeOtcResults([...(current?.data || []), ...safeResults]),
-    queries,
+    queries: recentQueries,
   });
 }
 
@@ -483,16 +490,12 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
   if (!normalizedQuery) return { results: [], isStale: false, savedAt: null, hasCache: false };
   const cache = await readOtcSearchCache();
   const terms = normalizedQuery.split(' ').filter(Boolean);
-  const bundledResults = BUNDLED_OTC_MEDICINES.filter((item) => {
-    const text = getOtcSearchableText(item);
-    return terms.every((term) => text.includes(term));
-  });
   if (!cache) {
     return {
-      results: bundledResults,
+      results: [],
       isStale: false,
       savedAt: null,
-      hasCache: bundledResults.length > 0,
+      hasCache: false,
     };
   }
 
@@ -500,7 +503,7 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
   const exactResults = dedupeOtcResults(exact?.data || []);
   if (exact && exactResults.length > 0) {
     return {
-      results: dedupeOtcResults([...exactResults, ...bundledResults]),
+      results: exactResults,
       isStale: isOtcCacheStale(exact.saved_at),
       savedAt: exact.saved_at,
       hasCache: true,
@@ -514,12 +517,11 @@ export async function searchCachedOtcMedicinesWithMeta(query: string): Promise<{
       byId.set(getOtcCacheId(item), item);
     }
   });
-  bundledResults.forEach((item) => byId.set(getOtcCacheId(item), item));
   return {
-    results: Array.from(byId.values()),
+    results: Array.from(byId.values()).slice(0, OTC_SEARCH_CACHE_MAX_ITEMS),
     isStale: isOtcCacheStale(cache.saved_at),
     savedAt: cache.saved_at,
-    hasCache: cache.data.length > 0 || bundledResults.length > 0,
+    hasCache: cache.data.length > 0,
   };
 }
 

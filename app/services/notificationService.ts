@@ -1489,11 +1489,32 @@ export async function markLocalNotificationRead(ownerArg: CacheOwner | null | un
   if (!owner || !recordIdOrScheduleKey) return;
   const now = new Date().toISOString();
   const current = await readLocalNotificationInbox(owner);
-  await writeLocalNotificationInbox(owner, current.map((record) => (
-    matchesLocalNotificationRecord(record, recordIdOrScheduleKey)
-      ? { ...record, opened_at: record.opened_at || now, read_at: record.read_at || now }
-      : record
-  )));
+  let matched = false;
+  const next = current.map((record) => {
+    if (!matchesLocalNotificationRecord(record, recordIdOrScheduleKey)) return record;
+    matched = true;
+    return { ...record, opened_at: record.opened_at || now, read_at: record.read_at || now };
+  });
+  if (!matched) {
+    next.push({
+      id: String(recordIdOrScheduleKey),
+      type: 'general',
+      title: 'Notification',
+      message: '',
+      status: 'delivered',
+      scheduled_at: null,
+      scheduled_time: null,
+      created_at: now,
+      delivered_at: now,
+      opened_at: now,
+      read_at: now,
+      hidden_at: null,
+      cleared_at: null,
+      deleted_at: null,
+      metadata: { local_state_marker: true, notification_id: String(recordIdOrScheduleKey) },
+    });
+  }
+  await writeLocalNotificationInbox(owner, next);
   DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
 }
 
@@ -1502,11 +1523,32 @@ export async function markLocalNotificationCleared(ownerArg: CacheOwner | null |
   if (!owner || !recordIdOrScheduleKey) return;
   const now = new Date().toISOString();
   const current = await readLocalNotificationInbox(owner);
-  await writeLocalNotificationInbox(owner, current.map((record) => (
-    matchesLocalNotificationRecord(record, recordIdOrScheduleKey)
-      ? { ...record, status: 'cleared', opened_at: record.opened_at || now, read_at: record.read_at || now, cleared_at: record.cleared_at || now, hidden_at: record.hidden_at || now, metadata: { ...(record.metadata || {}), recent_hidden: true } }
-      : record
-  )));
+  let matched = false;
+  const next = current.map((record) => {
+    if (!matchesLocalNotificationRecord(record, recordIdOrScheduleKey)) return record;
+    matched = true;
+    return { ...record, status: 'cleared' as const, opened_at: record.opened_at || now, read_at: record.read_at || now, cleared_at: record.cleared_at || now, hidden_at: record.hidden_at || now, metadata: { ...(record.metadata || {}), recent_hidden: true } };
+  });
+  if (!matched) {
+    next.push({
+      id: String(recordIdOrScheduleKey),
+      type: 'general',
+      title: 'Notification',
+      message: '',
+      status: 'cleared' as const,
+      scheduled_at: null,
+      scheduled_time: null,
+      created_at: now,
+      delivered_at: now,
+      opened_at: now,
+      read_at: now,
+      hidden_at: now,
+      cleared_at: now,
+      deleted_at: null,
+      metadata: { local_state_marker: true, recent_hidden: true, notification_id: String(recordIdOrScheduleKey) },
+    });
+  }
+  await writeLocalNotificationInbox(owner, next);
   DeviceEventEmitter.emit(NOTIFICATIONS_UPDATED_EVENT, { at: Date.now(), source: 'local-inbox' });
 }
 
@@ -1655,6 +1697,7 @@ export async function upsertMedicationTakenNotification(ownerArg: CacheOwner | n
   medicationName?: string | null;
   doseTime: string;
   takenAt?: string;
+  isLate?: boolean;
   dosage?: string | null;
   scheduleKey?: string | null;
   doseKey?: string | null;
@@ -1662,11 +1705,12 @@ export async function upsertMedicationTakenNotification(ownerArg: CacheOwner | n
   const owner = await resolveNotificationOwner(ownerArg);
   if (!owner) return;
   const takenAt = input.takenAt || new Date().toISOString();
+  const titleSuffix = input.isLate ? 'taken late' : 'taken';
   const id = `medication-history:${input.medicationId}:${input.doseTime}:completed`;
   await upsertLocalNotificationRecord(owner, {
     id,
     type: 'medication',
-    title: `${input.medicationName || 'Medication'} taken`,
+    title: `${input.medicationName || 'Medication'} ${titleSuffix}`,
     message: `Scheduled for ${new Date(input.doseTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}`,
     status: 'completed',
     scheduled_at: input.doseTime,
@@ -1682,6 +1726,8 @@ export async function upsertMedicationTakenNotification(ownerArg: CacheOwner | n
       medication_id: String(input.medicationId),
       medicationName: input.medicationName || null,
       dosage: input.dosage || null,
+      is_late: input.isLate === true,
+      taken_status: input.isLate ? 'late' : 'on_time',
       doseTime: input.doseTime,
       dose_time: input.doseTime,
       scheduleKey: input.scheduleKey || null,

@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -263,15 +264,17 @@ class AdminController extends Controller
             ['platform' => 'Android', 'count' => $totalUsers]
         ];
 
-        $recentActivityFeed = $this->getRecentActivityFeed(15);
+        $recentActivityFeed = $this->getRecentActivityFeed(8);
         $systemHealth = $this->getSystemHealth();
         $hydrationCompliance = $this->getHydrationCompliance(7);
         $dashboardBeverageBreakdown = $this->getBeverageBreakdown(7);
         $dashboardWaterShare = $this->getWaterShare(7);
         $dashboardAwarenessFlags = $this->getHydrationAwarenessFlagCount(7);
-        $dashboardMissedHydrationReminders = $this->getMissedHydrationReminderCount(7);
-        $notificationEffectiveness = $this->getNotificationEffectiveness();
+        $dashboardMissedHydrationReminders = null;
+        $medicationAdherence = $this->getMedicationAdherenceSummary(7);
+        $notificationEffectiveness = $this->getNotificationEffectiveness(7);
         $atRiskUsersCount = $this->getAtRiskHydrationUsers()->count();
+        $criticalUsersCount = $this->getCriticalMissedMedications(7)->count();
 
         return view('admin.dashboard-enhanced', compact(
             'users',
@@ -289,8 +292,10 @@ class AdminController extends Controller
             'dashboardBeverageBreakdown',
             'dashboardMissedHydrationReminders',
             'dashboardWaterShare',
+            'medicationAdherence',
             'notificationEffectiveness',
-            'atRiskUsersCount'
+            'atRiskUsersCount',
+            'criticalUsersCount'
         ));
     }
 
@@ -320,25 +325,26 @@ class AdminController extends Controller
         $hydrationTodayProgress = $hydrationGoal > 0 ? round(($hydrationTodayTotal / $hydrationGoal) * 100, 1) : 0;
         $userBeverageBreakdown = HydrationEntry::where('user_id', $user->id)
             ->where('created_at', '>=', Carbon::now()->subDays(30))
-            ->selectRaw("CASE WHEN beverage_type IS NULL OR beverage_type = '' THEN 'water' ELSE beverage_type END as beverage_key")
-            ->selectRaw('COUNT(*) as log_count')
-            ->selectRaw('SUM(amount_ml) as total_ml')
-            ->groupBy('beverage_key')
-            ->orderByRaw('SUM(amount_ml) DESC')
             ->get()
-            ->map(function ($row) {
+            ->groupBy(fn($entry) => $this->normalizeBeverageKey($entry->beverage_type, $entry->drink_label, $entry->notes))
+            ->map(function ($entries, $key) {
                 return [
-                    'label' => $this->formatBeverageType($row->beverage_key),
-                    'log_count' => (int) $row->log_count,
-                    'total_ml' => (int) $row->total_ml,
+                    'label' => $this->formatBeverageType($key),
+                    'log_count' => $entries->count(),
+                    'total_ml' => (int) $entries->sum('amount_ml'),
+                    'unsupported' => $key === 'unsupported_excluded',
                 ];
-            });
+            })
+            ->sortByDesc('total_ml')
+            ->values();
         $userAwarenessFlags = HydrationEntry::where('user_id', $user->id)
             ->where('created_at', '>=', Carbon::now()->subDays(30))
             ->where(function ($query) {
                 $query->whereIn('sugar_level', ['medium', 'high'])
                     ->orWhereIn('caffeine_level', ['medium', 'high']);
             })
+            ->get()
+            ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry))
             ->count();
 
         $medications = Medication::where('user_id', $user->id)
@@ -354,6 +360,12 @@ class AdminController extends Controller
             ->orderBy('created_at', 'desc')
             ->limit(10)
             ->get();
+
+        $activityLogs = $user->activityLogs()->orderBy('created_at', 'desc')->limit(8)->get();
+        $lastLogin = $user->activityLogs()
+            ->where('activity_type', 'login')
+            ->orderBy('created_at', 'desc')
+            ->first();
 
         // Calculate stats
         $totalHydrationEntries = HydrationEntry::where('user_id', $user->id)->count();
@@ -379,7 +391,9 @@ class AdminController extends Controller
             'totalNotifications',
             'recentActivity',
             'userAwarenessFlags',
-            'userBeverageBreakdown'
+            'userBeverageBreakdown',
+            'activityLogs',
+            'lastLogin'
         ));
     }
 
@@ -458,10 +472,6 @@ class AdminController extends Controller
      */
     public function sendPasswordResetEmail(Request $request, User $user)
     {
-        $request->validate([
-            'reset_token' => 'required|string',
-        ]);
-
         try {
             // Generate secure token
             $token = Str::random(64);
@@ -531,17 +541,21 @@ class AdminController extends Controller
     // Health module management methods
     public function hydration()
     {
-        $timeRange = request('timeRange', 7);
+        $timeRange = (int) request('timeRange', 7);
+        if (!in_array($timeRange, [7, 30, 90], true)) {
+            $timeRange = 7;
+        }
         $userType = request('userType', 'all');
 
         $totalUsers = User::where('role', '!=', 'admin')
             ->where('status', 'active')
             ->count();
 
-        $dailyUserIntake = HydrationEntry::select('user_id', DB::raw('DATE(created_at) as intake_date'), DB::raw('SUM(amount_ml) as daily_total'))
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->groupBy('user_id', DB::raw('DATE(created_at)'))
-            ->get();
+        $dailyUserIntake = HydrationEntry::where('created_at', '>=', Carbon::now()->subDays($timeRange))
+            ->get()
+            ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry))
+            ->groupBy(fn($entry) => $entry->user_id . '|' . $entry->created_at->format('Y-m-d'))
+            ->map(fn($entries) => (object) ['daily_total' => $entries->sum('amount_ml')]);
 
         $avgDailyIntake = $dailyUserIntake->isNotEmpty() ? round($dailyUserIntake->avg('daily_total'), 0) : 0;
 
@@ -552,7 +566,7 @@ class AdminController extends Controller
         $beverageBreakdown = $this->getBeverageBreakdown($timeRange);
         $sourceBreakdown = $this->getHydrationSourceBreakdown($timeRange);
         $recentBeverageEntries = $this->getRecentBeverageEntries($timeRange);
-        $missedReminders = $this->getMissedHydrationReminderCount($timeRange);
+        $missedReminders = null;
         $totalBeverageLogs = HydrationEntry::where('created_at', '>=', Carbon::now()->subDays($timeRange))->count();
         $waterShare = $this->getWaterShare($timeRange);
         $awarenessFlags = $this->getHydrationAwarenessFlagCount($timeRange);
@@ -564,9 +578,11 @@ class AdminController extends Controller
         $chartData = [];
         for ($i = ($timeRange - 1); $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
-            $totalIntake = HydrationEntry::whereDate('created_at', $date)
-                ->sum('amount_ml');
-            $entryCount = HydrationEntry::whereDate('created_at', $date)->count();
+            $dayEntries = HydrationEntry::whereDate('created_at', $date)
+                ->get()
+                ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
+            $totalIntake = $dayEntries->sum('amount_ml');
+            $entryCount = $dayEntries->count();
             $avgIntake = $entryCount > 0 ? round($totalIntake / $entryCount, 0) : 0;
 
             $chartData[] = [
@@ -599,42 +615,57 @@ class AdminController extends Controller
 
     public function medication()
     {
-        $timeRange = request('timeRange', 7);
+        $timeRange = (int) request('timeRange', 7);
+        if (!in_array($timeRange, [7, 30, 90], true)) {
+            $timeRange = 7;
+        }
         $since = Carbon::now()->subDays($timeRange);
 
-        // Calculate metrics
-        $activeMedications = Medication::where('active', true)->count();
+        $activeMedications = Medication::query()
+            ->where(function ($query) {
+                $query->where('active', true)->orWhereNull('active');
+            })
+            ->where(function ($query) {
+                $query->whereNull('end_date')->orWhereDate('end_date', '>=', Carbon::today());
+            })
+            ->get()
+            ->filter(fn($medication) => $this->isSupportedMedicationName($medication->name))
+            ->count();
 
         $historyEntries = $this->dedupeMedicationHistoryCollection(
             MedicationHistory::where('created_at', '>=', $since)
                 ->with('user', 'medication')
                 ->get()
-        );
+        )->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
         $totalEntries = $historyEntries->count();
-        $completedEntries = $historyEntries->where('status', 'completed')->count();
+        $completedEntries = $historyEntries->whereIn('status', ['completed', 'taken'])->count();
         $adherenceRate = $totalEntries > 0 ? round(($completedEntries / $totalEntries) * 100, 1) : 0;
 
         $missedDoses = $historyEntries->whereIn('status', ['missed', 'skipped'])->count();
+        $takenDoses = $completedEntries;
+        $snoozedDoses = $historyEntries->where('status', 'snoozed')->count();
 
         // Get critical missed medications
-        $criticalMissedMedications = $this->getCriticalMissedMedications();
+        $criticalMissedMedications = $this->getCriticalMissedMedications($timeRange);
 
         // Get medication compliance ranking
-        $complianceRanking = $this->getMedicationComplianceRanking();
+        $complianceRanking = $this->getMedicationComplianceRanking($timeRange);
 
         $medicationTypeData = $this->getMedicationAdherenceByName($timeRange);
         $weeklyAdherenceData = $this->getMedicationAdherenceTrend($timeRange);
 
         $problematicEntries = $historyEntries
-            ->whereIn('status', ['missed', 'skipped'])
+            ->whereIn('status', ['missed', 'skipped', 'snoozed'])
             ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
-            ->take(10)
+            ->take(8)
             ->values();
 
         return view('admin.medication.index-enhanced', compact(
             'activeMedications',
             'adherenceRate',
             'missedDoses',
+            'takenDoses',
+            'snoozedDoses',
             'criticalMissedMedications',
             'complianceRanking',
             'medicationTypeData',
@@ -646,62 +677,60 @@ class AdminController extends Controller
 
     public function notifications()
     {
-        $timeRange = request('timeRange', 7);
+        $timeRange = (int) request('timeRange', 7);
+        if (!in_array($timeRange, [7, 30, 90], true)) {
+            $timeRange = 7;
+        }
 
-        // Calculate metrics
-        $totalNotifications = Notification::where('created_at', '>=', Carbon::now()->subDays($timeRange))->count();
+        $periodNotifications = Notification::where('created_at', '>=', Carbon::now()->subDays($timeRange))
+            ->with('user')
+            ->latest('created_at')
+            ->get();
 
-        $deliveredNotifications = Notification::where('status', 'delivered')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
+        $visibleNotifications = $periodNotifications
+            ->filter(fn($notification) => !$this->isNotificationHidden($notification))
+            ->values();
+
+        $totalNotifications = $visibleNotifications->count();
+        $deliveredNotifications = $visibleNotifications
+            ->filter(fn($notification) => !$this->isNotificationFailed($notification))
+            ->count();
+        $openedNotifications = $visibleNotifications
+            ->filter(fn($notification) => $this->isNotificationOpened($notification))
             ->count();
 
-        $openedNotifications = Notification::whereNotNull('opened_at')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->count();
-
-        $openRate = $totalNotifications > 0 ? round(($openedNotifications / $totalNotifications) * 100, 1) : 0;
+        $openRate = $totalNotifications > 0 ? round(($openedNotifications / $totalNotifications) * 100, 1) : null;
 
         $effectiveness = $this->getNotificationEffectiveness($timeRange);
-        $effectivenessRate = $effectiveness['rate'];
+        $effectivenessRate = $effectiveness['total'] > 0 ? $effectiveness['rate'] : null;
         $avgResponseMinutes = $this->getNotificationAverageResponseMinutes($timeRange);
         $notificationVolumeData = $this->getNotificationVolumeData($timeRange);
         $notificationTypeData = $this->getNotificationTypeData($timeRange);
         $engagementBreakdown = $this->getNotificationEngagementBreakdown($timeRange);
 
-        // Get additional metrics
-        $snoozedCount = Notification::where('status', 'snoozed')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
+        $snoozedCount = $visibleNotifications
+            ->filter(fn($notification) => $this->isNotificationSnoozed($notification))
             ->count();
-
-        $failedCount = Notification::where('status', 'failed')
-            ->where('created_at', '>=', Carbon::now()->subDays($timeRange))
+        $failedCount = $visibleNotifications
+            ->filter(fn($notification) => $this->isNotificationFailed($notification))
             ->count();
 
         // Get failed notifications
-        $failedNotifications = $this->getFailedNotifications(10);
+        $failedNotifications = $this->getFailedNotifications(8, $timeRange);
 
         // Get recent notifications with interaction status
-        $recentNotifications = Notification::where('created_at', '>=', Carbon::now()->subDays($timeRange))
-            ->with('user')
-            ->latest('created_at')
-            ->limit(15)
-            ->get()
+        $recentNotifications = $visibleNotifications
+            ->take(10)
             ->map(function ($notif) {
-                $status = 'Not Opened';
-                if ($notif->opened_at) {
-                    $status = 'Opened Only';
-                    if ($notif->actioned_at) {
-                        $status = 'Opened & Actioned';
-                    }
-                }
                 return [
                     'id' => $notif->id,
                     'user_id' => $notif->user_id,
-                    'user_name' => $notif->user->name,
-                    'message' => $notif->body,
-                    'type' => $notif->type ?? 'General',
-                    'status' => $notif->status,
-                    'user_interaction' => $status,
+                    'user_name' => $notif->user->name ?? 'Unknown User',
+                    'message' => $notif->body ?: $notif->title,
+                    'type' => Str::headline($notif->type ?? 'general'),
+                    'status' => $this->formatNotificationStatus($notif),
+                    'status_key' => Str::lower($notif->status ?? 'created'),
+                    'user_interaction' => $this->notificationInteractionLabel($notif),
                     'created_at' => $notif->created_at,
                 ];
             });
@@ -894,7 +923,8 @@ class AdminController extends Controller
             ->filter(function ($user) use ($weekAgo) {
                 $entries = $user->hydrationEntries()
                     ->where('created_at', '>=', $weekAgo)
-                    ->get();
+                    ->get()
+                    ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
 
                 if ($entries->isEmpty()) return false;
 
@@ -907,7 +937,8 @@ class AdminController extends Controller
             ->map(function ($user) use ($weekAgo) {
                 $entries = $user->hydrationEntries()
                     ->where('created_at', '>=', $weekAgo)
-                    ->get();
+                    ->get()
+                    ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
                 $totalIntake = $entries->sum('amount_ml');
                 $goalDays = $entries->groupBy('created_at:Y-m-d')->count();
                 $expectedTotal = ($user->hydration_goal ?? 2000) * $goalDays;
@@ -931,16 +962,18 @@ class AdminController extends Controller
     /**
      * Get critical missed medications (users missing repeatedly)
      */
-    public function getCriticalMissedMedications()
+    public function getCriticalMissedMedications($days = 7)
     {
-        $weekAgo = Carbon::now()->subDays(7);
+        $since = Carbon::now()->subDays($days);
 
         $missedEntries = $this->dedupeMedicationHistoryCollection(
             MedicationHistory::whereIn('status', ['missed', 'skipped'])
-                ->where('created_at', '>=', $weekAgo)
+                ->where('created_at', '>=', $since)
                 ->with('user', 'medication')
                 ->get()
-        )->whereIn('status', ['missed', 'skipped']);
+        )
+            ->whereIn('status', ['missed', 'skipped'])
+            ->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
 
         return $missedEntries
             ->groupBy('user_id')
@@ -955,7 +988,7 @@ class AdminController extends Controller
                     'user_name' => $user->name,
                     'user_email' => $user->email,
                     'missed_count' => $entries->count(),
-                    'medications' => $entries->pluck('medication.name')->filter()->unique()->implode(', '),
+                    'medications' => $entries->map(fn($entry) => $this->medicationHistoryName($entry))->filter()->unique()->implode(', '),
                 ];
             })
             ->filter()
@@ -980,11 +1013,34 @@ class AdminController extends Controller
     private function medicationHistoryStatusPriority(?string $status): int
     {
         return match ($status) {
-            'completed' => 4,
+            'completed', 'taken' => 4,
             'snoozed' => 3,
             'missed', 'skipped' => 2,
             default => 1,
         };
+    }
+
+    private function medicationHistoryName(MedicationHistory $entry): ?string
+    {
+        return $entry->medication_name_snapshot ?: optional($entry->medication)->name;
+    }
+
+    private function getMedicationAdherenceSummary($days = 7): array
+    {
+        $entries = $this->dedupeMedicationHistoryCollection(
+            MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($days))
+                ->with('medication')
+                ->get()
+        )->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
+
+        $total = $entries->count();
+        $successful = $entries->whereIn('status', ['completed', 'taken'])->count();
+
+        return [
+            'total' => $total,
+            'successful' => $successful,
+            'rate' => $total > 0 ? round(($successful / $total) * 100, 1) : 0,
+        ];
     }
 
     private function dedupeMedicationHistoryCollection($entries)
@@ -1017,13 +1073,15 @@ class AdminController extends Controller
      */
     public function getNotificationEffectiveness($days = null)
     {
-        $baseQuery = Notification::query();
-        if ($days !== null) {
-            $baseQuery->where('created_at', '>=', Carbon::now()->subDays($days));
-        }
+        $notifications = Notification::query()
+            ->when($days !== null, fn($query) => $query->where('created_at', '>=', Carbon::now()->subDays($days)))
+            ->get()
+            ->filter(fn($notification) => !$this->isNotificationHidden($notification));
 
-        $totalNotifications = (clone $baseQuery)->count();
-        $engagedNotifications = (clone $baseQuery)->whereNotNull('actioned_at')->count();
+        $totalNotifications = $notifications->count();
+        $engagedNotifications = $notifications
+            ->filter(fn($notification) => $this->isNotificationActioned($notification))
+            ->count();
 
         return [
             'total' => $totalNotifications,
@@ -1034,16 +1092,21 @@ class AdminController extends Controller
 
     private function getNotificationAverageResponseMinutes($days)
     {
-        $notifications = Notification::whereNotNull('opened_at')
-            ->whereNotNull('actioned_at')
-            ->where('created_at', '>=', Carbon::now()->subDays($days))
-            ->get(['opened_at', 'actioned_at']);
+        $notifications = Notification::where('created_at', '>=', Carbon::now()->subDays($days))
+            ->get()
+            ->filter(fn($notification) => !$this->isNotificationHidden($notification))
+            ->map(function ($notification) {
+                $openedAt = $this->notificationOpenedAt($notification);
+                $actionedAt = $this->notificationActionedAt($notification);
+                return $openedAt && $actionedAt ? $openedAt->diffInMinutes($actionedAt) : null;
+            })
+            ->filter(fn($minutes) => $minutes !== null);
 
         if ($notifications->isEmpty()) {
             return null;
         }
 
-        return round($notifications->avg(fn($notification) => $notification->opened_at->diffInMinutes($notification->actioned_at)), 1);
+        return round($notifications->avg(), 1);
     }
 
     private function getNotificationVolumeData($days)
@@ -1053,7 +1116,10 @@ class AdminController extends Controller
             $date = Carbon::now()->subDays($i);
             $data[] = [
                 'date' => $date->format('M j'),
-                'count' => Notification::whereDate('created_at', $date)->count(),
+                'count' => Notification::whereDate('created_at', $date)
+                    ->get()
+                    ->filter(fn($notification) => !$this->isNotificationHidden($notification))
+                    ->count(),
             ];
         }
 
@@ -1063,6 +1129,8 @@ class AdminController extends Controller
     private function getNotificationTypeData($days)
     {
         return Notification::where('created_at', '>=', Carbon::now()->subDays($days))
+            ->get()
+            ->filter(fn($notification) => !$this->isNotificationHidden($notification))
             ->pluck('type')
             ->map(fn($type) => trim((string) $type) !== '' ? Str::lower(trim((string) $type)) : 'general')
             ->countBy()
@@ -1076,10 +1144,12 @@ class AdminController extends Controller
 
     private function getNotificationEngagementBreakdown($days)
     {
-        $baseQuery = Notification::where('created_at', '>=', Carbon::now()->subDays($days));
-        $total = (clone $baseQuery)->count();
-        $actioned = (clone $baseQuery)->whereNotNull('opened_at')->whereNotNull('actioned_at')->count();
-        $openedOnly = (clone $baseQuery)->whereNotNull('opened_at')->whereNull('actioned_at')->count();
+        $notifications = Notification::where('created_at', '>=', Carbon::now()->subDays($days))
+            ->get()
+            ->filter(fn($notification) => !$this->isNotificationHidden($notification));
+        $total = $notifications->count();
+        $actioned = $notifications->filter(fn($notification) => $this->isNotificationOpened($notification) && $this->isNotificationActioned($notification))->count();
+        $openedOnly = $notifications->filter(fn($notification) => $this->isNotificationOpened($notification) && !$this->isNotificationActioned($notification))->count();
         $notOpened = max($total - $actioned - $openedOnly, 0);
 
         return [
@@ -1110,15 +1180,15 @@ class AdminController extends Controller
             MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($days))
                 ->with('medication')
                 ->get()
-        );
+        )->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
 
         return $entries
-            ->groupBy('medication_id')
+            ->groupBy(fn($entry) => Str::lower($this->medicationHistoryName($entry) ?: 'Medication'))
             ->map(function ($items) {
                 $total = $items->count();
-                $completed = $items->where('status', 'completed')->count();
+                $completed = $items->whereIn('status', ['completed', 'taken'])->count();
                 return [
-                    'type' => optional($items->first()->medication)->name ?? 'Medication',
+                    'type' => $this->medicationHistoryName($items->first()) ?: 'Medication',
                     'adherence' => $total > 0 ? round(($completed / $total) * 100, 1) : 0,
                     'total' => $total,
                 ];
@@ -1136,14 +1206,15 @@ class AdminController extends Controller
     {
         $entries = $this->dedupeMedicationHistoryCollection(
             MedicationHistory::where('created_at', '>=', Carbon::now()->subDays($days))
+                ->with('medication')
                 ->get()
-        );
+        )->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
         $data = [];
         for ($i = ($days - 1); $i >= 0; $i--) {
             $date = Carbon::now()->subDays($i);
             $dayEntries = $entries->filter(fn($entry) => $this->medicationHistoryDoseTime($entry)->isSameDay($date));
             $total = $dayEntries->count();
-            $completed = $dayEntries->where('status', 'completed')->count();
+            $completed = $dayEntries->whereIn('status', ['completed', 'taken'])->count();
 
             $data[] = [
                 'date' => $date->format('M j'),
@@ -1157,19 +1228,21 @@ class AdminController extends Controller
     /**
      * Get failed notifications with error details
      */
-    public function getFailedNotifications($limit = 10)
+    public function getFailedNotifications($limit = 10, $days = null)
     {
-        return Notification::where('status', 'failed')
+        return Notification::query()
+            ->when($days !== null, fn($query) => $query->where('created_at', '>=', Carbon::now()->subDays($days)))
             ->with('user')
             ->latest('created_at')
-            ->limit($limit)
             ->get()
+            ->filter(fn($notif) => $this->isNotificationFailed($notif) && !$this->isNotificationHidden($notif))
+            ->take($limit)
             ->map(fn($notif) => [
                 'id' => $notif->id,
                 'user_id' => $notif->user_id,
-                'user_name' => $notif->user->name,
-                'user_email' => $notif->user->email,
-                'message' => $notif->body,
+                'user_name' => $notif->user->name ?? 'Unknown User',
+                'user_email' => $notif->user->email ?? '',
+                'message' => $notif->body ?: $notif->title,
                 'error' => $notif->error_message ?? 'Unknown error',
                 'created_at' => $notif->created_at,
             ]);
@@ -1178,21 +1251,22 @@ class AdminController extends Controller
     /**
      * Get user compliance ranking for medications
      */
-    public function getMedicationComplianceRanking()
+    public function getMedicationComplianceRanking($days = 7)
     {
-        $weekAgo = Carbon::now()->subDays(7);
+        $since = Carbon::now()->subDays($days);
 
-        $ranking = User::with(['medicationHistory' => function ($query) use ($weekAgo) {
-            $query->where('created_at', '>=', $weekAgo);
+        $ranking = User::with(['medicationHistory' => function ($query) use ($since) {
+            $query->where('created_at', '>=', $since)->with('medication');
         }])
             ->where('status', 'active')
             ->get()
             ->map(function ($user) {
-                $history = $this->dedupeMedicationHistoryCollection($user->medicationHistory);
+                $history = $this->dedupeMedicationHistoryCollection($user->medicationHistory)
+                    ->filter(fn($entry) => $this->isSupportedMedicationName($this->medicationHistoryName($entry)));
                 $total = $history->count();
                 if ($total === 0) return null;
 
-                $completed = $history->where('status', 'completed')->count();
+                $completed = $history->whereIn('status', ['completed', 'taken'])->count();
                 $rate = round(($completed / $total) * 100, 1);
 
                 return [
@@ -1209,9 +1283,16 @@ class AdminController extends Controller
                 return $b['adherence_rate'] <=> $a['adherence_rate'];
             });
 
+        $topUsers = $ranking->take(5)->values();
+        $topUserIds = $topUsers->pluck('id')->all();
+        $bottomUsers = $ranking->reverse()
+            ->reject(fn($user) => in_array($user['id'], $topUserIds, true))
+            ->take(5)
+            ->values();
+
         return [
-            'top_users' => $ranking->take(5),
-            'bottom_users' => $ranking->reverse()->take(5),
+            'top_users' => $topUsers,
+            'bottom_users' => $bottomUsers,
         ];
     }
 
@@ -1231,7 +1312,7 @@ class AdminController extends Controller
         $avgComplianceRate = 0;
         if ($users->count() > 0) {
             $totalRate = $users->sum(function ($user) {
-                $entries = $user->hydrationEntries;
+                $entries = $user->hydrationEntries->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
                 if ($entries->isEmpty()) return 0;
 
                 $totalIntake = $entries->sum('amount_ml');
@@ -1246,7 +1327,7 @@ class AdminController extends Controller
         return [
             'compliance_rate' => $avgComplianceRate,
             'users_on_track' => $users->sum(function ($user) {
-                $entries = $user->hydrationEntries;
+                $entries = $user->hydrationEntries->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
                 if ($entries->isEmpty()) return 0;
 
                 $totalIntake = $entries->sum('amount_ml');
@@ -1263,20 +1344,19 @@ class AdminController extends Controller
     {
         return HydrationEntry::query()
             ->where('created_at', '>=', Carbon::now()->subDays($days))
-            ->selectRaw("CASE WHEN beverage_type IS NULL OR beverage_type = '' THEN 'water' ELSE beverage_type END as beverage_key")
-            ->selectRaw('COUNT(*) as log_count')
-            ->selectRaw('SUM(amount_ml) as total_ml')
-            ->groupBy('beverage_key')
-            ->orderByRaw('SUM(amount_ml) DESC')
             ->get()
-            ->map(function ($row) {
+            ->groupBy(fn($entry) => $this->normalizeBeverageKey($entry->beverage_type, $entry->drink_label, $entry->notes))
+            ->map(function ($entries, $key) {
                 return [
-                    'type' => $row->beverage_key,
-                    'label' => $this->formatBeverageType($row->beverage_key),
-                    'log_count' => (int) $row->log_count,
-                    'total_ml' => (int) $row->total_ml,
+                    'type' => $key,
+                    'label' => $this->formatBeverageType($key),
+                    'log_count' => $entries->count(),
+                    'total_ml' => (int) $entries->sum('amount_ml'),
+                    'unsupported' => $key === 'unsupported_excluded',
                 ];
-            });
+            })
+            ->sortByDesc('total_ml')
+            ->values();
     }
 
     private function getHydrationSourceBreakdown($days)
@@ -1300,11 +1380,12 @@ class AdminController extends Controller
     private function getWaterShare($days): float
     {
         $since = Carbon::now()->subDays($days);
-        $totalBeverageVolume = HydrationEntry::where('created_at', '>=', $since)->sum('amount_ml');
-        $waterVolume = HydrationEntry::where('created_at', '>=', $since)
-            ->where(function ($query) {
-                $query->where('beverage_type', 'water')->orWhereNull('beverage_type');
-            })
+        $entries = HydrationEntry::where('created_at', '>=', $since)
+            ->get()
+            ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry));
+        $totalBeverageVolume = $entries->sum('amount_ml');
+        $waterVolume = $entries
+            ->filter(fn($entry) => $this->normalizeBeverageKey($entry->beverage_type, $entry->drink_label, $entry->notes) === 'water')
             ->sum('amount_ml');
 
         return $totalBeverageVolume > 0 ? round(($waterVolume / $totalBeverageVolume) * 100, 1) : 0;
@@ -1317,6 +1398,8 @@ class AdminController extends Controller
                 $query->whereIn('sugar_level', ['medium', 'high'])
                     ->orWhereIn('caffeine_level', ['medium', 'high']);
             })
+            ->get()
+            ->filter(fn($entry) => $this->isSupportedBeverageEntry($entry))
             ->count();
     }
 
@@ -1328,12 +1411,14 @@ class AdminController extends Controller
             ->limit(12)
             ->get()
             ->map(function (HydrationEntry $entry) {
+                $beverageKey = $this->normalizeBeverageKey($entry->beverage_type, $entry->drink_label, $entry->notes);
                 return [
                     'user_id' => $entry->user_id,
                     'user_name' => $entry->user->name ?? 'Unknown User',
                     'amount_ml' => (int) $entry->amount_ml,
-                    'beverage_label' => $entry->drink_label ?: $this->formatBeverageType($entry->beverage_type ?: 'water'),
-                    'beverage_type' => $this->formatBeverageType($entry->beverage_type ?: 'water'),
+                    'beverage_label' => $entry->drink_label ?: $this->formatBeverageType($beverageKey),
+                    'beverage_type' => $this->formatBeverageType($beverageKey),
+                    'unsupported' => $beverageKey === 'unsupported_excluded',
                     'source' => Str::headline($entry->source ?: 'manual'),
                     'sugar_level' => $this->formatHydrationLevel($entry->sugar_level ?: 'none'),
                     'caffeine_level' => $this->formatHydrationLevel($entry->caffeine_level ?: 'none'),
@@ -1373,6 +1458,7 @@ class AdminController extends Controller
             'sugar_sweetened' => 'Sugar Sweetened',
             'caffeinated' => 'Caffeinated',
             'other_non_alcoholic' => 'Other Non-Alcoholic',
+            'unsupported_excluded' => 'Unsupported/Excluded',
             default => 'Water',
         };
     }
@@ -1382,35 +1468,190 @@ class AdminController extends Controller
         return Str::headline($level ?: 'none');
     }
 
+    private function normalizeSearchText(?string $value): string
+    {
+        return trim(preg_replace('/\s+/', ' ', strtolower((string) $value)));
+    }
+
+    private function alcoholKeywords(): array
+    {
+        return [
+            'alcohol', 'beer', 'wine', 'whiskey', 'whisky', 'vodka', 'gin', 'rum', 'tequila',
+            'brandy', 'cognac', 'soju', 'sake', 'cocktail', 'liqueur', 'red horse', 'redhorse',
+            'heineken', 'budweiser', 'corona', 'guinness', 'stella artois', 'jack daniel',
+            'johnnie walker', 'bacardi', 'smirnoff',
+        ];
+    }
+
+    private function unsupportedMedicationKeywords(): array
+    {
+        return [
+            'cannabis', 'weed', 'ecstasy', 'mdma', 'lsd', 'acid', 'heroin', 'opium',
+            'magic mushroom', 'psilocybin', 'party drug', 'illegal drug',
+            'recreational drug', 'fentanyl', 'ketamine',
+        ];
+    }
+
+    private function containsAnyKeyword(string $text, array $keywords): bool
+    {
+        foreach ($keywords as $keyword) {
+            if ($keyword !== '' && str_contains($text, $keyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function normalizeBeverageKey(?string $type, ?string $label = null, ?string $notes = null): string
+    {
+        $rawType = $this->normalizeSearchText($type);
+        $combinedText = $this->normalizeSearchText($rawType . ' ' . $label . ' ' . $notes);
+
+        if ($this->containsAnyKeyword($combinedText, $this->alcoholKeywords())) {
+            return 'unsupported_excluded';
+        }
+
+        return match ($rawType) {
+            '', 'water' => 'water',
+            'caffeinated', 'coffee', 'tea' => 'caffeinated',
+            'sugar_sweetened', 'sugar-sweetened', 'soda', 'juice' => 'sugar_sweetened',
+            'other_non_alcoholic', 'other', 'other non-alcoholic' => 'other_non_alcoholic',
+            default => 'other_non_alcoholic',
+        };
+    }
+
+    private function isSupportedBeverageType(?string $type, ?string $label = null, ?string $notes = null): bool
+    {
+        return $this->normalizeBeverageKey($type, $label, $notes) !== 'unsupported_excluded';
+    }
+
+    private function isSupportedBeverageEntry(HydrationEntry $entry): bool
+    {
+        return $this->isSupportedBeverageType($entry->beverage_type, $entry->drink_label, $entry->notes);
+    }
+
+    private function isSupportedMedicationName(?string $name): bool
+    {
+        $text = $this->normalizeSearchText($name);
+        return $text === '' || !$this->containsAnyKeyword($text, $this->unsupportedMedicationKeywords());
+    }
+
+    private function isNotificationHidden(Notification $notification): bool
+    {
+        $status = Str::lower((string) $notification->status);
+        if (in_array($status, ['cleared', 'hidden', 'deleted'], true)) {
+            return true;
+        }
+
+        foreach (['cleared_at', 'hidden_at', 'deleted_at'] as $column) {
+            if (Schema::hasColumn('notifications', $column) && $notification->{$column}) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function notificationOpenedAt(Notification $notification): ?Carbon
+    {
+        foreach (['opened_at', 'read_at'] as $column) {
+            if (Schema::hasColumn('notifications', $column) && $notification->{$column}) {
+                return Carbon::parse($notification->{$column});
+            }
+        }
+
+        $status = Str::lower((string) $notification->status);
+        return in_array($status, ['opened', 'read', 'actioned', 'completed', 'taken', 'logged'], true)
+            ? Carbon::parse($notification->updated_at ?: $notification->created_at)
+            : null;
+    }
+
+    private function notificationActionedAt(Notification $notification): ?Carbon
+    {
+        foreach (['actioned_at', 'completed_at'] as $column) {
+            if (Schema::hasColumn('notifications', $column) && $notification->{$column}) {
+                return Carbon::parse($notification->{$column});
+            }
+        }
+
+        $status = Str::lower((string) $notification->status);
+        return in_array($status, ['actioned', 'completed', 'taken', 'logged'], true)
+            ? Carbon::parse($notification->updated_at ?: $notification->created_at)
+            : null;
+    }
+
+    private function isNotificationOpened(Notification $notification): bool
+    {
+        return $this->notificationOpenedAt($notification) !== null;
+    }
+
+    private function isNotificationActioned(Notification $notification): bool
+    {
+        return $this->notificationActionedAt($notification) !== null;
+    }
+
+    private function isNotificationSnoozed(Notification $notification): bool
+    {
+        $status = Str::lower((string) $notification->status);
+        if ($status === 'snoozed') {
+            return true;
+        }
+
+        foreach (['snoozed_at', 'snoozed_until'] as $column) {
+            if (Schema::hasColumn('notifications', $column) && $notification->{$column}) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isNotificationFailed(Notification $notification): bool
+    {
+        return Str::lower((string) $notification->status) === 'failed'
+            || (Schema::hasColumn('notifications', 'error_message') && filled($notification->error_message));
+    }
+
+    private function formatNotificationStatus(Notification $notification): string
+    {
+        return Str::headline($notification->status ?: 'created');
+    }
+
+    private function notificationInteractionLabel(Notification $notification): string
+    {
+        if ($this->isNotificationActioned($notification)) {
+            return $this->isNotificationOpened($notification) ? 'Opened & Actioned' : 'Actioned';
+        }
+
+        return $this->isNotificationOpened($notification) ? 'Opened Only' : 'Not Opened';
+    }
+
     private function getLowHydrationEntries($days)
     {
         $startDate = Carbon::now()->subDays($days);
 
-        return HydrationEntry::query()
-            ->join('users', 'hydration_entries.user_id', '=', 'users.id')
-            ->where('hydration_entries.created_at', '>=', $startDate)
-            ->where('users.role', '!=', 'admin')
-            ->groupBy('hydration_entries.user_id', 'users.name', 'users.hydration_goal', DB::raw('DATE(hydration_entries.created_at)'))
-            ->select(
-                'hydration_entries.user_id',
-                'users.name',
-                DB::raw('COALESCE(users.hydration_goal, 2000) as goal'),
-                DB::raw('DATE(hydration_entries.created_at) as intake_date'),
-                DB::raw('SUM(hydration_entries.amount_ml) as actual')
-            )
-            ->havingRaw('SUM(hydration_entries.amount_ml) < (COALESCE(users.hydration_goal, 2000) * 0.5)')
-            ->orderByDesc('intake_date')
-            ->limit(15)
+        return HydrationEntry::with('user')
+            ->where('created_at', '>=', $startDate)
             ->get()
-            ->map(function ($entry) {
+            ->filter(fn($entry) => $entry->user && $entry->user->role !== 'admin' && $this->isSupportedBeverageEntry($entry))
+            ->groupBy(fn($entry) => $entry->user_id . '|' . $entry->created_at->format('Y-m-d'))
+            ->map(function ($entries) {
+                $first = $entries->first();
+                $goal = (int) ($first->user->hydration_goal ?? 2000);
+                $actual = (int) $entries->sum('amount_ml');
                 return [
-                    'user_id' => $entry->user_id,
-                    'name' => $entry->name,
-                    'date' => Carbon::parse($entry->intake_date),
-                    'goal' => (int) $entry->goal,
-                    'actual' => (int) $entry->actual,
-                    'percentage' => $entry->goal > 0 ? round(($entry->actual / $entry->goal) * 100, 1) : 0,
+                    'user_id' => $first->user_id,
+                    'name' => $first->user->name,
+                    'date' => $first->created_at->copy()->startOfDay(),
+                    'goal' => $goal,
+                    'actual' => $actual,
+                    'percentage' => $goal > 0 ? round(($actual / $goal) * 100, 1) : 0,
                 ];
-            });
+            })
+            ->filter(fn($entry) => $entry['percentage'] < 50)
+            ->sortByDesc('date')
+            ->take(10)
+            ->values();
     }
 }

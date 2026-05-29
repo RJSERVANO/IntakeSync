@@ -66,8 +66,18 @@ type GetCacheEntry = {
   expiresAt: number;
 };
 
-const getInFlightRequests = new Map<string, Promise<any>>();
+type GetInFlightRequest = {
+  promise: Promise<any>;
+  group: string;
+  groupVersionKey: string;
+  groupVersion: number;
+  requestToken: symbol;
+  controller?: AbortController;
+};
+
+const getInFlightRequests = new Map<string, GetInFlightRequest>();
 const getTtlCache = new Map<string, GetCacheEntry>();
+const getCacheGroupVersions = new Map<string, number>();
 
 const GET_TTL_RULES: { pattern: RegExp; ttlMs: number; group: string }[] = [
   { pattern: /^\/me(?:\?|$)/, ttlMs: 45 * 1000, group: 'profile' },
@@ -132,6 +142,21 @@ function getRequestCacheKey(method: string, path: string, token?: string, reques
   return `${method}:${authCacheScope(token, requestSessionVersion)}:${normalizePathForKey(path)}`;
 }
 
+function getGroupVersionKey(group: string, token?: string, requestSessionVersion?: string) {
+  return `${authCacheScope(token, requestSessionVersion)}:${group}`;
+}
+
+function getCacheGroupVersion(group: string, token?: string, requestSessionVersion?: string) {
+  return getCacheGroupVersions.get(getGroupVersionKey(group, token, requestSessionVersion)) || 0;
+}
+
+function bumpCacheGroupVersion(group: string, token?: string, requestSessionVersion?: string) {
+  const key = getGroupVersionKey(group, token, requestSessionVersion);
+  const next = (getCacheGroupVersions.get(key) || 0) + 1;
+  getCacheGroupVersions.set(key, next);
+  return next;
+}
+
 function isBackendCooldownActive(path: string) {
   if (path === '/ping') return false;
   if (backendReachabilityState.reachable !== false) return false;
@@ -153,6 +178,8 @@ function makeBackendCooldownError(method: string, url: string, requestSessionVer
 
 function invalidateCachedGetKey(cacheKey: string) {
   getTtlCache.delete(cacheKey);
+  const inFlight = getInFlightRequests.get(cacheKey);
+  inFlight?.controller?.abort();
   getInFlightRequests.delete(cacheKey);
 }
 
@@ -165,12 +192,17 @@ export function invalidateApiCacheForPath(path: string, token?: string) {
 }
 
 export function invalidateApiCacheGroup(group: 'profile' | 'notifications' | 'medications' | 'medication-history' | 'hydration', token?: string) {
+  bumpCacheGroupVersion(group, token, getCurrentAuthSessionVersion());
   const scopePrefix = token ? `GET:${authCacheScope(token, getCurrentAuthSessionVersion())}:` : 'GET:';
   Array.from(getTtlCache.keys()).forEach((key) => {
     if (!key.startsWith(scopePrefix)) return;
     const path = key.split(':').slice(3).join(':');
     const rule = getTtlRule(path);
     if (rule?.group === group) invalidateCachedGetKey(key);
+  });
+  Array.from(getInFlightRequests.entries()).forEach(([key, request]) => {
+    if (!key.startsWith(scopePrefix)) return;
+    if (request.group === group) invalidateCachedGetKey(key);
   });
 }
 
@@ -429,6 +461,20 @@ function isHtmlResponse(text: string, res?: Response) {
   return contentType.includes('text/html') || trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
 }
 
+function makeStaleGetError(method: string, url: string, requestSessionVersion?: string): ApiError {
+  return attachRequest({
+    status: 0,
+    data: { message: 'Stale GET response ignored.' },
+    type: 'unknown',
+    message: 'Stale GET response ignored.',
+    isNetworkError: false,
+    isAuthError: false,
+    isValidationError: false,
+    isStaleSessionError: false,
+    requestSessionVersion,
+  }, method, url);
+}
+
 async function parseResponse(res: Response) {
   const text = await res.text();
   if (!text) return null;
@@ -523,6 +569,9 @@ export async function get(path: string, token?: string, timeout: number = 10000)
   const url = joinPath(path);
   const rule = getTtlRule(path);
   const cacheKey = getRequestCacheKey('GET', path, token, requestSessionVersion);
+  const groupVersionKey = rule ? getGroupVersionKey(rule.group, token, requestSessionVersion) : '';
+  const capturedGroupVersion = rule ? getCacheGroupVersion(rule.group, token, requestSessionVersion) : 0;
+  const requestToken = Symbol(cacheKey);
   logRequest('GET', url);
 
   if (rule) {
@@ -555,13 +604,13 @@ export async function get(path: string, token?: string, timeout: number = 10000)
         method: 'GET',
         source: 'coalesced_in_flight',
       });
-      return existing;
+      return existing.promise;
     }
   }
 
+  const controller = createTrackedAbortController();
   const networkRequest = (async () => {
     const networkStartedAt = perfNow();
-    const controller = createTrackedAbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
     try {
       await ensureCurrentSession('GET', url, token, requestSessionVersion);
@@ -580,6 +629,13 @@ export async function get(path: string, token?: string, timeout: number = 10000)
         throw { ...error, requestSessionVersion };
       }
       noteSuccessfulBackendResponse(data);
+      if (rule && getCacheGroupVersion(rule.group, token, requestSessionVersion) !== capturedGroupVersion) {
+        logPerf('stale_get_discarded', networkStartedAt, {
+          endpoint: safeEndpointFromPath(path),
+          group: rule.group,
+        });
+        throw makeStaleGetError('GET', url, requestSessionVersion);
+      }
       if (rule && res.status !== 401 && res.status !== 403) {
         getTtlCache.set(cacheKey, { data, expiresAt: Date.now() + rule.ttlMs });
       }
@@ -601,12 +657,21 @@ export async function get(path: string, token?: string, timeout: number = 10000)
       throw normalized;
     } finally {
       releaseTrackedAbortController(controller);
-      if (rule) getInFlightRequests.delete(cacheKey);
+      if (rule && getInFlightRequests.get(cacheKey)?.requestToken === requestToken) {
+        getInFlightRequests.delete(cacheKey);
+      }
     }
   })();
 
   if (rule) {
-    getInFlightRequests.set(cacheKey, networkRequest);
+    getInFlightRequests.set(cacheKey, {
+      promise: networkRequest,
+      group: rule.group,
+      groupVersionKey,
+      groupVersion: capturedGroupVersion,
+      requestToken,
+      controller,
+    });
     logPerf('API request', startedAt, {
       endpoint: safeEndpointFromPath(path),
       method: 'GET',
@@ -736,6 +801,10 @@ export function getErrorMessage(error: any, fallbackMessage = 'Request failed.')
     return 'Server route not found. Please check API configuration.';
   }
   return error?.message || error?.data?.message || error?.data || defaultMessageForStatus(error?.status) || fallbackMessage;
+}
+
+export function isStaleGetError(error: any) {
+  return error?.message === 'Stale GET response ignored.' || error?.data?.message === 'Stale GET response ignored.';
 }
 
 export async function postWithMeta(path: string, body: any, token?: string, timeout: number = 10000) {
@@ -878,6 +947,7 @@ export function shouldSkipBackendRefresh(path: string) {
 }
 
 export function isNetworkError(error: any) {
+  if (isStaleGetError(error)) return false;
   return error?.isNetworkError || error?.type === 'network' || error?.type === 'timeout' || error?.status === 0 || error?.status === 408;
 }
 
@@ -894,4 +964,4 @@ export function isStaleSessionError(error: any) {
   return Boolean(error?.isStaleSessionError);
 }
 
-export default { post, get, put, del, isNetworkError, isAuthError, isValidationError, isStaleSessionError, isBackendReachabilityError, getErrorTitle, getErrorMessage, checkBackendReachability, subscribeBackendReachability, invalidateApiCacheForPath, invalidateApiCacheGroup, shouldSkipBackendRefresh, abortAllPendingRequests };
+export default { post, get, put, del, isNetworkError, isAuthError, isValidationError, isStaleSessionError, isStaleGetError, isBackendReachabilityError, getErrorTitle, getErrorMessage, checkBackendReachability, subscribeBackendReachability, invalidateApiCacheForPath, invalidateApiCacheGroup, shouldSkipBackendRefresh, abortAllPendingRequests };

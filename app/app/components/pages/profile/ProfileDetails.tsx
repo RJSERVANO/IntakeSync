@@ -39,6 +39,12 @@ export default function ProfileDetails() {
 
   const [modalVisible, setModalVisible] = React.useState(false);
 
+  const isProfileNewerThanUser = React.useCallback((profile: any, nextUser: any) => {
+    const profileTime = new Date(profile?.local_updated_at || profile?.updated_at || 0).getTime();
+    const userTime = new Date(nextUser?.local_updated_at || nextUser?.updated_at || 0).getTime();
+    return Number.isFinite(profileTime) && profileTime > 0 && (!Number.isFinite(userTime) || profileTime > userTime);
+  }, []);
+
   React.useEffect(() => {
     let mounted = true;
     (async () => {
@@ -66,10 +72,14 @@ export default function ProfileDetails() {
   );
 
   React.useEffect(() => {
-    if (fetchedUser) {
-      writeProfileCache(fetchedUser, fetchedUser).catch(() => {});
-    }
-  }, [fetchedUser]);
+    if (!fetchedUser) return;
+    (async () => {
+      const session = await getCachedSession();
+      const profile = await readProfileCache<UserDetails>(session?.user ?? null);
+      if (isProfileNewerThanUser(profile, fetchedUser)) return;
+      await writeProfileCache(fetchedUser, fetchedUser);
+    })().catch(() => {});
+  }, [fetchedUser, isProfileNewerThanUser]);
 
   const openEditModal = () => setModalVisible(true);
   const closeEditModal = () => setModalVisible(false);

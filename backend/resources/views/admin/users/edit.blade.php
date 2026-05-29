@@ -3,12 +3,12 @@
 @section('title', 'Edit User - ' . $user->name)
 
 @section('content')
-<div class="min-h-screen bg-slate-50 py-4">
-    <div class="max-w-6xl mx-auto px-6">
+<div class="min-h-screen bg-slate-50 py-3">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6">
         <!-- Page Header -->
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-5">
             <div>
-                <div class="flex items-center gap-3 mb-4">
+                <div class="flex items-center gap-3 mb-2">
                     <a href="{{ route('admin.users.index') }}" class="text-slate-500 hover:text-slate-700 font-medium">Users</a>
                     <span class="text-slate-400">/</span>
                     <span class="text-slate-900 font-medium">{{ $user->name }}</span>
@@ -16,7 +16,7 @@
                 <h1 class="text-3xl font-bold text-slate-900">Edit User: {{ $user->name }}</h1>
                 <p class="text-slate-500 mt-1">{{ $user->email }}</p>
             </div>
-            <div class="flex items-center gap-3 mt-6 md:mt-0">
+            <div class="flex items-center gap-3">
                 <a href="{{ route('admin.users.index') }}" class="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors font-medium text-sm">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
@@ -40,8 +40,8 @@
         @endif
 
         <!-- User Info Card with Status -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-6">
-            <div class="px-8 py-8 border-b border-slate-100">
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden mb-5">
+            <div class="px-6 py-5 border-b border-slate-100">
                 <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
                     <div>
                         <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">User ID</p>
@@ -113,7 +113,11 @@
         @endif
 
         <!-- Tabbed Interface -->
-        <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <form id="passwordResetForm" method="POST" action="{{ route('admin.users.send-password-reset', $user) }}" class="hidden">
+            @csrf
+        </form>
+
+        <div class="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
             <!-- Tab Navigation -->
             <div class="border-b border-slate-100 overflow-x-auto">
                 <div class="flex flex-wrap md:flex-nowrap" role="tablist">
@@ -145,7 +149,7 @@
             </div>
 
             <!-- Account Info Tab -->
-            <div id="account-tab-content" class="tab-content p-8">
+            <div id="account-tab-content" class="tab-content p-6">
                 <form method="POST" action="{{ route('admin.users.update', $user) }}" class="space-y-6">
                     @csrf
                     @method('PUT')
@@ -247,15 +251,12 @@
                     <div class="border-b border-slate-100 pb-6">
                         <h3 class="text-lg font-semibold text-slate-900 mb-4">Password Management</h3>
                         <p class="text-sm text-slate-600 mb-4">Instead of setting a password manually, send the user a password reset email. They can click the link to create their own secure password.</p>
-                        <form method="POST" action="{{ route('admin.users.send-password-reset', $user) }}" class="inline">
-                            @csrf
-                            <button type="submit" class="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors shadow-sm">
+                            <button type="submit" form="passwordResetForm" class="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors shadow-sm">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
                                 </svg>
                                 Send Password Reset Email
                             </button>
-                        </form>
                     </div>
 
                     <!-- Medical History -->
@@ -288,13 +289,13 @@
             </div>
 
             <!-- Health Profile Tab -->
-            <div id="health-tab-content" class="tab-content hidden p-8">
+            <div id="health-tab-content" class="tab-content hidden p-6">
                 <div class="space-y-6">
                     <h3 class="text-lg font-semibold text-slate-900">Health Profile (Read-Only)</h3>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <!-- Weight & Height -->
-                        <div class="bg-slate-50 rounded-lg p-6">
+                        <div class="bg-slate-50 rounded-lg p-4">
                             <h4 class="font-semibold text-slate-900 mb-4">Physical Measurements</h4>
                             <div class="space-y-3">
                                 <div>
@@ -308,7 +309,7 @@
                                     <p class="text-lg font-semibold text-slate-900 mt-1">
                                         @php
                                         $ageDisplay = 'Not provided';
-                                        $dob = $user->date_of_birth ?? $user->dob;
+                                        $dob = $user->date_of_birth;
                                         if ($dob) {
                                         $birthDate = new DateTime($dob);
                                         $ageDisplay = $birthDate->diff(new DateTime())->y;
@@ -321,7 +322,7 @@
                         </div>
 
                         <!-- Exercise Frequency -->
-                        <div class="bg-slate-50 rounded-lg p-6">
+                        <div class="bg-slate-50 rounded-lg p-4">
                             <h4 class="font-semibold text-slate-900 mb-4">Lifestyle</h4>
                             <div class="space-y-3">
                                 <div>
@@ -342,7 +343,7 @@
 
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <!-- Hydration Goal -->
-                        <div class="bg-slate-50 rounded-lg p-6">
+                        <div class="bg-slate-50 rounded-lg p-4">
                             <h4 class="font-semibold text-slate-900 mb-4">Health Goals</h4>
                             <div class="space-y-3">
                                 <div>
@@ -369,7 +370,7 @@
                 </div>
             </div>
             <!-- Activity Log Tab -->
-            <div id="activity-tab-content" class="tab-content hidden p-8">
+            <div id="activity-tab-content" class="tab-content hidden p-6">
                 <div class="space-y-6">
                     <h3 class="text-lg font-semibold text-slate-900 mb-6">Activity Log</h3>
 
@@ -394,13 +395,13 @@
                         </div>
                     </div>
                     @else
-                    <div class="bg-slate-50 rounded-lg p-6 text-center">
-                        <p class="text-slate-500 text-sm">User has never logged in.</p>
+                    <div class="bg-slate-50 rounded-lg p-4 text-center">
+                        <p class="text-slate-500 text-sm">{{ $user->last_login_at || $user->last_sync_at || $activityLogs->count() > 0 ? 'No explicit login event recorded.' : 'No backend activity recorded yet.' }}</p>
                     </div>
                     @endif
 
                     <!-- Last Sync Info -->
-                    <div class="bg-slate-50 rounded-lg p-6">
+                    <div class="bg-slate-50 rounded-lg p-4">
                         <h4 class="font-semibold text-slate-900 mb-3">Recent Activity</h4>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
@@ -458,8 +459,8 @@
         </div>
 
         <!-- Danger Zone -->
-        <div class="bg-red-50 rounded-2xl border border-red-200 shadow-sm overflow-hidden mt-6">
-            <div class="px-8 py-8">
+        <div class="bg-red-50 rounded-xl border border-red-200 shadow-sm overflow-hidden mt-5">
+            <div class="px-6 py-5">
                 <h3 class="text-lg font-semibold text-red-900 mb-2">Danger Zone</h3>
                 <p class="text-sm text-red-700 mb-6">Permanent actions that cannot be undone</p>
 

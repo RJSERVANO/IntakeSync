@@ -79,6 +79,9 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
+            'date_of_birth' => 'date',
+            'last_login_at' => 'datetime',
+            'last_sync_at' => 'datetime',
             'password' => 'hashed',
             'onboarding_completed' => 'boolean',
             'weight' => 'decimal:2',

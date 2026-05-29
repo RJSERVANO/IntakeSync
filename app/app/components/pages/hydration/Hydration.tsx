@@ -7,7 +7,7 @@ import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { captureAuthSessionContext, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import { getCacheOwner, getCachedSession, getUserScopedKey, readHydrationCache, writeHydrationCache, updateCachedHydrationGoal } from '../../../../services/offlineStorage';
-import { enqueueBeverageLog, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, type BeverageLogPayload } from '../../../../services/syncQueue';
+import { enqueueBeverageLog, getPendingSyncActions, markBeverageLogSynced, processBeverageQueue, removePendingBeverageLogActions, type BeverageLogPayload } from '../../../../services/syncQueue';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import ThemedNoticeModal, { ThemedNoticeType } from '../../common/ThemedNoticeModal';
 import InlineNotice from '../../common/InlineNotice';
@@ -138,6 +138,16 @@ async function markHydrationBackgroundRefreshed() {
 
 function isBeverageSyncAction(item: any) {
   return item?.action_type === 'LOG_BEVERAGE';
+}
+
+function hasServerBeverageIdentity(entry: any) {
+  const serverId = entry?.server_id ?? entry?.id;
+  const text = String(serverId ?? '').trim();
+  return Boolean(text && !text.startsWith('bev_') && entry?.sync_status !== 'pending' && entry?.sync_status !== 'failed');
+}
+
+function isLocalOnlyBeverageEntry(entry: any) {
+  return !hasServerBeverageIdentity(entry) || entry?.sync_status === 'pending' || entry?.sync_status === 'failed';
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -1051,6 +1061,7 @@ export default function Hydration() {
       const oldTotal = totalForLocalDay(previousEntries);
       const newTotal = oldTotal + amountMl;
 
+      api.invalidateApiCacheGroup('hydration', token as string | undefined);
       entriesRef.current = newEntries;
       setEntries(newEntries);
       try {
@@ -1259,10 +1270,6 @@ export default function Hydration() {
    * Updates local state, AsyncStorage, and syncs with backend.
    */
   async function performDeleteEntry(targetEntry: any) {
-    if (!token || connection.isDeviceOffline || connection.backendReachable === false) {
-      showInlineNotice('Internet connection is required for this function.');
-      return;
-    }
     setNoticeModal((prev) => prev ? { ...prev, loading: true } : prev);
     const targetKey = entryKey(targetEntry);
     const index = entries.findIndex((entry) => entryKey(entry) === targetKey);
@@ -1276,7 +1283,15 @@ export default function Hydration() {
 
     const newEntries = [...entries];
     const deletedEntry = newEntries[index];
+    const localOnlyDelete = isLocalOnlyBeverageEntry(deletedEntry);
 
+    if (!localOnlyDelete && (!token || connection.isDeviceOffline || connection.backendReachable === false)) {
+      showInlineNotice('Internet connection is required for this function.');
+      setNoticeModal(null);
+      return;
+    }
+
+    api.invalidateApiCacheGroup('hydration', token as string | undefined);
     setDeletedEntryKeys(prev => new Set(prev).add(entryKey(deletedEntry)));
 
     // Remove from array
@@ -1309,9 +1324,14 @@ export default function Hydration() {
     const updatedTodayTotal = totalForLocalDay(newEntries);
     setGoalReachedToday(updatedTodayTotal >= goal);
     await syncHydrationReminderLifecycle(updatedTodayTotal, goal);
+    const deletedIdentities = entryIdentities(deletedEntry);
+    if (localOnlyDelete) {
+      await removePendingBeverageLogActions(deletedIdentities.length ? deletedIdentities : [deletedEntry.local_id || deletedEntry.client_uuid || targetKey]);
+      setPendingSyncCount((await getPendingSyncActions()).filter(isBeverageSyncAction).length);
+    }
 
     // Sync deletion with backend server
-    if (token && deletedEntry) {
+    if (token && deletedEntry && !localOnlyDelete) {
       try {
         // Use POST method for deletion (backend expects timestamp in body)
         await api.post('/hydration/delete', {

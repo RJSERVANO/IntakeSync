@@ -203,6 +203,11 @@ function buildRequest(item: SyncQueueItem): { endpoint?: string; method: SyncQue
         payload: {
           status: item.action_type === 'MARK_MEDICATION_TAKEN' ? 'completed' : item.action_type === 'MARK_MEDICATION_MISSED' ? 'missed' : 'snoozed',
           time: item.payload.time,
+          scheduled_time: item.payload.scheduled_time || item.payload.time,
+          taken_at: item.payload.taken_at,
+          logged_at: item.payload.logged_at,
+          is_late: item.payload.is_late,
+          taken_status: item.payload.taken_status,
           local_id: item.local_id,
           client_uuid: item.local_id,
         },
@@ -261,7 +266,7 @@ function validateQueueItem(item: SyncQueueItem): string | null {
     return 'missing_server_medication_id';
   }
   if (['MARK_MEDICATION_TAKEN', 'MARK_MEDICATION_MISSED', 'SNOOZE_MEDICATION'].includes(item.action_type)) {
-    if (!isServerMedicationId(payload.server_id || payload.medication_id)) return 'missing_server_medication_id';
+    if (!payload.server_id && !payload.medication_id && !payload.medId) return 'missing_server_medication_id';
     if (!payload.time) return 'missing_medication_history_time';
   }
   if (['MARK_NOTIFICATION_READ', 'SNOOZE_NOTIFICATION', 'COMPLETE_NOTIFICATION', 'NOTIFICATION_OPENED', 'NOTIFICATION_COMPLETED', 'NOTIFICATION_SNOOZED'].includes(item.action_type)) {
@@ -297,6 +302,21 @@ function withSyncItemTimeout<T>(promise: Promise<T>, item: SyncQueueItem): Promi
       }), SYNC_ITEM_TIMEOUT_MS);
     }),
   ]);
+}
+
+function shouldRetryMedicationHistoryWithoutLateFields(error: any) {
+  if (!api.isValidationError(error)) return false;
+  const text = JSON.stringify(error?.data || error?.message || '').toLowerCase();
+  return ['is_late', 'taken_status', 'taken_at', 'logged_at', 'scheduled_time'].some((field) => text.includes(field));
+}
+
+function stripLateMedicationHistoryFields(payload: any) {
+  return {
+    status: payload.status,
+    time: payload.time,
+    local_id: payload.local_id,
+    client_uuid: payload.client_uuid,
+  };
 }
 
 async function updateMedicationServerId(localId: string, serverId: string, user?: any | null) {
@@ -338,7 +358,14 @@ async function sendItem(item: SyncQueueItem, token: string) {
 
   if (request.method === 'PUT') return api.put(request.endpoint, request.payload, token, 5000);
   if (request.method === 'DELETE') return api.del(request.endpoint, token, 5000);
-  return api.post(request.endpoint, request.payload, token, 5000);
+  try {
+    return await api.post(request.endpoint, request.payload, token, 5000);
+  } catch (error) {
+    if (item.action_type === 'MARK_MEDICATION_TAKEN' && shouldRetryMedicationHistoryWithoutLateFields(error)) {
+      return api.post(request.endpoint, stripLateMedicationHistoryFields(request.payload), token, 5000);
+    }
+    throw error;
+  }
 }
 
 export async function enqueueSyncAction(action: EnqueueInput) {
@@ -426,6 +453,32 @@ export async function removePendingActionByLocalId(local_id: string) {
   await writeQueue(queue.filter((item) => item.local_id !== local_id || item.status === 'synced'), session?.user);
 }
 
+export async function removePendingBeverageLogActions(identities: string[]) {
+  const identitySet = new Set(identities.filter(Boolean).map(String));
+  if (identitySet.size === 0) return { removedCreate: false };
+
+  const session = await getCachedSession();
+  const queue = await readQueue(session?.user);
+  let removedCreate = false;
+  const next = queue.filter((item) => {
+    if (item.action_type !== 'LOG_BEVERAGE' || item.status === 'synced') return true;
+    const payload = item.payload || {};
+    const matches = [
+      item.local_id,
+      payload.id,
+      payload.server_id,
+      payload.local_id,
+      payload.client_uuid,
+    ].filter((value) => value !== null && value !== undefined && String(value).trim())
+      .some((identity) => identitySet.has(String(identity)));
+    if (matches) removedCreate = true;
+    return !matches;
+  });
+
+  if (next.length !== queue.length) await writeQueue(next, session?.user);
+  return { removedCreate };
+}
+
 function syncMedicationIdentityValues(item: SyncQueueItem) {
   const payload = item.payload || {};
   return [
@@ -435,6 +488,7 @@ function syncMedicationIdentityValues(item: SyncQueueItem) {
     payload.local_id,
     payload.client_uuid,
     payload.medication_id,
+    payload.medId,
   ]
     .filter((value) => value !== null && value !== undefined && String(value).trim())
     .map((value) => String(value));
@@ -448,7 +502,13 @@ export async function removePendingMedicationActionsForDelete(identities: string
   const queue = await readQueue(session?.user);
   let removedCreate = false;
   const next = queue.filter((item) => {
-    if (!['CREATE_MEDICATION', 'UPDATE_MEDICATION'].includes(item.action_type) || item.status === 'synced') return true;
+    if (![
+      'CREATE_MEDICATION',
+      'UPDATE_MEDICATION',
+      'MARK_MEDICATION_TAKEN',
+      'MARK_MEDICATION_MISSED',
+      'SNOOZE_MEDICATION',
+    ].includes(item.action_type) || item.status === 'synced') return true;
     const matches = syncMedicationIdentityValues(item).some((identity) => identitySet.has(identity));
     if (matches && item.action_type === 'CREATE_MEDICATION') removedCreate = true;
     return !matches;
@@ -562,10 +622,11 @@ export async function processSyncQueue(
           if (serverId) {
             await updateMedicationServerId(item.local_id, serverId, currentUser);
             nextQueue.forEach((queued, queuedIndex) => {
-              if (queued.local_id === item.local_id && queuedIndex !== index) {
+              const queuedDependsOnCreatedMedication = syncMedicationIdentityValues(queued).includes(item.local_id);
+              if ((queued.local_id === item.local_id || queuedDependsOnCreatedMedication) && queuedIndex !== index) {
                 nextQueue[queuedIndex] = {
                   ...queued,
-                  payload: { ...queued.payload, id: serverId, server_id: serverId, medication_id: serverId, local_id: item.local_id },
+                  payload: { ...queued.payload, id: serverId, server_id: serverId, medication_id: serverId },
                   endpoint: queued.endpoint?.replace(item.local_id, serverId),
                 };
               }

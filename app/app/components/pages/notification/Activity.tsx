@@ -15,7 +15,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { del, get, isAuthError, isNetworkError, post, put } from '../../../api';
+import { del, get, invalidateApiCacheGroup, isAuthError, isNetworkError, post, put } from '../../../api';
 import { captureAuthSessionContext, handleAuthFailureIfCurrent, isAuthSessionContextCurrent } from '../../../../services/authSession';
 import {
   getCachedSession,
@@ -131,6 +131,16 @@ const getSafeTime = (value?: string | null) => parseSafeDate(value)?.getTime() ?
 const formatSafeTime = (value?: string | null) =>
   parseSafeDate(value)?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) ?? 'Unknown';
 
+const MEDICATION_LATE_GRACE_MS = 30 * 60 * 1000;
+
+const isMedicationHistoryLate = (entry: any) => {
+  if (entry?.status !== 'completed') return false;
+  if (entry?.is_late === true || entry?.isLate === true || entry?.taken_status === 'late' || entry?.takenStatus === 'late') return true;
+  const scheduled = getSafeTime(entry?.scheduled_time || entry?.time);
+  const actual = getSafeTime(entry?.loggedAt || entry?.logged_at || entry?.taken_at || entry?.completed_at || entry?.created_at || entry?.updated_at);
+  return scheduled > 0 && actual > 0 && actual - scheduled > MEDICATION_LATE_GRACE_MS;
+};
+
 const formatMeta = (value?: string | null) => {
   const date = parseSafeDate(value);
   if (!date) return 'Unknown time';
@@ -236,16 +246,23 @@ const mergeNotificationRecords = (items: NotificationItem[]) => {
       : item.status === 'scheduled' && ['delivered', 'missed', 'skipped', 'failed', 'needs_attention', 'snoozed', 'completed'].includes(existing.status)
         ? existing.status
         : item.status;
+    const incomingIsLocalStateMarker = Boolean(item.metadata?.local_state_marker);
     byKey.set(key, {
       ...existing,
       ...item,
       id: existing.id || item.id,
+      type: incomingIsLocalStateMarker ? existing.type : item.type,
+      title: incomingIsLocalStateMarker ? existing.title : item.title,
+      message: incomingIsLocalStateMarker ? existing.message : item.message,
       status,
       scheduled_at: item.scheduled_at || existing.scheduled_at || null,
       scheduled_time: item.scheduled_time || existing.scheduled_time || null,
       created_at: existing.created_at || item.created_at || null,
       opened_at: item.opened_at || existing.opened_at || null,
       read_at: item.read_at || existing.read_at || null,
+      hidden_at: item.hidden_at || existing.hidden_at || null,
+      cleared_at: item.cleared_at || existing.cleared_at || null,
+      deleted_at: item.deleted_at || existing.deleted_at || null,
       metadata: { ...(existing.metadata || {}), ...(item.metadata || {}) },
     });
   });
@@ -637,10 +654,11 @@ export default function Activity() {
         const status = (entry?.status === 'skipped' ? 'skipped' : entry?.status === 'missed' ? 'missed' : entry?.status === 'snoozed' ? 'snoozed' : 'completed') as NotificationStatus;
         const when = entry?.loggedAt || entry?.logged_at || entry?.created_at || entry?.time || new Date().toISOString();
         const medName = med?.name || entry?.medication_name || 'Medication';
+        const isLate = isMedicationHistoryLate(entry);
         return {
           id: `medication-history:${entry?.id || `${entry?.medId || entry?.medication_id}:${entry?.time}:${status}`}`,
           type: 'medication',
-          title: status === 'completed' ? `${medName} taken` : `${medName} ${status}`,
+          title: status === 'completed' ? `${medName} ${isLate ? 'taken late' : 'taken'}` : `${medName} ${status}`,
           message: entry?.time ? `Scheduled for ${formatSafeTime(entry.time)}` : 'Medication activity recorded',
           status,
           created_at: when,
@@ -653,6 +671,8 @@ export default function Activity() {
             medicationId: med?.id || entry?.medId || entry?.medication_id,
             medication_id: med?.id || entry?.medId || entry?.medication_id,
             medicationName: medName,
+            is_late: isLate,
+            taken_status: isLate ? 'late' : status === 'completed' ? 'on_time' : null,
             doseTime: entry?.time || when,
           },
         };
@@ -893,6 +913,7 @@ export default function Activity() {
   const markOneRead = useCallback(async (item: NotificationItem) => {
     const openedAt = new Date().toISOString();
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, opened_at: openedAt, read_at: current.read_at || openedAt } : current);
+    invalidateApiCacheGroup('notifications', token);
     setNotifications(nextNotifications);
     await cacheCurrentNotifications(nextNotifications);
     if (currentUser) await markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item));
@@ -922,6 +943,7 @@ export default function Activity() {
   const completeNotification = useCallback(async (item: NotificationItem) => {
     const readAt = new Date().toISOString();
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, opened_at: current.opened_at || readAt, read_at: current.read_at || readAt } : current);
+    invalidateApiCacheGroup('notifications', token);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
@@ -937,6 +959,7 @@ export default function Activity() {
 
   const snoozeNotification = useCallback(async (item: NotificationItem) => {
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'snoozed' as const } : current);
+    invalidateApiCacheGroup('notifications', token);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
@@ -974,6 +997,7 @@ export default function Activity() {
     await persistHiddenRecentIds(currentUser, nextHidden);
     const now = new Date().toISOString();
     const nextNotifications = notifications.map((current) => current.id === item.id ? { ...current, status: 'cleared' as const, opened_at: current.opened_at || now, read_at: current.read_at || now, hidden_at: current.hidden_at || now, cleared_at: current.cleared_at || now, metadata: { ...(current.metadata || {}), recent_hidden: true } } : current);
+    invalidateApiCacheGroup('notifications', token);
     setNotifications(nextNotifications);
     setSelectedNotification(null);
     await cacheCurrentNotifications(nextNotifications);
@@ -1010,6 +1034,7 @@ export default function Activity() {
         ? item
         : { ...item, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt }
     ));
+    invalidateApiCacheGroup('notifications', token);
     setNotifications(nextNotifications);
     await cacheCurrentNotifications(nextNotifications);
     if (currentUser) {
@@ -1018,17 +1043,18 @@ export default function Activity() {
         .map((item) => markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item))));
     }
     setInlineNotice('Marked read');
-  }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications]);
+  }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications, token]);
 
   const clearRecent = useCallback(async () => {
-    if (connection.isDeviceOffline || connection.backendReachable === false) {
-      setInlineNotice('Internet connection is required for this function.');
-      return;
-    }
     const targets = notifications
       .filter((item) => !isHiddenRecent(item, hiddenRecentIds))
       .filter(hasHappenedOrWasActioned)
       .filter((item) => filter === 'unread' ? isUnread(item) : filter === 'medication' || filter === 'hydration' ? item.type === filter : true);
+    const hasBackendTargets = targets.some((item) => Boolean(backendNotificationId(item)));
+    if ((connection.isDeviceOffline || connection.backendReachable === false) && hasBackendTargets) {
+      setInlineNotice('Internet connection is required for this function.');
+      return;
+    }
     const nextHidden = new Set(hiddenRecentIds);
     targets.forEach((item) => nextHidden.add(String(item.id)));
     const targetIds = new Set(targets.map((item) => String(item.id)));
@@ -1038,6 +1064,7 @@ export default function Activity() {
         ? { ...item, status: 'cleared' as const, opened_at: item.opened_at || readAt, read_at: item.read_at || readAt, hidden_at: item.hidden_at || readAt, cleared_at: item.cleared_at || readAt, metadata: { ...(item.metadata || {}), recent_hidden: true } }
         : item
     ));
+    invalidateApiCacheGroup('notifications', token);
     setHiddenRecentIds(nextHidden);
     setNotifications(nextNotifications);
     await persistHiddenRecentIds(currentUser, nextHidden);
@@ -1049,7 +1076,7 @@ export default function Activity() {
     }
     setShowAllRecent(false);
     setInlineNotice('Recent hidden');
-  }, [cacheCurrentNotifications, connection.backendReachable, connection.isDeviceOffline, currentUser, filter, hiddenRecentIds, notifications, persistHiddenRecentIds]);
+  }, [cacheCurrentNotifications, connection.backendReachable, connection.isDeviceOffline, currentUser, filter, hiddenRecentIds, notifications, persistHiddenRecentIds, token]);
 
   const upcomingReminders = useMemo<ReminderItem[]>(() => {
     const today = new Date();

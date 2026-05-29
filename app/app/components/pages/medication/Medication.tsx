@@ -86,6 +86,10 @@ type HistoryEntry = {
   time: string; // ISO
   status: 'completed' | 'skipped' | 'missed' | 'snoozed';
   loggedAt?: string;
+  is_late?: boolean;
+  isLate?: boolean;
+  taken_status?: 'on_time' | 'late' | string | null;
+  takenStatus?: 'on_time' | 'late' | string | null;
   medicationName?: string;
   dosage?: string;
   medicationDeleted?: boolean;
@@ -96,6 +100,7 @@ type DoseChipStatus = 'upcoming' | 'completed' | 'missed' | 'skipped';
 type DoseChip = {
   time: string;
   status: DoseChipStatus;
+  isLate?: boolean;
 };
 
 type ThemedPopup = {
@@ -565,12 +570,25 @@ function isSimilarMedicationForConfirmation(candidate: Partial<MedicationItem>, 
 }
 
 function normalizeHistoryEntry(entry: any, medId: string): HistoryEntry {
+  const time = entry.scheduled_time || entry.time;
+  const loggedAt = entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at;
+  const scheduledTime = new Date(time).getTime();
+  const actualTime = new Date(loggedAt || time).getTime();
+  const derivedLate = entry.status === 'completed'
+    && Number.isFinite(scheduledTime)
+    && Number.isFinite(actualTime)
+    && actualTime - scheduledTime > LATE_GRACE_MS;
+  const explicitLate = entry.is_late === true || entry.isLate === true || entry.taken_status === 'late' || entry.takenStatus === 'late';
   return {
     id: entry.id?.toString() || uid(),
     medId: medId.toString(),
-    time: entry.scheduled_time || entry.time,
+    time,
     status: entry.status,
-    loggedAt: entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at,
+    loggedAt,
+    is_late: entry.status === 'completed' ? explicitLate || derivedLate : false,
+    isLate: entry.status === 'completed' ? explicitLate || derivedLate : false,
+    taken_status: entry.status === 'completed' ? (explicitLate || derivedLate ? 'late' : 'on_time') : null,
+    takenStatus: entry.status === 'completed' ? (explicitLate || derivedLate ? 'late' : 'on_time') : null,
     medicationName: entry.medication_name_snapshot || entry.medication?.name || entry.medication_name || entry.name,
     dosage: entry.dosage_snapshot || entry.medication?.dosage || entry.dosage,
     medicationDeleted: Boolean(entry.medication?.deleted_at || entry.medication_deleted || entry.deleted_at),
@@ -591,6 +609,48 @@ function getHistoryStatusPriority(status: HistoryEntry['status']) {
   return 1;
 }
 
+function resolveCompletedDoseTiming(time: string, loggedAt?: string | null) {
+  const scheduled = new Date(time).getTime();
+  const actual = new Date(loggedAt || new Date().toISOString()).getTime();
+  const isLate = Number.isFinite(scheduled) && Number.isFinite(actual) && actual - scheduled > LATE_GRACE_MS;
+  return {
+    isLate,
+    takenStatus: isLate ? 'late' as const : 'on_time' as const,
+  };
+}
+
+function withCompletedDoseTiming(entry: HistoryEntry): HistoryEntry {
+  if (entry.status !== 'completed') return entry;
+  const timing = resolveCompletedDoseTiming(entry.time, entry.loggedAt);
+  return {
+    ...entry,
+    is_late: entry.is_late === true || entry.isLate === true || entry.taken_status === 'late' || entry.takenStatus === 'late' || timing.isLate,
+    isLate: entry.is_late === true || entry.isLate === true || entry.taken_status === 'late' || entry.takenStatus === 'late' || timing.isLate,
+    taken_status: entry.taken_status === 'late' || entry.takenStatus === 'late' || timing.isLate ? 'late' : 'on_time',
+    takenStatus: entry.taken_status === 'late' || entry.takenStatus === 'late' || timing.isLate ? 'late' : 'on_time',
+  };
+}
+
+function shouldRetryMedicationHistoryWithoutLateFields(error: any) {
+  if (!api.isValidationError(error)) return false;
+  const text = JSON.stringify(error?.data || error?.message || '').toLowerCase();
+  return ['is_late', 'taken_status', 'taken_at', 'logged_at', 'scheduled_time'].some((field) => text.includes(field));
+}
+
+async function postCompletedMedicationHistory(path: string, payload: any, token: string) {
+  try {
+    return await api.post(path, payload, token);
+  } catch (error) {
+    if (!shouldRetryMedicationHistoryWithoutLateFields(error)) throw error;
+    return api.post(path, {
+      status: payload.status,
+      time: payload.time,
+      client_uuid: payload.client_uuid,
+      local_id: payload.local_id,
+    }, token);
+  }
+}
+
 function getHistorySortTime(entry: HistoryEntry) {
   const logged = new Date(entry.loggedAt || entry.time).getTime();
   if (Number.isFinite(logged)) return logged;
@@ -601,20 +661,21 @@ function getHistorySortTime(entry: HistoryEntry) {
 function dedupeMedicationHistory(entries: HistoryEntry[]) {
   const byDose = new Map<string, HistoryEntry>();
   entries.forEach((entry) => {
-    const key = getDoseMinuteKey(entry);
+    const normalized = withCompletedDoseTiming(entry);
+    const key = getDoseMinuteKey(normalized);
     const existing = byDose.get(key);
     if (!existing) {
-      byDose.set(key, entry);
+      byDose.set(key, normalized);
       return;
     }
 
-    const entryPriority = getHistoryStatusPriority(entry.status);
+    const entryPriority = getHistoryStatusPriority(normalized.status);
     const existingPriority = getHistoryStatusPriority(existing.status);
     if (
       entryPriority > existingPriority ||
-      (entryPriority === existingPriority && getHistorySortTime(entry) > getHistorySortTime(existing))
+      (entryPriority === existingPriority && getHistorySortTime(normalized) > getHistorySortTime(existing))
     ) {
-      byDose.set(key, entry);
+      byDose.set(key, normalized);
     }
   });
 
@@ -730,6 +791,11 @@ export default function Medication() {
   const activeSyncing = backgroundRefreshing || queueSyncing;
   const connection = useConnectionStatus(token);
 
+  const invalidateMedicationApiCaches = React.useCallback(() => {
+    api.invalidateApiCacheGroup('medications', token as string | undefined);
+    api.invalidateApiCacheGroup('medication-history', token as string | undefined);
+  }, [token]);
+
   useEffect(() => {
     const timer = setInterval(() => setNowTick(Date.now()), 30000);
     return () => clearInterval(timer);
@@ -836,7 +902,7 @@ export default function Medication() {
         } else {
           setMedicineSearchMessage(
             api.isNetworkError(err)
-              ? 'No offline medication search data available. You can still manually enter a medication name.'
+              ? 'OTC search requires an internet connection unless previous results are available offline.'
               : 'Could not search medications. Please try again.'
           );
           setShowMedicineSuggestions(true);
@@ -1312,7 +1378,9 @@ export default function Medication() {
       // Update existing medication
       const updatedMed: MedicationItem = { ...editing, ...medData, sync_status: editing.sync_status === 'pending' ? 'pending' : editing.sync_status };
       const optimisticUpdatedMeds = meds.map((x) => (x.id === updatedMed.id ? updatedMed : x));
+      invalidateMedicationApiCaches();
       setMeds(optimisticUpdatedMeds);
+      await writeMedicationCacheIfSafe(currentUser, optimisticUpdatedMeds);
 
       if (token) {
         try {
@@ -1351,6 +1419,7 @@ export default function Medication() {
       }
     } else {
       // Create new medication
+      invalidateMedicationApiCaches();
       if (token) {
         try {
           // Save to server first to get proper ID
@@ -1456,6 +1525,15 @@ export default function Medication() {
     if (message === 'Will sync later') setHasPendingOfflineChanges(true);
     setInlineNotice(message);
     noticeTimerRef.current = setTimeout(() => setInlineNotice(null), 2400);
+  }
+
+  function hasServerMedicationIdentity(med?: Partial<MedicationItem> | null) {
+    const id = String(med?.server_id ?? med?.id ?? '').trim();
+    return Boolean(id && /^\d+$/.test(id) && med?.sync_status !== 'pending');
+  }
+
+  function isLocalOnlyHistoryEntry(entry: HistoryEntry) {
+    return !/^\d+$/.test(String(entry.id || '').trim());
   }
 
   useEffect(() => {
@@ -1612,6 +1690,7 @@ export default function Medication() {
     const newMeds = previous.filter((m) => !sameMedication(m, deleteTarget) && !medicationMatchesDeletedKeys(m, tombstones));
     const newHistory = markHistoryForDeletedMedication(previousHistory, deleteTarget);
     const newUpcoming = filterDeletedUpcomingItems(previousUpcoming, tombstones);
+    invalidateMedicationApiCaches();
     setMeds(newMeds);
     setUpcoming(newUpcoming);
     if (editing && sameMedication(editing, deleteTarget)) {
@@ -1913,6 +1992,8 @@ export default function Medication() {
     }
     setActionBusy(actionKey, true);
     const loggedAt = new Date().toISOString();
+    const historyLocalId = `medhist_${med.local_id || medId}_${new Date(scheduledTime).toISOString().slice(0, 16)}_completed`;
+    const completedTiming = resolveCompletedDoseTiming(scheduledTime, loggedAt);
     const existingMissedDose = history.find((entry) => (
       entry.medId.toString() === medId.toString()
       && (entry.status === 'skipped' || entry.status === 'missed')
@@ -1922,11 +2003,15 @@ export default function Medication() {
 
     // Create new history entry
     const newHistoryEntry: HistoryEntry = {
-      id: existingMissedDose?.id || uid(),
+      id: existingMissedDose?.id || historyLocalId,
       medId,
       time: scheduledTime,
       status: 'completed',
       loggedAt,
+      is_late: completedTiming.isLate,
+      isLate: completedTiming.isLate,
+      taken_status: completedTiming.takenStatus,
+      takenStatus: completedTiming.takenStatus,
       medicationName: med.name,
       dosage: med.dosage,
     };
@@ -1938,6 +2023,7 @@ export default function Medication() {
     );
 
     // Update history immediately for better UX, then persist before starting backend sync.
+    invalidateMedicationApiCaches();
     setHistory(optimisticHistory);
     const rollbackOptimisticTaken = () => {
       setHistory(prev => dedupeMedicationHistory(existingMissedDose
@@ -1955,6 +2041,7 @@ export default function Medication() {
           dosage: med.dosage,
           doseTime: scheduledTime,
           takenAt: loggedAt,
+          isLate: completedTiming.isLate,
         });
       }
     } catch {
@@ -1965,18 +2052,61 @@ export default function Medication() {
     }
     await cancelMedicationDoseNotifications(getNotificationMedicationId(med), scheduledTime);
 
+    const enqueueTakenForLater = async () => {
+      await enqueueSyncAction({
+        action_type: 'MARK_MEDICATION_TAKEN',
+        method: 'POST',
+        local_id: historyLocalId,
+        payload: {
+          medId,
+          medication_id: med.server_id || medId,
+          server_id: med.server_id || medId,
+          status: 'completed',
+          time: scheduledTime,
+          taken_at: loggedAt,
+          logged_at: loggedAt,
+          is_late: completedTiming.isLate,
+          taken_status: completedTiming.takenStatus,
+          client_uuid: historyLocalId,
+        },
+      });
+      setHasPendingOfflineChanges(true);
+      hapticSuccess();
+      showInlineNotice('Will sync later');
+    };
+
+    if (!hasServerMedicationIdentity(med)) {
+      await enqueueTakenForLater();
+      setActionBusy(actionKey, false);
+      return;
+    }
+
     // Save to server if token exists
     if (token) {
       try {
         console.log('Marking medication as taken:', medId, 'at', scheduledTime);
-        const historyLocalId = `medhist_${med.local_id || medId}_${new Date(scheduledTime).toISOString().slice(0, 16)}_completed`;
-        const response = await api.post(`/medications/${med.server_id || medId}/history`, { status: 'completed', time: scheduledTime, client_uuid: historyLocalId, local_id: historyLocalId }, token as string);
+        const response = await postCompletedMedicationHistory(`/medications/${med.server_id || medId}/history`, {
+          status: 'completed',
+          time: scheduledTime,
+          scheduled_time: scheduledTime,
+          taken_at: loggedAt,
+          logged_at: loggedAt,
+          is_late: completedTiming.isLate,
+          taken_status: completedTiming.takenStatus,
+          client_uuid: historyLocalId,
+          local_id: historyLocalId,
+        }, token as string);
         console.log('Server response:', response);
         // Update with server ID if available
         if (response && response.id) {
           const syncedHistory = dedupeMedicationHistory(optimisticHistory.map(h =>
             h.id === newHistoryEntry.id
-              ? normalizeHistoryEntry({ ...response, logged_at: response.logged_at || response.taken_time || response.created_at || h.loggedAt }, medId)
+              ? normalizeHistoryEntry({
+                  ...response,
+                  logged_at: response.logged_at || response.taken_time || response.taken_at || response.completed_at || response.created_at || h.loggedAt,
+                  is_late: response.is_late ?? h.is_late,
+                  taken_status: response.taken_status || h.taken_status,
+                }, medId)
               : h
           ));
           setHistory(syncedHistory);
@@ -1991,23 +2121,8 @@ export default function Medication() {
         console.log('Error marking medication as taken:', err);
         console.log('Error details:', JSON.stringify(err, null, 2));
         if (api.isNetworkError(err)) {
-          const historyLocalId = newHistoryEntry.id;
-          await enqueueSyncAction({
-            action_type: 'MARK_MEDICATION_TAKEN',
-            method: 'POST',
-            local_id: historyLocalId,
-            payload: {
-              medId,
-              medication_id: medId,
-              server_id: med.server_id || medId,
-              status: 'completed',
-              time: scheduledTime,
-              client_uuid: historyLocalId,
-            },
-          });
+          await enqueueTakenForLater();
           setOfflineMode(true);
-          hapticSuccess();
-          showInlineNotice('Will sync later');
         } else {
         rollbackOptimisticTaken();
 
@@ -2033,15 +2148,7 @@ export default function Medication() {
       }
     } else {
       setActionBusy(actionKey, false);
-      const historyLocalId = newHistoryEntry.id;
-      await enqueueSyncAction({
-        action_type: 'MARK_MEDICATION_TAKEN',
-        method: 'POST',
-        local_id: historyLocalId,
-        payload: { medId, medication_id: medId, server_id: med.server_id || medId, status: 'completed', time: scheduledTime, client_uuid: historyLocalId },
-      });
-      hapticSuccess();
-      showInlineNotice('Will sync later');
+      await enqueueTakenForLater();
     }
   }
 
@@ -2124,7 +2231,9 @@ export default function Medication() {
 
 
   async function clearHistory() {
-    if (!token || connection.isDeviceOffline || connection.backendReachable === false) {
+    const visibleEntries = getValidHistoryEntries();
+    const canClearOfflineLocally = visibleEntries.length > 0 && visibleEntries.every(isLocalOnlyHistoryEntry);
+    if ((!token || connection.isDeviceOffline || connection.backendReachable === false) && !canClearOfflineLocally) {
       showInlineNotice('Internet connection is required for this function.');
       return;
     }
@@ -2138,13 +2247,16 @@ export default function Medication() {
       onPrimary: async () => {
         setNoticeModal(null);
         const now = Date.now();
-        const visibleEntries = getValidHistoryEntries();
         const keysToClear = visibleEntries.flatMap((entry) => [entry.id, getHistoryCompositeKey(entry)]);
         const nextClearedKeys = Array.from(new Set([...clearedHistoryKeys, ...keysToClear]));
         try {
+          invalidateMedicationApiCaches();
           if (clearedHistoryCacheKey) {
             await AsyncStorage.setItem(`${clearedHistoryCacheKey}:cleared_time`, now.toString());
             await AsyncStorage.setItem(clearedHistoryCacheKey, JSON.stringify(nextClearedKeys));
+          }
+          if (canClearOfflineLocally) {
+            await removePendingMedicationActionsForDelete(keysToClear);
           }
           await writeMedicationHistoryCache(currentUser, history);
           const owner = getCacheOwner(currentUser);
@@ -2323,7 +2435,8 @@ export default function Medication() {
       .slice(0, limit)
       .map((occurrence) => {
         const time = occurrence.toISOString();
-        return { time, status: getDoseChipStatus(med.id, time, now) };
+        const entry = getDoseHistoryEntry(med.id, time);
+        return { time, status: getDoseChipStatus(med.id, time, now), isLate: entry ? isTakenLate(entry) : false };
       });
   }
 
@@ -2347,7 +2460,8 @@ export default function Medication() {
   function getTodayDoseChips(med: MedicationItem): DoseChip[] {
     return getMedicationDoseOccurrencesForDate(med, new Date(nowTick)).map((occurrence) => {
       const time = occurrence.toISOString();
-      return { time, status: getDoseChipStatus(med.id, time) };
+      const entry = getDoseHistoryEntry(med.id, time);
+      return { time, status: getDoseChipStatus(med.id, time), isLate: entry ? isTakenLate(entry) : false };
     });
   }
 
@@ -2374,6 +2488,7 @@ export default function Medication() {
   }
 
   function getDoseChipDisplayLabel(chip: DoseChip) {
+    if (chip.status === 'completed' && chip.isLate) return 'Late';
     if (chip.status !== 'upcoming') return getDoseChipLabel(chip.status);
     const occurrence = new Date(chip.time);
     const today = new Date(nowTick);
@@ -2391,7 +2506,10 @@ export default function Medication() {
     return 'time-outline';
   }
 
-  function getDoseChipStyle(status: DoseChipStatus) {
+  function getDoseChipStyle(status: DoseChipStatus, isLate = false) {
+    if (status === 'completed' && isLate) {
+      return { badgeStyle: styles.timeBadgeLate, textStyle: styles.timeTextLate, iconColor: '#C2410C' };
+    }
     if (status === 'completed') {
       return { badgeStyle: styles.timeBadgeTaken, textStyle: styles.timeTextTaken, iconColor: '#047857' };
     }
@@ -2473,6 +2591,7 @@ export default function Medication() {
 
   function isTakenLate(entry: HistoryEntry) {
     if (entry.status !== 'completed') return false;
+    if (entry.is_late === true || entry.isLate === true || entry.taken_status === 'late' || entry.takenStatus === 'late') return true;
     const scheduled = new Date(entry.time).getTime();
     const logged = new Date(getHistoryLoggedAt(entry)).getTime();
     if (!Number.isFinite(scheduled) || !Number.isFinite(logged)) return false;
@@ -3082,7 +3201,7 @@ export default function Medication() {
 
                     <View style={styles.medicationTimes}>
                       {visibleDoseChips.map((chip) => {
-                        const chipStyle = getDoseChipStyle(chip.status);
+                        const chipStyle = getDoseChipStyle(chip.status, chip.isLate);
                         return (
                           <View key={chip.time} style={[styles.timeBadge, chipStyle.badgeStyle]}>
                             <Ionicons name={getDoseChipIcon(chip.status)} size={11} color={chipStyle.iconColor} />
@@ -4207,11 +4326,13 @@ const styles = StyleSheet.create({
   timeText: { color: '#1E3A8A', fontWeight: '800', fontSize: 10, flexShrink: 1 },
   timeBadgeUpcoming: { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' },
   timeBadgeTaken: { backgroundColor: '#ECFDF5', borderColor: '#BBF7D0' },
+  timeBadgeLate: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
   timeBadgeMissed: { backgroundColor: '#FEF2F2', borderColor: '#FECACA' },
   timeBadgeSkipped: { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' },
   timeBadgeMore: { backgroundColor: '#F8FAFC', borderColor: '#CBD5E1' },
   timeTextUpcoming: { color: '#1E3A8A' },
   timeTextTaken: { color: '#047857' },
+  timeTextLate: { color: '#C2410C' },
   timeTextMissed: { color: '#DC2626' },
   timeTextSkipped: { color: '#B45309' },
   timeTextMore: { color: '#475569' },

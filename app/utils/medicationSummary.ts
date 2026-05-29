@@ -40,6 +40,10 @@ export type MedicationSummaryHistoryEntry = {
   completed_at?: string;
   created_at?: string;
   updated_at?: string;
+  is_late?: boolean;
+  isLate?: boolean;
+  taken_status?: string | null;
+  takenStatus?: string | null;
   medicationDeleted?: boolean;
   medication_deleted?: boolean;
   deleted_at?: string | null;
@@ -56,6 +60,8 @@ type NormalizedHistoryEntry = {
   time: string;
   status: 'completed' | 'skipped' | 'missed' | 'snoozed';
   loggedAt?: string;
+  isLate?: boolean;
+  takenStatus?: 'on_time' | 'late' | string | null;
   medicationName?: string;
   dosage?: string;
   medicationDeleted?: boolean;
@@ -68,6 +74,7 @@ export type TodayMedicationDose = {
   dosage?: string;
   time: string;
   status: 'completed' | 'skipped' | 'missed' | 'pending';
+  isLate?: boolean;
   source: 'schedule' | 'history';
 };
 
@@ -167,12 +174,23 @@ function normalizeHistoryEntry(entry: MedicationSummaryHistoryEntry): Normalized
   if (!time || !medId || !status) return null;
   if (!['completed', 'skipped', 'missed', 'snoozed'].includes(status)) return null;
 
+  const loggedAt = entry.loggedAt || entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at;
+  const scheduledTime = new Date(time).getTime();
+  const actualTime = new Date(loggedAt || time).getTime();
+  const derivedLate = status === 'completed'
+    && Number.isFinite(scheduledTime)
+    && Number.isFinite(actualTime)
+    && actualTime - scheduledTime > MEDICATION_LATE_GRACE_MS;
+  const explicitLate = entry.is_late === true || entry.isLate === true || entry.taken_status === 'late' || entry.takenStatus === 'late';
+
   return {
     id: String(entry.id ?? entry.local_id ?? `${medId}:${time}:${status}`),
     medId: String(medId),
     time,
     status: status as NormalizedHistoryEntry['status'],
-    loggedAt: entry.loggedAt || entry.logged_at || entry.taken_time || entry.taken_at || entry.completed_at || entry.created_at || entry.updated_at,
+    loggedAt,
+    isLate: status === 'completed' ? explicitLate || derivedLate : false,
+    takenStatus: status === 'completed' ? (explicitLate || derivedLate ? 'late' : 'on_time') : null,
     medicationName: entry.medicationName || entry.medication_name_snapshot || entry.medication?.name || entry.medication_name,
     dosage: entry.dosage_snapshot || entry.medication?.dosage || entry.dosage,
     medicationDeleted: Boolean(entry.medication?.deleted_at || entry.medication_deleted || entry.deleted_at || entry.medicationDeleted),
@@ -493,6 +511,7 @@ export function deriveMedicationSummaryForDate({
         dosage: existingMed?.dosage || entry.dosage,
         time: entry.time,
         status,
+        isLate: entry.status === 'completed' ? entry.isLate : false,
         source: existing ? existing.source : 'history',
       });
     });

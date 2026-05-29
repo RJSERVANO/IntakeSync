@@ -149,6 +149,7 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
 
       let updated = { ...(user || {}), ...payload };
       try {
+        api.invalidateApiCacheGroup('profile', token as string | undefined);
         const resp = await api.put('/me', payload, token as string);
         if (!(await isAuthSessionContextCurrent(context))) return;
         updated = resp?.user ? { ...(user || {}), ...payload, ...(resp.user || {}) } : updated;
@@ -161,7 +162,7 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
       }
       const cached = await getCachedSession();
       if (!(await isAuthSessionContextCurrent(context))) return;
-      const merged = await mergeLocalAvatarIntoUser({ ...(cached?.user || {}), ...(user || {}), ...updated });
+      const merged = await mergeLocalAvatarIntoUser({ ...(cached?.user || {}), ...(user || {}), ...updated, local_updated_at: new Date().toISOString(), sync_status: 'synced' });
       setEditData(buildEditableUser(merged));
       await updateCachedUser(merged, token);
       await writeProfileCache(merged, merged);
