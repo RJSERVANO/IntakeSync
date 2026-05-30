@@ -9,6 +9,7 @@ use App\Models\MedicationHistory;
 use App\Models\HydrationEntry;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class InsightController extends Controller
 {
@@ -59,6 +60,15 @@ class InsightController extends Controller
         return $medicationId . ':' . $this->normalizeDoseTime($date)->format('Y-m-d H:i');
     }
 
+    protected function clampScore(int|float|null $score): ?int
+    {
+        if ($score === null || !is_finite((float) $score)) {
+            return null;
+        }
+
+        return max(0, min(100, (int) round($score)));
+    }
+
     protected function historyDoseTime(MedicationHistory $entry): Carbon
     {
         return $this->normalizeDoseTime(Carbon::parse($entry->scheduled_time ?: $entry->time));
@@ -102,7 +112,40 @@ class InsightController extends Controller
             ->values();
     }
 
-    protected function scheduledDosesForDate($medications, Carbon $date, ?Carbon $through = null): int
+    protected function hydrationEntryKey(HydrationEntry $entry): string
+    {
+        $clientUuid = is_string($entry->client_uuid ?? null) ? trim($entry->client_uuid) : '';
+        if ($clientUuid !== '') {
+            return 'client:' . $clientUuid;
+        }
+
+        return 'fingerprint:' . implode('|', [
+            optional($entry->created_at)->format('Y-m-d H:i:s') ?? '',
+            (string) (int) $entry->amount_ml,
+            strtolower((string) $entry->source),
+            strtolower((string) $entry->beverage_type),
+            strtolower((string) $entry->drink_label),
+        ]);
+    }
+
+    protected function dedupeHydrationEntries($entries)
+    {
+        return $entries
+            ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
+            ->reduce(function ($carry, HydrationEntry $entry) {
+                $key = $this->hydrationEntryKey($entry);
+                if (!$carry->has($key)) {
+                    $carry->put($key, $entry);
+                }
+
+                return $carry;
+            }, collect())
+            ->values()
+            ->sortByDesc(fn($entry) => optional($entry->created_at)->timestamp ?? 0)
+            ->values();
+    }
+
+    protected function scheduledDoseKeysForDate($medications, Carbon $date, ?Carbon $through = null): array
     {
         $doseKeys = [];
         foreach ($medications as $medication) {
@@ -127,7 +170,12 @@ class InsightController extends Controller
             }
         }
 
-        return count($doseKeys);
+        return $doseKeys;
+    }
+
+    protected function scheduledDosesForDate($medications, Carbon $date, ?Carbon $through = null): int
+    {
+        return count($this->scheduledDoseKeysForDate($medications, $date, $through));
     }
 
     protected function serializeHydrationEntry(HydrationEntry $entry): array
@@ -168,9 +216,11 @@ class InsightController extends Controller
         $startOfWeek = Carbon::now()->startOfWeek(Carbon::SUNDAY);
         $endOfWeek = Carbon::now()->endOfWeek(Carbon::SATURDAY);
 
-        $hydrationEntries = HydrationEntry::where('user_id', $user->id)
+        $rawHydrationEntries = HydrationEntry::where('user_id', $user->id)
             ->whereBetween('created_at', [$startOfWeek, $endOfWeek])
             ->get();
+        $hydrationEntries = $this->dedupeHydrationEntries($rawHydrationEntries);
+        $duplicateHydrationRecords = max(0, $rawHydrationEntries->count() - $hydrationEntries->count());
 
         $hydrationGoal = $user->hydration_goal ?? 2000;
         $totalHydration = $hydrationEntries->sum('amount_ml');
@@ -178,21 +228,23 @@ class InsightController extends Controller
             ->groupBy(fn ($entry) => Carbon::parse($entry->created_at)->toDateString())
             ->count();
         $expectedHydration = $hydrationGoal * 7;
-        $hydrationPercentage = $hydrationEntries->count() > 0 && $expectedHydration > 0
+        $rawHydrationPercentage = $hydrationEntries->count() > 0 && $expectedHydration > 0
             ? round(($totalHydration / $expectedHydration) * 100) 
             : null;
+        $hydrationPercentage = $this->clampScore($rawHydrationPercentage);
 
         $medications = Medication::where('user_id', $user->id)->get();
         $totalScheduled = 0;
         $totalCompleted = 0;
         $totalMissed = 0;
         $dailyScores = [];
-        $medicationIds = $medications->pluck('id');
-        $medicationEvents = $this->dedupeMedicationEvents(MedicationHistory::with('medication')
+        $rawMedicationEvents = MedicationHistory::with('medication')
             ->where('user_id', $user->id)
             ->whereBetween('time', [$startOfWeek, $endOfWeek])
             ->orderBy('time', 'desc')
-            ->get());
+            ->get();
+        $medicationEvents = $this->dedupeMedicationEvents($rawMedicationEvents);
+        $duplicateMedicationRecords = max(0, $rawMedicationEvents->count() - $medicationEvents->count());
 
         for ($date = $startOfWeek->copy(); $date->lte($endOfWeek); $date->addDay()) {
             $dayStart = $date->copy()->startOfDay();
@@ -206,11 +258,13 @@ class InsightController extends Controller
             $elapsedThrough = $date->isToday()
                 ? Carbon::now()
                 : ($date->isPast() ? $dayEnd : $dayStart->copy()->subSecond());
-            $dayScheduled = $this->scheduledDosesForDate($medications, $date, $elapsedThrough);
+            $scheduledDoseKeys = $this->scheduledDoseKeysForDate($medications, $date, $elapsedThrough);
+            $dayScheduled = count($scheduledDoseKeys);
             $dayEvents = $medicationEvents->filter(fn ($event) => Carbon::parse($event->time)->between($dayStart, $dayEnd, true));
-            $dayCompleted = $dayEvents->where('status', 'completed')->count();
-            $daySkipped = $dayEvents->whereIn('status', ['missed', 'skipped'])->count();
-            $dayMedicationScore = $dayScheduled > 0 ? min(100, round(($dayCompleted / $dayScheduled) * 100)) : null;
+            $scheduledDayEvents = $dayEvents->filter(fn ($event) => isset($scheduledDoseKeys[$this->doseKey($event->medication_id, $this->historyDoseTime($event))]));
+            $dayCompleted = $scheduledDayEvents->where('status', 'completed')->count();
+            $daySkipped = $scheduledDayEvents->whereIn('status', ['missed', 'skipped'])->count();
+            $dayMedicationScore = $dayScheduled > 0 ? $this->clampScore(($dayCompleted / $dayScheduled) * 100) : null;
             $components = array_values(array_filter([$dayHydrationScore, $dayMedicationScore], fn ($score) => $score !== null));
             $dayScore = count($components) > 0 ? round(array_sum($components) / count($components)) : null;
 
@@ -231,13 +285,42 @@ class InsightController extends Controller
             ];
         }
 
-        $adherenceRate = $totalScheduled > 0
+        $rawAdherenceRate = $totalScheduled > 0
             ? round(($totalCompleted / $totalScheduled) * 100) 
             : null;
+        $adherenceRate = $this->clampScore($rawAdherenceRate);
 
         $scoreComponents = array_values(array_filter([$hydrationPercentage, $adherenceRate], fn ($score) => $score !== null));
-        $overallScore = count($scoreComponents) > 0 ? round(array_sum($scoreComponents) / count($scoreComponents)) : null;
+        $rawOverallScore = count($scoreComponents) > 0 ? array_sum($scoreComponents) / count($scoreComponents) : null;
+        $overallScore = $this->clampScore($rawOverallScore);
         $hasData = $overallScore !== null;
+
+        Log::debug('Weekly insight score diagnostics', [
+            'user_id' => $user->id,
+            'week_start' => $startOfWeek->toDateString(),
+            'week_end' => $endOfWeek->toDateString(),
+            'hydration' => [
+                'raw_percentage' => $rawHydrationPercentage,
+                'normalized_percentage' => $hydrationPercentage,
+                'total_ml' => $totalHydration,
+                'expected_ml' => $expectedHydration,
+                'raw_records' => $rawHydrationEntries->count(),
+                'deduped_records' => $hydrationEntries->count(),
+                'duplicate_records_detected' => $duplicateHydrationRecords,
+            ],
+            'medications' => [
+                'raw_adherence_rate' => $rawAdherenceRate,
+                'normalized_adherence_rate' => $adherenceRate,
+                'scheduled' => $totalScheduled,
+                'completed' => $totalCompleted,
+                'missed' => $totalMissed,
+                'raw_records' => $rawMedicationEvents->count(),
+                'deduped_records' => $medicationEvents->count(),
+                'duplicate_records_detected' => $duplicateMedicationRecords,
+            ],
+            'overall_score_before_normalization' => $rawOverallScore,
+            'overall_score_after_normalization' => $overallScore ?? 0,
+        ]);
 
         return response()->json([
             'has_data' => $hasData,
@@ -263,7 +346,7 @@ class InsightController extends Controller
                     ? 'Medication check-ins are included in this period.'
                     : 'No medication schedule data in this period.',
             ],
-            'overall_score' => $overallScore,
+            'overall_score' => $overallScore ?? 0,
             'daily_scores' => $dailyScores,
             'week_start' => $startOfWeek->toDateString(),
             'week_end' => $endOfWeek->toDateString(),

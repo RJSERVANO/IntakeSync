@@ -48,6 +48,13 @@ const LAST_HOME_REFRESH_KEY = '@intakesync_last_home_refresh_at';
 const HOME_BACKGROUND_REFRESH_TTL_MS = 45 * 1000;
 const OTC_SAFETY_COPY = 'Use only as directed on the label. This app does not provide medical advice. Consult a healthcare professional if symptoms persist or you are unsure.';
 
+const normalizePercentScore = (value: unknown) => {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric)
+    ? Math.max(0, Math.min(100, Math.round(numeric)))
+    : 0;
+};
+
 function createBeverageLocalId() {
   return `bev_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -272,7 +279,7 @@ export default function Home() {
   const beverageAddInFlightRef = useRef(false);
   const userRef = useRef<any>(null);
   const hydrationGoalRef = useRef(DEFAULT_QUICK_STATUS.hydrationGoal);
-  const insightsScore = weeklyReport?.overall_score ?? 0;
+  const insightsScore = normalizePercentScore(weeklyReport?.overall_score);
   const remoteAvatarUri = getUserRemoteAvatarUri(user);
   const avatarSource = getAvatarSource(selectedAvatar) || (remoteAvatarUri ? { uri: remoteAvatarUri } : null);
   const connection = useConnectionStatus(routeToken);
@@ -1645,7 +1652,7 @@ export default function Home() {
 
             {weeklyReport && (
               <View style={styles.progressBarContainer}>
-                <View style={[styles.progressBar, { width: `${Math.min(insightsScore, 100)}%`, backgroundColor: '#F59E0B' }]} />
+                <View style={[styles.progressBar, { width: `${insightsScore}%`, backgroundColor: '#F59E0B' }]} />
               </View>
             )}
             <Text style={styles.insightPreview} numberOfLines={2}>{safeInsight}</Text>

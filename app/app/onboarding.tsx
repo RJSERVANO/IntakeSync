@@ -538,7 +538,7 @@ export default function Onboarding() {
                 <Ionicons name="water-outline" size={18} color="#2563EB" />
               </View>
               <Text style={styles.infoText}>
-                We&apos;ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
+                We'll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>What climate are you usually in?</Text>
@@ -585,7 +585,7 @@ export default function Onboarding() {
                 <Ionicons name="fitness-outline" size={18} color="#2563EB" />
               </View>
               <Text style={styles.infoText}>
-                Weâ€™ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
+                We'll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>How active are you most weeks?</Text>
@@ -622,7 +622,7 @@ export default function Onboarding() {
                   </>
                 ) : (
                   <Text style={styles.goalPreviewText}>
-                    Weâ€™ll use a standard 2,000 ml goal for now. You can adjust it later.
+                    We'll use a standard 2,000 ml goal for now. You can adjust it later.
                   </Text>
                 )}
               </View>
@@ -646,7 +646,7 @@ export default function Onboarding() {
                 <Ionicons name="analytics-outline" size={18} color="#2563EB" />
               </View>
               <Text style={styles.infoText}>
-                Weâ€™ll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
+                We'll estimate your daily water goal from your weight, climate, and activity level. You can adjust it later.
               </Text>
             </View>
             <Text style={styles.title}>How much do you weigh?</Text>

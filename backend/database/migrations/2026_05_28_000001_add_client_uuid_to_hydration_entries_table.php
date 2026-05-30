@@ -13,7 +13,10 @@ return new class extends Migration
     {
         Schema::table('hydration_entries', function (Blueprint $table) {
             if (!Schema::hasColumn('hydration_entries', 'client_uuid')) {
-                $table->string('client_uuid')->nullable()->after('id');
+                $column = $table->string('client_uuid')->nullable();
+                if (DB::connection()->getDriverName() !== 'sqlite') {
+                    $column->after('id');
+                }
             }
         });
 
@@ -39,6 +42,11 @@ return new class extends Migration
 
     private function hasIndex(): bool
     {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return collect(DB::select("PRAGMA index_list('hydration_entries')"))
+                ->contains(fn ($index) => ($index->name ?? null) === $this->indexName);
+        }
+
         $result = DB::selectOne(
             'SELECT COUNT(*) AS aggregate
              FROM INFORMATION_SCHEMA.STATISTICS
