@@ -19,8 +19,8 @@ return new class extends Migration
             $table->string('category')->nullable();
             $table->string('dosage')->nullable();
             $table->text('dosage_text')->nullable();
-            $table->integer('interval_hours')->default(4);
-            $table->integer('max_daily_doses')->default(4);
+            $table->integer('interval_hours')->nullable()->default(4);
+            $table->integer('max_daily_doses')->nullable()->default(4);
             $table->text('common_use')->nullable();
             $table->text('description')->nullable();
             $table->text('warnings')->nullable();

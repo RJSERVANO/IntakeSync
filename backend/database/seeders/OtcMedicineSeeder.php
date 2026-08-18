@@ -42,14 +42,16 @@ class OtcMedicineSeeder extends Seeder
     {
         $dosage = $medicine['dosage'] ?? null;
         $schedule = $this->inferSchedule($dosage ?? '');
+        $intervalHours = $medicine['interval_hours'] ?? $schedule['interval_hours'] ?? 6;
+        $maxDailyDoses = $medicine['max_daily_doses'] ?? $schedule['max_daily_doses'] ?? max(1, min(6, (int) floor(24 / $intervalHours)));
 
         return array_merge([
             'is_otc' => true,
             'requires_prescription' => false,
             'common_use' => $medicine['description'] ?? null,
             'dosage_text' => $dosage,
-            'interval_hours' => $schedule['interval_hours'],
-            'max_daily_doses' => $schedule['max_daily_doses'],
+            'interval_hours' => (int) $intervalHours,
+            'max_daily_doses' => (int) $maxDailyDoses,
             'warnings' => self::SAFETY_COPY,
         ], $medicine);
     }
