@@ -42,20 +42,39 @@ return new class extends Migration
 
     private function hasIndex(): bool
     {
-        if (DB::connection()->getDriverName() === 'sqlite') {
+        $driver = DB::connection()->getDriverName();
+
+        if ($driver === 'sqlite') {
             return collect(DB::select("PRAGMA index_list('hydration_entries')"))
                 ->contains(fn ($index) => ($index->name ?? null) === $this->indexName);
         }
 
-        $result = DB::selectOne(
-            'SELECT COUNT(*) AS aggregate
-             FROM INFORMATION_SCHEMA.STATISTICS
-             WHERE TABLE_SCHEMA = DATABASE()
-               AND TABLE_NAME = ?
-               AND INDEX_NAME = ?',
-            ['hydration_entries', $this->indexName]
-        );
+        if ($driver === 'pgsql') {
+            $result = DB::selectOne(
+                'SELECT COUNT(*) AS aggregate
+                 FROM pg_indexes
+                 WHERE schemaname = ?
+                   AND tablename = ?
+                   AND indexname = ?',
+                ['public', 'hydration_entries', $this->indexName]
+            );
 
-        return (int) ($result->aggregate ?? 0) > 0;
+            return (int) ($result->aggregate ?? 0) > 0;
+        }
+
+        if (in_array($driver, ['mysql', 'mariadb'], true)) {
+            $result = DB::selectOne(
+                'SELECT COUNT(*) AS aggregate
+                 FROM INFORMATION_SCHEMA.STATISTICS
+                 WHERE TABLE_SCHEMA = DATABASE()
+                   AND TABLE_NAME = ?
+                   AND INDEX_NAME = ?',
+                ['hydration_entries', $this->indexName]
+            );
+
+            return (int) ($result->aggregate ?? 0) > 0;
+        }
+
+        return false;
     }
 };
