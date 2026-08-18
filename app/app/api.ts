@@ -563,7 +563,7 @@ export async function post(path: string, body: any, token?: string, timeout: num
 
 export async function get(path: string, token?: string, timeout: number = 10000) {
   const startedAt = perfNow();
-  const headers: any = { Accept: 'application/json', ...ngrokHeaders };
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
   const url = joinPath(path);
@@ -734,7 +734,7 @@ export async function put(path: string, body: any, token?: string, timeout: numb
 
 export async function del(path: string, token?: string, timeout: number = 10000) {
   const startedAt = perfNow();
-  const headers: any = { Accept: 'application/json', ...ngrokHeaders };
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json', ...ngrokHeaders };
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const requestSessionVersion = token ? getCurrentAuthSessionVersion() : undefined;
   const controller = createTrackedAbortController();
