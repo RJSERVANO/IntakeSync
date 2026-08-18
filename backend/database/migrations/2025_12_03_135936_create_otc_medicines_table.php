@@ -16,11 +16,18 @@ return new class extends Migration
             $table->string('name');
             $table->string('generic_name')->nullable();
             $table->string('brand')->nullable();
-            $table->string('category');
-            $table->string('age_group')->nullable();
-            $table->text('description')->nullable();
+            $table->string('category')->nullable();
             $table->string('dosage')->nullable();
-            $table->boolean('is_popular')->default(true);
+            $table->text('dosage_text')->nullable();
+            $table->integer('interval_hours')->default(4);
+            $table->integer('max_daily_doses')->default(4);
+            $table->text('common_use')->nullable();
+            $table->text('description')->nullable();
+            $table->text('warnings')->nullable();
+            $table->string('age_group')->default('All')->nullable();
+            $table->boolean('is_popular')->default(false);
+            $table->boolean('is_otc')->default(true);
+            $table->boolean('requires_prescription')->default(false);
             $table->timestamps();
 
             // Indexes for search performance
