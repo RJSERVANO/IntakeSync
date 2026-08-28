@@ -6,7 +6,16 @@ import {
   releaseTrackedAbortController,
 } from '../services/authSession';
 import NetInfo from '@react-native-community/netinfo';
+import { DeviceEventEmitter } from 'react-native';
 import { logPerf, perfNow } from '../utils/perf';
+
+export const AUTH_FAILURE_EVENT = 'intakesync.auth.failure';
+
+function notifyAuthenticatedRequestFailure(status: number | undefined, token?: string) {
+  if (status === 401 && token) {
+    DeviceEventEmitter.emit(AUTH_FAILURE_EVENT, { token });
+  }
+}
 
 const configuredBaseUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
 const BASE_URL = configuredBaseUrl ? configuredBaseUrl.replace(/\/+$/, '') : '';
@@ -535,6 +544,7 @@ export async function post(path: string, body: any, token?: string, timeout: num
     await ensureCurrentSession('POST', url, token, requestSessionVersion);
     throwIfUnexpectedSuccessfulResponse(data, res);
     if (!res.ok) {
+      notifyAuthenticatedRequestFailure(res.status, token);
       const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
       throw { ...error, requestSessionVersion };
     }
@@ -625,6 +635,7 @@ export async function get(path: string, token?: string, timeout: number = 10000)
       await ensureCurrentSession('GET', url, token, requestSessionVersion);
       throwIfUnexpectedSuccessfulResponse(data, res);
       if (!res.ok) {
+        notifyAuthenticatedRequestFailure(res.status, token);
         const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
         throw { ...error, requestSessionVersion };
       }
@@ -706,6 +717,7 @@ export async function put(path: string, body: any, token?: string, timeout: numb
     await ensureCurrentSession('PUT', url, token, requestSessionVersion);
     throwIfUnexpectedSuccessfulResponse(data, res);
     if (!res.ok) {
+      notifyAuthenticatedRequestFailure(res.status, token);
       const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
       throw { ...error, requestSessionVersion };
     }
@@ -751,6 +763,7 @@ export async function del(path: string, token?: string, timeout: number = 10000)
     await ensureCurrentSession('DELETE', url, token, requestSessionVersion);
     throwIfUnexpectedSuccessfulResponse(data, res);
     if (!res.ok) {
+      notifyAuthenticatedRequestFailure(res.status, token);
       const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
       throw { ...error, requestSessionVersion };
     }
@@ -831,6 +844,7 @@ export async function postWithMeta(path: string, body: any, token?: string, time
     await ensureCurrentSession('POST', url, token, requestSessionVersion);
     throwIfUnexpectedSuccessfulResponse(data, res);
     if (!res.ok) {
+      notifyAuthenticatedRequestFailure(res.status, token);
       const error = makeApiError(res.status, data, defaultMessageForStatus(res.status));
       throw { ...error, requestSessionVersion };
     }

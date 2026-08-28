@@ -1,19 +1,21 @@
 <IfModule mod_rewrite.c>
-    Options -Indexes
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
     RewriteEngine On
 
-    # Never serve Laravel internals or mobile project files from public_html.
-    RewriteRule ^backend/(?!public/).*$ - [F,L]
-    RewriteRule ^(app|android|ios|node_modules|storage|database|routes|bootstrap|config|resources|tests|vendor)(/.*)?$ - [F,L]
-    RewriteRule ^(\.git|\.github|\.env|composer\.(json|lock)|package(-lock)?\.json|app\.json|eas\.json|tsconfig\.json|metro\.config\.js)(/.*)?$ - [F,L]
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-    # Allow real files/assets that live in backend/public.
-    RewriteCond %{REQUEST_URI} !^/backend/public/
-    RewriteCond %{DOCUMENT_ROOT}/backend/public/$1 -f [OR]
-    RewriteCond %{DOCUMENT_ROOT}/backend/public/$1 -d
-    RewriteRule ^(.*)$ backend/public/$1 [L]
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^(.*)/$ /$1 [L,R=301]
 
-    # Send all other requests to Laravel's public front controller.
-    RewriteCond %{REQUEST_URI} !^/backend/public/
-    RewriteRule ^(.*)$ backend/public/$1 [L]
+    # Handle Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [L]
 </IfModule>

@@ -15,11 +15,13 @@ import {
   recordNotificationResponse,
 } from '../services/notificationService';
 import { initializeOfflineSync } from '../services/offlineSyncManager';
-import { LogBox, Text, TextInput } from 'react-native';
+import { Alert, DeviceEventEmitter, LogBox, Text, TextInput } from 'react-native';
 import { FONT_SCALE } from '../utils/fontScaling';
 import { FontScaleProvider } from './accessibility/FontScaleProvider';
 import { getCachedSession } from '../services/offlineStorage';
 import { processSyncQueue } from '../services/syncQueue';
+import { AUTH_FAILURE_EVENT } from './api';
+import { captureAuthSessionContext, handleAuthFailureIfCurrent } from '../services/authSession';
 
 const ScalableText = Text as typeof Text & { defaultProps?: { maxFontSizeMultiplier?: number } };
 const ScalableTextInput = TextInput as typeof TextInput & { defaultProps?: { maxFontSizeMultiplier?: number } };
@@ -46,6 +48,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 export default function RootLayout() {
   const router = useRouter();
   const handledNotificationResponses = useRef<Set<string>>(new Set());
+  const authFailureInFlight = useRef(false);
   const ioniconFontName = Object.keys(Ionicons.font)[0] || 'Ionicons';
 
   const [fontsLoaded, fontError] = useFonts({
@@ -101,6 +104,25 @@ export default function RootLayout() {
     } else {
       router.push({ pathname: '/components/pages/notification/Activity', params: { token: session.token } } as any);
     }
+  }, [router]);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(AUTH_FAILURE_EVENT, (event?: { token?: string }) => {
+      if (authFailureInFlight.current || !event?.token) return;
+      authFailureInFlight.current = true;
+      void (async () => {
+        try {
+          const context = await captureAuthSessionContext(event.token);
+          const cleared = await handleAuthFailureIfCurrent({ context, router });
+          if (cleared) {
+            Alert.alert('Session ended', 'You have been logged out because your account was signed in on another device.');
+          }
+        } finally {
+          authFailureInFlight.current = false;
+        }
+      })();
+    });
+    return () => subscription.remove();
   }, [router]);
 
   useEffect(() => {
