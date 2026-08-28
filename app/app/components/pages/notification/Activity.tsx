@@ -1031,6 +1031,7 @@ export default function Activity() {
     const targets = notifications
       .filter((item) => !isHiddenRecent(item, hiddenRecentIds))
       .filter(hasHappenedOrWasActioned)
+      .filter((item) => !isLocalActivity(item))
       .filter((item) => filter === 'unread' ? isUnread(item) : filter === 'medication' || filter === 'hydration' ? item.type === filter : true);
     const targetIds = new Set(targets.map((item) => String(item.id)));
     const nextNotifications = notifications.map((item) => (
@@ -1045,6 +1046,20 @@ export default function Activity() {
       await Promise.all(notifications
         .filter((item) => targetIds.has(String(item.id)) && !isLocalActivity(item))
         .map((item) => markLocalNotificationRead(getCacheOwner(currentUser), getNotificationIdentity(item))));
+    }
+    const backendTargets = targets.filter((item) => !isLocalActivity(item) && backendNotificationId(item));
+    if (backendTargets.length > 0) {
+      try {
+        await post('/notifications/mark-all-read', {}, token);
+        invalidateApiCacheGroup('notifications', token);
+      } catch (err) {
+        if (isNetworkError(err)) {
+          setOfflineMode(true);
+          setInlineNotice('Marked read locally; will sync when online');
+        } else if (!isMissingBackendRoute(err)) {
+          setNoticeModal({ title: 'Could not update', message: getErrorMessage(err, 'Please try again.') });
+        }
+      }
     }
     setInlineNotice('Marked read');
   }, [cacheCurrentNotifications, currentUser, filter, hiddenRecentIds, notifications, token]);

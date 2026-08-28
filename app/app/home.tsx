@@ -28,7 +28,7 @@ import {
 } from '../services/offlineStorage';
 import { enqueueBeverageLog, getPendingSyncActions, getSyncQueueSummary, markBeverageLogSynced, processSyncQueue, type BeverageLogPayload } from '../services/syncQueue';
 import { NOTIFICATIONS_UPDATED_EVENT, REMINDERS_RESCHEDULED_EVENT, subscribeHomeRefresh, subscribeMedicationHistoryUpdated } from '../services/homeEvents';
-import { getUnreadActionableNotificationCount } from '../services/notificationService';
+import { getUnreadActionableNotificationCount, isUnreadActionableNotificationRecord } from '../services/notificationService';
 import { performLocalLogout } from '../services/logoutSession';
 import { buildPendingMedicationHistoryEntries, deriveTodayMedicationSummary, getMedicationIdentityValues, type TodayMedicationSummary } from '../utils/medicationSummary';
 import BottomNavigation from './components/navigation/BottomNavigation';
@@ -493,7 +493,11 @@ export default function Home() {
     notificationBadgeInFlightRef.current = true;
     if (!(await isAuthSessionContextCurrent(context))) return;
     try {
-      setLocalUnreadNotificationCount(await getUnreadActionableNotificationCount(owner));
+      const localCount = await getUnreadActionableNotificationCount(owner);
+      const remoteCount = await api.get('/notifications?limit=150', session.token, 5000)
+        .then((records) => Array.isArray(records) ? records.filter(isUnreadActionableNotificationRecord).length : null)
+        .catch(() => null);
+      setLocalUnreadNotificationCount(remoteCount ?? localCount);
       lastNotificationBadgeLoadRef.current = { ownerKey, completedAt: Date.now() };
     } finally {
       notificationBadgeInFlightRef.current = false;

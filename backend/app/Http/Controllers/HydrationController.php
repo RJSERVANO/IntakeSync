@@ -559,6 +559,13 @@ class HydrationController
             }, $file['entries'] ?? []);
         }
 
+        if ($request->boolean('include_entries')) {
+            return response()->json([
+                'goal' => $user->hydration_goal ?? ($file['goal'] ?? 2000),
+                'entries' => $entries,
+            ]);
+        }
+
         // Group entries by date
         $buckets = [];
         foreach ($entries as $e) {

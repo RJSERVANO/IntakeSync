@@ -171,7 +171,7 @@ class MedicationController extends Controller
         ]);
 
         $scheduledTime = $this->normalizeDoseTime(Carbon::parse($data['time']));
-        $existingEntry = $this->findExistingDoseHistory($medication->id, $scheduledTime);
+        $existingEntry = $this->findExistingDoseHistory($medication->id, $scheduledTime, $user->id);
 
         if ($existingEntry) {
             Log::warning('Duplicate entry detected', [
@@ -438,10 +438,11 @@ class MedicationController extends Controller
             ->values();
     }
 
-    private function findExistingDoseHistory(int|string $medicationId, Carbon $scheduledTime): ?MedicationHistory
+    private function findExistingDoseHistory(int|string $medicationId, Carbon $scheduledTime, ?int $userId = null): ?MedicationHistory
     {
         $scheduledTime = $this->normalizeDoseTime($scheduledTime);
-        return MedicationHistory::where('medication_id', $medicationId)
+        $query = MedicationHistory::where('medication_id', $medicationId)
+            ->when($userId !== null, fn ($history) => $history->where('user_id', $userId))
             ->where(function ($query) use ($scheduledTime) {
                 $query->whereBetween('scheduled_time', [$scheduledTime, $scheduledTime->copy()->addSeconds(59)])
                     ->orWhere(function ($fallback) use ($scheduledTime) {
@@ -449,9 +450,9 @@ class MedicationController extends Controller
                             ->whereBetween('time', [$scheduledTime, $scheduledTime->copy()->addSeconds(59)]);
                     });
             })
-            ->orderByRaw("CASE status WHEN 'completed' THEN 4 WHEN 'snoozed' THEN 3 WHEN 'skipped' THEN 2 WHEN 'missed' THEN 2 ELSE 1 END DESC")
-            ->latest('created_at')
-            ->first();
+            ->latest('created_at');
+
+        return $query->first();
     }
 
     private function hasFutureSnooze(Medication $medication, Carbon $now): bool

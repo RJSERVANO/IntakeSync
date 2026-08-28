@@ -1040,10 +1040,11 @@ export default function Medication() {
           setMeds(normalizedMeds);
           if (sessionUser) await writeMedicationCacheIfSafe(sessionUser, normalizedMeds, (serverMeds || []).length === 0 && latestPendingActions.length === 0);
 
-          // Load current screen summaries in parallel; full history is loaded lazily for export/history views.
-          const [statsData, upcomingData] = await Promise.allSettled([
+          // Load the recent history with the screen summaries so the list remains accurate after cache misses.
+          const [statsData, upcomingData, historyData] = await Promise.allSettled([
             api.get('/medications/stats', token as string),
-            api.get('/medications/upcoming', token as string)
+            api.get('/medications/upcoming', token as string),
+            api.get('/medications/history/all', token as string),
           ]);
           if (!(await isAuthSessionContextCurrent(context))) return;
 
@@ -1084,9 +1085,19 @@ export default function Medication() {
             if (!mounted) return;
             setUpcoming(filterDeletedUpcomingItems(upcomingData.value || [], deletedKeys));
           }
+          if (historyData.status === 'fulfilled' && Array.isArray(historyData.value)) {
+            const serverHistory = historyData.value.map((entry: any) => normalizeHistoryEntry(
+              entry,
+              String(entry?.medication_id || entry?.medication?.id || ''),
+            ));
+            const nextHistory = dedupeMedicationHistory([...pendingHistory, ...serverHistory, ...localHistory]);
+            if (!mounted) return;
+            setHistory(nextHistory);
+            if (sessionUser) await writeMedicationHistoryCache(sessionUser, nextHistory);
+          }
           setOfflineMode(false);
           logPerf('Medication backend refresh', backendStartedAt, {
-            endpointCount: 3,
+            endpointCount: 4,
             medicationCount: Array.isArray(serverMeds) ? serverMeds.length : 0,
           });
         }

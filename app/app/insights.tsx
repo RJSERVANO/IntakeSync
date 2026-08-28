@@ -796,7 +796,7 @@ export default function InsightsScreen() {
     setOfflineNotice(null);
     try {
       const [hydrationResult, medsResult] = await Promise.allSettled([
-        api.get('/hydration', activeToken, 5000),
+        api.get('/hydration/history?include_entries=1', activeToken, 5000),
         api.get('/medications', activeToken, 5000),
       ]);
       const backendHydration = hydrationResult.status === 'fulfilled' ? hydrationResult.value : null;
